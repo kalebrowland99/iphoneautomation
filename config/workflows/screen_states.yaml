@@ -1,0 +1,54 @@
+# Screen state definitions for template matching and workflow branching.
+
+screen_states:
+  lock_screen:
+    description: "Device lock screen"
+    templates:
+      - name: lock_screen
+        path: lock_screen.jpg
+        threshold: 0.75
+
+  vpn_active:
+    description: "VPN connected (status bar banner)"
+    templates:
+      - name: vpn
+        path: vpn.jpg
+        threshold: 0.42
+
+  vpn_off:
+    description: "Home screen, VPN not connected"
+    templates: []
+
+  shadowrocket_home:
+    description: "Shadowrocket app on home screen"
+    templates:
+      - name: shadowrocket
+        path: shadowrocket.jpg
+        threshold: 0.42
+
+  shadowrocket_toggle:
+    description: "Shadowrocket VPN toggle switch"
+    templates:
+      - name: vpntoggle
+        path: vpntoggle.jpg
+        threshold: 0.42
+
+ui_elements:
+  - name: vpn
+    template: vpn.jpg
+    threshold: 0.42
+  - name: shadowrocket
+    template: shadowrocket.jpg
+    threshold: 0.42
+  - name: vpntoggle
+    template: vpntoggle.jpg
+    threshold: 0.42
+  - name: tiktok
+    template: tiktok.jpg
+    threshold: 0.42
+  - name: photos
+    template: photos.jpg
+    threshold: 0.42
+  - name: lock_screen
+    template: lock_screen.jpg
+    threshold: 0.75

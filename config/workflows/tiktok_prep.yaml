@@ -1,0 +1,280 @@
+name: tiktok_prep
+description: >
+  Sequential prep: unlock → home → VPN (Shadowrocket + vpntoggle) → clear gallery via
+  iMouse album API → upload gallery → TikTok. Phone slot folder (e.g. gallery/12/).
+
+steps:
+  # ── 1. Unlock if locked ─────────────────────────────────────────────
+  - type: screenshot
+    name: initial_screen
+    templates: [lock_screen, vpn]
+
+  - type: analyze_screen
+    name: analyze_initial
+    templates: [lock_screen, vpn]
+
+  - type: execute_action
+    name: unlock_device
+    when_detection: lock_screen
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: lock_screen
+    skip_post_action: true
+
+  - type: execute_action
+    name: swipe_unlock
+    when_detection: lock_screen
+    on_failure: pause
+    action:
+      type: swipe
+      x1: 200
+      y1: 500
+      x2: 200
+      y2: 200
+      duration_ms: 300
+    skip_post_action: true
+
+  - type: wait
+    name: after_unlock
+    when_detection: lock_screen
+    duration_seconds: 3
+
+  # ── 2. Go home before VPN check ─────────────────────────────────────
+  - type: execute_action
+    name: go_home_before_vpn
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: settle_home
+    duration_seconds: 1
+
+  # ── 3. Check VPN banner (top-left vpn.jpg) ──────────────────────────
+  - type: screenshot
+    name: home_for_vpn_check
+    templates: [vpn, shadowrocket]
+
+  - type: analyze_screen
+    name: analyze_vpn_status
+    templates: [vpn, shadowrocket]
+
+  - type: determine_state
+    name: vpn_state
+    state_rules:
+      - condition: template_match
+        template: vpn
+        state: ACTIVE
+      - condition: default
+        state: WAITING
+
+  # ── 4. VPN off → Shadowrocket → vpntoggle → verify ──────────────────
+  - type: execute_action
+    name: open_shadowrocket
+    when_state: WAITING
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: shadowrocket
+    skip_post_action: true
+
+  - type: wait
+    name: shadowrocket_open
+    when_state: WAITING
+    duration_seconds: 2
+
+  - type: screenshot
+    name: shadowrocket_screen
+    when_state: WAITING
+    templates: [vpntoggle]
+
+  - type: analyze_screen
+    name: analyze_vpntoggle
+    when_state: WAITING
+    templates: [vpntoggle]
+
+  - type: verify
+    name: confirm_vpntoggle_visible
+    when_state: WAITING
+    condition: template_match
+    template: vpntoggle
+    on_failure: continue
+
+  # Only wait again if toggle not visible yet
+  - type: wait
+    name: vpntoggle_retry_wait
+    when_state: WAITING
+    unless_detection: vpntoggle
+    duration_seconds: 2
+
+  - type: screenshot
+    name: vpntoggle_retry_screen
+    when_state: WAITING
+    unless_detection: vpntoggle
+    templates: [vpntoggle]
+
+  - type: analyze_screen
+    name: analyze_vpntoggle_retry
+    when_state: WAITING
+    unless_detection: vpntoggle
+    templates: [vpntoggle]
+
+  - type: verify
+    name: confirm_vpntoggle_visible_final
+    when_state: WAITING
+    condition: template_match
+    template: vpntoggle
+    on_failure: pause
+
+  - type: execute_action
+    name: tap_vpntoggle
+    when_state: WAITING
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: vpntoggle
+    skip_post_action: true
+
+  - type: wait
+    name: after_vpn_toggle
+    when_state: WAITING
+    duration_seconds: 1.5
+
+  - type: screenshot
+    name: verify_vpn_screen
+    when_state: WAITING
+    templates: [vpn]
+
+  - type: analyze_screen
+    name: analyze_vpn_after_toggle
+    when_state: WAITING
+    templates: [vpn]
+
+  - type: verify
+    name: confirm_vpn_on
+    when_state: WAITING
+    condition: template_match
+    template: vpn
+    on_failure: pause
+
+  # ── 5. Home after VPN ───────────────────────────────────────────────
+  - type: execute_action
+    name: go_home_after_vpn
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: after_vpn_home
+    duration_seconds: 1
+
+  # ── 6. Clear photo library (iMouse album API — Photos app not required) ─
+  - type: execute_action
+    name: go_home_before_clear
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: before_clear
+    duration_seconds: 2
+
+  - type: execute_action
+    name: clear_album
+    on_failure: pause
+    action:
+      type: album_clear
+      timeout_ms: 120000
+    skip_post_action: true
+
+  - type: wait
+    name: after_clear
+    duration_seconds: 2
+
+  - type: execute_action
+    name: tap_delete_confirm
+    action:
+      type: tap_ocr
+      texts: ["Delete"]
+      optional: true
+    skip_post_action: true
+
+  - type: wait
+    name: after_delete_confirm
+    duration_seconds: 2
+
+  # ── 7. Upload gallery folder (slot number, e.g. gallery/12/) ──────
+  - type: execute_action
+    name: upload_gallery
+    on_failure: pause
+    action:
+      type: album_upload
+      folder: ${gallery_folder}
+    skip_post_action: true
+
+  - type: wait
+    name: upload_progress
+    duration_seconds: 10
+
+  - type: screenshot
+    name: after_upload_screen
+
+  - type: execute_action
+    name: tap_allow_upload
+    action:
+      type: tap_ocr
+      texts: ["Always Allow", "Allow"]
+      optional: true
+    skip_post_action: true
+
+  - type: wait
+    name: after_allow
+    duration_seconds: 3
+
+  - type: screenshot
+    name: allow_retry_screen
+
+  - type: execute_action
+    name: tap_allow_retry
+    action:
+      type: tap_ocr
+      texts: ["Always Allow", "Allow"]
+      optional: true
+    skip_post_action: true
+
+  - type: wait
+    name: upload_settle
+    duration_seconds: 6
+
+  # ── 8. Home → TikTok ────────────────────────────────────────────────
+  - type: execute_action
+    name: go_home_before_tiktok
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: home_before_tiktok
+    duration_seconds: 2
+
+  - type: screenshot
+    name: home_for_tiktok
+    templates: [tiktok]
+
+  - type: analyze_screen
+    name: analyze_tiktok
+    templates: [tiktok]
+
+  - type: verify
+    name: confirm_tiktok_visible
+    condition: template_match
+    template: tiktok
+    on_failure: pause
+
+  - type: execute_action
+    name: open_tiktok
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: tiktok

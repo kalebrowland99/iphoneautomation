@@ -1,0 +1,47 @@
+"""YAML configuration loader."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+from imouse_farm.config.models import AppConfig, WorkflowConfig
+
+
+def _load_yaml(path: Path) -> dict:
+    with path.open(encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def load_config(path: str | Path) -> AppConfig:
+    """Load main application configuration from a YAML file."""
+    config_path = Path(path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    data = _load_yaml(config_path)
+    return AppConfig.model_validate(data)
+
+
+def load_workflow(path: str | Path) -> WorkflowConfig:
+    """Load a single workflow definition from YAML."""
+    workflow_path = Path(path)
+    if not workflow_path.exists():
+        raise FileNotFoundError(f"Workflow file not found: {workflow_path}")
+    data = _load_yaml(workflow_path)
+    return WorkflowConfig.model_validate(data)
+
+
+def load_workflows(directory: str | Path) -> dict[str, WorkflowConfig]:
+    """Load all workflow YAML files from a directory."""
+    workflows_dir = Path(directory)
+    workflows: dict[str, WorkflowConfig] = {}
+    if not workflows_dir.exists():
+        return workflows
+
+    for path in sorted(workflows_dir.glob("*.yaml")):
+        if path.stem in ("screen_states", "popups"):
+            continue
+        workflow = load_workflow(path)
+        workflows[workflow.name] = workflow
+    return workflows

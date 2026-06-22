@@ -1,0 +1,70 @@
+name: app_launch_cycle
+description: State-based app launch with screenshot verification
+enabled: true
+loop: true
+max_iterations: 0
+device_groups:
+  - production
+
+variables:
+  target_app: "Settings"
+
+steps:
+  - type: screenshot
+    name: capture_initial
+
+  - type: analyze
+    name: analyze_initial
+    templates:
+      - home_screen
+
+  - type: determine_state
+    name: check_home
+    state_rules:
+      - condition: template_match
+        template: home_screen
+        state: IDLE
+      - condition: default
+        state: UNKNOWN_SCREEN
+
+  - type: check_popups
+    name: pre_launch_popups
+
+  - type: execute_action
+    name: go_home
+    requires_analysis: true
+    action:
+      type: home
+    when_state: UNKNOWN_SCREEN
+
+  - type: execute_action
+    name: launch_app
+    requires_analysis: true
+    action:
+      type: launch_app
+      app_name: "${target_app}"
+    when_state: IDLE
+
+  - type: wait_random
+    name: wait_for_app
+    min_seconds: 2
+    max_seconds: 4
+
+  - type: screenshot
+    name: capture_after_launch
+
+  - type: analyze
+    name: verify_launch
+    templates:
+      - settings_screen
+
+  - type: verify
+    name: verify_settings
+    condition: template_match
+    template: settings_screen
+    on_failure: pause
+
+  - type: wait_random
+    name: cooldown
+    min_seconds: 5
+    max_seconds: 10

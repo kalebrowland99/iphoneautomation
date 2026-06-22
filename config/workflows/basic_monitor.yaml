@@ -1,0 +1,36 @@
+name: basic_monitor
+description: Monitor devices via screenshot-driven state detection
+enabled: true
+loop: true
+max_iterations: 0
+device_groups:
+  - default
+
+steps:
+  - type: screenshot
+    name: capture
+
+  - type: analyze
+    name: analyze
+    templates:
+      - home_screen
+      - lock_screen
+
+  - type: determine_state
+    name: set_state
+    state_rules:
+      - condition: template_match
+        template: lock_screen
+        state: WAITING
+      - condition: template_match
+        template: home_screen
+        state: IDLE
+      - condition: default
+        state: UNKNOWN_SCREEN
+
+  - type: check_popups
+    name: popup_check
+
+  - type: wait
+    name: pause
+    duration_seconds: 10

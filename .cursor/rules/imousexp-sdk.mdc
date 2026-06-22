@@ -1,0 +1,21 @@
+---
+description: Consult iMouseXP docs and SDK source before changing device/API integration
+globs: src/imouse_farm/controller/**,src/imouse_farm/actions/**,src/imouse_farm/devices/**,config/workflows/**,docs/imousexp.md
+alwaysApply: true
+---
+
+# iMouseXP integration
+
+When changing anything that talks to iMouseXP (mouse, keyboard, album, OCR, AirPlay, screenshots, workflows that call those actions):
+
+1. **Read** [docs/imousexp.md](docs/imousexp.md) in this repo.
+2. **Verify** against the installed SDK: `.venv/Lib/site-packages/imouse_xp/api/` (method signatures and docstrings are authoritative).
+3. **Cross-check** official docs when behavior is unclear: https://doc.some3c.com/iphone-farm-setup/xp-api-documentation/python-library
+
+Do not assume API shape from memory. Common mistakes to avoid:
+
+- Calling `mouse_swipe` without the required `direction` argument
+- Passing relative paths to `shortcut_album_upload`
+- Wrapping SDK calls without reading `_error_message` / `data.code` on failure
+
+Add new device capabilities in `device_controller.py` → `actions/engine.py` → workflow YAML / debug tests.

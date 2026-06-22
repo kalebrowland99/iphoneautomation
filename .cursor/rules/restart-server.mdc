@@ -1,0 +1,43 @@
+---
+description: Restart the farm server yourself after changes that require a reload — never ask the user to do it
+alwaysApply: true
+---
+
+# Restart server after deploy-affecting changes
+
+When you change anything that only takes effect after the orchestrator reloads, **restart the server yourself** before ending your turn. Do **not** tell the user to restart, run `restart.ps1`, or click **Restart server** unless the restart attempt failed.
+
+## Requires restart
+
+- `config/config.yaml` (timing, device groups, gallery paths, etc.)
+- `src/**/*.py` (actions, workflows engine, dashboard API, device controller)
+- `src/imouse_farm/dashboard/templates/**` and `static/**` (UI is read at request time for templates, but Python/routes need reload)
+- `scripts/watch_restart.py`, `run.ps1`, `restart.ps1`
+
+Workflow YAML under `config/workflows/` is usually picked up on the next workflow start, but **still restart** if you also changed `config.yaml` or Python in the same task.
+
+## Does not require restart
+
+- `config/templates/*.jpg` only
+- `gallery/**` media files
+- docs-only edits
+
+## How to restart (do this yourself)
+
+1. From project root, run:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File restart.ps1
+   ```
+   Run in the **background** if the script blocks (it starts `run.ps1` / `watch_restart.py`).
+
+2. Poll until the server is back (up to ~90s):
+   ```powershell
+   Invoke-RestMethod -Uri http://localhost:8080/api/health -TimeoutSec 2
+   ```
+
+3. If health never returns, diagnose and retry once — then tell the user only if you could not recover.
+
+## After restarting
+
+- One short line in the reply: e.g. "Restarted the server; changes are live."
+- Do **not** end with "Restart the server to pick up changes."

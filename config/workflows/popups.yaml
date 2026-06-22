@@ -1,0 +1,62 @@
+# Popup detection definitions
+# Used by PopupManager and the vision layer
+
+popups:
+  permission_dialog:
+    description: "iOS permission request dialog"
+    pause_workflow: true
+    ocr_keywords:
+      - "Would Like to"
+      - "Allow"
+      - "Don't Allow"
+      - "access your"
+    templates:
+      - name: permission_allow
+        path: "permission_allow.png"
+        threshold: 0.85
+    dismiss_action:
+      type: tap_detection
+      detection: permission_allow
+
+  update_prompt:
+    description: "iOS or app update prompt"
+    pause_workflow: true
+    ocr_keywords:
+      - "Software Update"
+      - "Update Now"
+      - "Remind Me Later"
+      - "Not Now"
+    templates:
+      - name: update_not_now
+        path: "update_not_now.png"
+        threshold: 0.85
+    dismiss_action:
+      type: tap_detection
+      detection: update_not_now
+
+  login_prompt:
+    description: "Login or sign-in screen"
+    pause_workflow: true
+    ocr_keywords:
+      - "Sign In"
+      - "Log In"
+      - "Enter your password"
+      - "Apple ID"
+    dismiss_action:
+      type: home
+
+  confirmation_dialog:
+    description: "Generic confirmation dialog"
+    pause_workflow: false
+    ocr_keywords:
+      - "Are you sure"
+      - "Confirm"
+      - "Cancel"
+      - "OK"
+    templates:
+      - name: ok_button
+        path: "ok_button.png"
+        threshold: 0.85
+    dismiss_action:
+      type: tap_detection
+      detection: ok_button

@@ -1,0 +1,90 @@
+# iMouse Farm - Main Configuration
+
+imouse:
+  host: "localhost"
+  port: 9911
+  mode: "websocket"
+  reconnect_interval_seconds: 5
+  device_poll_interval_seconds: 10
+  auto_airplay_reconnect: false
+  airplay_reconnect_on_startup: false
+  airplay_connect_delay_seconds: 4
+  airplay_reconnect_interval_seconds: 30
+
+database:
+  path: "data/imouse_farm.db"
+
+screenshots:
+  directory: "data/screenshots"
+  retention_hours: 24
+  periodic_interval_seconds: 60
+  max_per_device: 100
+
+gallery:
+  base_directory: "gallery"
+  media_extensions:
+    - ".mp4"
+    - ".mov"
+    - ".m4v"
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".heic"
+  upload_timeout_ms: 300000
+
+analysis:
+  template_match_threshold: 0.8
+  small_template_threshold: 0.42
+  use_device_template_match: true
+  ocr_language: "eng"
+  tesseract_cmd: null
+  templates_directory: "config/templates"
+
+vision:
+  provider: "opencv_tesseract"  # opencv_tesseract | local_model
+  model_path: ""
+
+timing:
+  action_retry_count: 0
+  action_retry_delay_seconds: 2
+  action_timeout_seconds: 30
+  frozen_device_threshold_seconds: 120
+  workflow_step_delay_seconds: 0.25
+  unknown_screen_escalation_count: 5
+
+device_groups:
+  default:
+    description: "Default device group"
+    workflow: "tiktok_prep"
+  production:
+    description: "Production automation devices"
+    workflow: "tiktok_prep"
+
+notifications:
+  enabled: true
+  discord:
+    enabled: false
+    webhook_url: ""
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+  events:
+    device_disconnect: true
+    unknown_screen: true
+    repeated_failures: true
+    workflow_completion: true
+  repeated_failure_threshold: 3
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8080
+  cors_origins:
+    - "*"
+
+logging:
+  level: "INFO"
+  format: "json"  # json or console
+  file: "data/logs/imouse_farm.log"
+
+workflows_directory: "config/workflows"

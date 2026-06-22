@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+.env
+.venv/
+venv/
+data/
+*.db
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Project runtime data / media
+gallery/
+logs/
+data/screenshots/
+*.log

@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "imouse-farm"
+version = "1.0.0"
+description = "Multi-device iPhone automation manager for iMouseXP"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "iMouse Farm" }]
+dependencies = [
+    "aiosqlite>=0.20.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "pyyaml>=6.0.2",
+    "opencv-python-headless>=4.10.0",
+    "numpy>=2.1.0",
+    "pytesseract>=0.3.13",
+    "pillow>=11.0.0",
+    "httpx>=0.28.0",
+    "python-multipart>=0.0.18",
+    "jinja2>=3.1.4",
+    "structlog>=24.4.0",
+    "imouse-xp>=0.0.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",
+]
+
+[project.scripts]
+imouse-farm = "imouse_farm.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/imouse_farm"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

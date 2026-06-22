@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Phone 12 — iMouse Farm</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #141720;
+            --border: #2a2d3a;
+            --text: #e4e4e7;
+            --muted: #71717a;
+            --accent: #3b82f6;
+            --success: #22c55e;
+            --warning: #eab308;
+            --error: #ef4444;
+            --debug: #6b7280;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        header h1 { font-size: 1.125rem; font-weight: 600; }
+        .header-right { display: flex; align-items: center; gap: 1rem; font-size: 0.8125rem; }
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            display: inline-block; margin-right: 6px;
+        }
+        .status-dot.online { background: var(--success); }
+        .status-dot.offline { background: var(--error); }
+        .main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: minmax(280px, 420px) 1fr;
+            gap: 0;
+            min-height: 0;
+        }
+        @media (max-width: 800px) {
+            .main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+        }
+        .phone-panel {
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 1rem;
+            min-height: 0;
+        }
+        .phone-screen-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            min-height: 0;
+        }
+        #phone-screen {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+        #phone-screen-placeholder {
+            color: var(--muted);
+            font-size: 0.875rem;
+            text-align: center;
+            padding: 2rem;
+        }
+        .phone-meta {
+            margin-top: 0.75rem;
+            font-size: 0.8125rem;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.375rem 0.75rem;
+        }
+        .phone-meta .label { color: var(--muted); }
+        .phone-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+        .debug-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: center;
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px dashed var(--border);
+        }
+        .debug-label {
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--debug);
+            font-weight: 600;
+        }
+        .debug-actions select {
+            flex: 1;
+            min-width: 140px;
+            background: var(--surface2);
+            color: var(--muted);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.35rem 0.5rem;
+            font-size: 0.8125rem;
+        }
+        .btn-debug {
+            color: var(--debug);
+            border-color: var(--border);
+        }
+        .logs-panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            padding: 1rem 1.25rem;
+        }
+        .logs-panel h2 {
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            margin-bottom: 0.75rem;
+            flex-shrink: 0;
+        }
+        .activity-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: center;
+            margin-bottom: 0.75rem;
+            flex-shrink: 0;
+        }
+        .activity-toolbar .spacer { flex: 1; }
+        .activity-feed {
+            flex: 1;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow-y: auto;
+            font-family: 'Consolas', 'SF Mono', 'Menlo', monospace;
+            font-size: 0.8125rem;
+            min-height: 0;
+        }
+        .activity-row {
+            display: grid;
+            grid-template-columns: 5.5rem 3.5rem 4.5rem 1fr;
+            gap: 0.5rem;
+            padding: 0.4rem 0.75rem;
+            border-bottom: 1px solid var(--border);
+            align-items: start;
+        }
+        .activity-row:hover { background: rgba(255,255,255,0.03); }
+        .activity-row:last-child { border-bottom: none; }
+        .activity-row .ts { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .activity-row .msg { color: var(--text); word-break: break-word; }
+        .activity-row .msg.error-text { color: var(--error); }
+        .activity-row .msg.warn-text { color: var(--warning); }
+        .activity-details {
+            grid-column: 1 / -1;
+            margin-top: 0.25rem;
+            padding: 0.375rem 0.5rem;
+            background: var(--surface2);
+            border-radius: 4px;
+            font-size: 0.75rem;
+            color: var(--muted);
+            display: none;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .activity-row.expanded .activity-details { display: block; }
+        .activity-row.clickable { cursor: pointer; }
+        .activity-empty { padding: 2rem; text-align: center; color: var(--muted); }
+        .badge {
+            display: inline-block;
+            padding: 0.125rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .badge.IDLE { background: #1e3a2f; color: var(--success); }
+        .badge.ACTIVE { background: #1e2a3a; color: var(--accent); }
+        .badge.WAITING { background: #3a2e1e; color: var(--warning); }
+        .badge.ERROR { background: #3a1e1e; color: var(--error); }
+        .badge.UNKNOWN_SCREEN { background: #3a2e1e; color: var(--warning); }
+        .badge.DISCONNECTED { background: #2a2a2a; color: var(--muted); }
+        .lvl-info { background: #1e2a3a; color: var(--accent); }
+        .lvl-warn { background: #3a2e1e; color: var(--warning); }
+        .lvl-error { background: #3a1e1e; color: var(--error); }
+        .lvl-debug { background: #252530; color: var(--debug); }
+        .lvl-success { background: #1e3a2f; color: var(--success); }
+        .cat-badge { background: #252530; color: var(--muted); font-weight: 500; }
+        .btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.375rem 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8125rem;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+        .btn-connect { background: #16a34a; }
+        .btn-connect:disabled { opacity: 0.5; cursor: wait; }
+        .btn-ghost {
+            background: transparent;
+            color: var(--muted);
+            border: 1px solid var(--border);
+        }
+        .btn-ghost.active { color: var(--accent); border-color: var(--accent); }
+        select {
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 0.375rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.8125rem;
+        }
+        #connection-status { color: var(--muted); }
+        .banner-warn {
+            background: #3a2e1e;
+            color: var(--warning);
+            padding: 0.5rem 1rem;
+            font-size: 0.8125rem;
+            display: none;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1><span id="phone-title">Phone 12</span></h1>
+        <div class="header-right">
+            <span><span id="conn-dot" class="status-dot offline"></span><span id="phone-connected">—</span></span>
+            <span>State: <span id="phone-state" class="badge DISCONNECTED">—</span></span>
+            <span id="live-indicator" class="badge lvl-success" style="display:none">LIVE</span>
+            <span id="connection-status">Connecting...</span>
+        </div>
+    </header>
+    <div id="page-banner" class="banner-warn"></div>
+    <div class="main">
+        <div class="phone-panel">
+            <div class="phone-screen-wrap">
+                <img id="phone-screen" alt="Phone 12 screen" style="display:none">
+                <div id="phone-screen-placeholder">No screenshot yet</div>
+            </div>
+            <div class="phone-meta">
+                <div><span class="label">Workflow</span><br><span id="meta-workflow">—</span></div>
+                <div><span class="label">Last action</span><br><span id="meta-action">—</span></div>
+                <div><span class="label">Errors</span><br><span id="meta-errors">0</span></div>
+                <div><span class="label">Last seen</span><br><span id="meta-seen">—</span></div>
+            </div>
+            <div class="phone-actions">
+                <select id="workflow-select"></select>
+                <button class="btn btn-sm" id="btn-connect" onclick="connectDevice()">Connect AirPlay</button>
+                <button class="btn btn-sm" onclick="startWorkflow()">Start</button>
+                <button class="btn btn-sm btn-ghost" onclick="stopWorkflow()">Stop</button>
+                <button class="btn btn-sm btn-ghost" onclick="captureScreen()">Screenshot</button>
+                <button class="btn btn-sm btn-ghost" onclick="execAction('home')">Home</button>
+            </div>
+            <div class="debug-actions">
+                <span class="debug-label">Debug</span>
+                <select id="debug-test-select"></select>
+                <button class="btn btn-sm btn-debug" id="btn-debug-run" onclick="runDebugTest()">Run test</button>
+                <button class="btn btn-sm btn-ghost" id="btn-restart-server" onclick="restartServer()">Restart server</button>
+            </div>
+        </div>
+        <div class="logs-panel">
+            <h2>Activity Log</h2>
+            <div class="activity-toolbar">
+                <select id="filter-level">
+                    <option value="">All levels</option>
+                    <option value="error">Error</option>
+                    <option value="warn">Warn</option>
+                    <option value="info">Info</option>
+                    <option value="debug">Debug</option>
+                </select>
+                <select id="filter-category">
+                    <option value="">All categories</option>
+                    <option value="workflow">Workflow</option>
+                    <option value="action">Action</option>
+                    <option value="vision">Vision</option>
+                    <option value="error">Error</option>
+                    <option value="device">Device</option>
+                    <option value="state">State</option>
+                    <option value="test">Test</option>
+                </select>
+                <div class="spacer"></div>
+                <button class="btn btn-sm btn-ghost active" id="btn-autoscroll" onclick="toggleAutoscroll()">Auto-scroll</button>
+                <button class="btn btn-sm btn-ghost" id="btn-pause" onclick="togglePause()">Pause live</button>
+                <button class="btn btn-sm btn-ghost" onclick="refreshActivity()">Refresh</button>
+            </div>
+            <div class="activity-feed" id="activity-feed">
+                <div class="activity-empty">Loading activity...</div>
+            </div>
+        </div>
+    </div>
+    <script>
+        const PHONE_SLOT = '12';
+        let deviceId = null;
+        let ws = null;
+        let activityEntries = [];
+        let activityAutoScroll = true;
+        let activityPaused = false;
+        let screenshotLoaded = false;
+
+        function connectWS() {
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${proto}//${location.host}/ws`);
+            ws.onopen = () => {
+                document.getElementById('connection-status').textContent = 'Connected';
+                document.getElementById('live-indicator').style.display = 'inline-block';
+            };
+            ws.onclose = () => {
+                document.getElementById('connection-status').textContent = 'Disconnected — reconnecting...';
+                document.getElementById('live-indicator').style.display = 'none';
+                setTimeout(connectWS, 3000);
+            };
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                if (msg.event === 'activity' && !activityPaused) {
+                    prependActivity(msg.data);
+                }
+                if (['screenshot_captured', 'workflow_started', 'state_changed',
+                     'action_completed', 'action_failed', 'popup_detected',
+                     'device_disconnected', 'device_connected'].includes(msg.event)) {
+                    if (msg.event === 'screenshot_captured' && deviceId &&
+                        msg.data && msg.data.device_id === deviceId) {
+                        refreshScreenshot();
+                    }
+                    updateDeviceMeta();
+                }
+            };
+        }
+
+        async function api(path, opts = {}) {
+            const res = await fetch(`/api${path}`, opts);
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error(text || res.statusText);
+            }
+            return res.json();
+        }
+
+        function enc(id) {
+            return encodeURIComponent(id);
+        }
+
+        function showBanner(msg) {
+            const el = document.getElementById('page-banner');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+
+        function formatTime(iso) {
+            if (!iso) return '—';
+            const d = new Date(iso);
+            if (isNaN(d)) return iso.slice(11, 19) || iso;
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function levelClass(level) {
+            return `lvl-${level || 'info'}`;
+        }
+
+        function msgClass(level) {
+            if (level === 'error') return 'error-text';
+            if (level === 'warn') return 'warn-text';
+            return '';
+        }
+
+        function activityMatchesFilters(entry) {
+            const lvl = document.getElementById('filter-level').value;
+            const cat = document.getElementById('filter-category').value;
+            if (lvl && entry.level !== lvl) return false;
+            if (cat && entry.category !== cat) return false;
+            return true;
+        }
+
+        function renderActivityFeed() {
+            const feed = document.getElementById('activity-feed');
+            const filtered = activityEntries.filter(activityMatchesFilters);
+            if (!filtered.length) {
+                feed.innerHTML = '<div class="activity-empty">No activity yet</div>';
+                return;
+            }
+            feed.innerHTML = filtered.map(entry => {
+                const hasDetails = entry.details && Object.keys(entry.details).length > 0;
+                const detailsJson = hasDetails ? JSON.stringify(entry.details, null, 2) : '';
+                return `
+                <div class="activity-row ${hasDetails ? 'clickable' : ''}" data-id="${entry.id}"
+                     ${hasDetails ? `onclick="toggleDetails(${entry.id})"` : ''}>
+                    <span class="ts">${formatTime(entry.created_at)}</span>
+                    <span class="badge ${levelClass(entry.level)}">${entry.level || 'info'}</span>
+                    <span class="badge cat-badge">${entry.category || '—'}</span>
+                    <span class="msg ${msgClass(entry.level)}">${escapeHtml(entry.message)}</span>
+                    ${hasDetails ? `<pre class="activity-details" id="details-${entry.id}">${escapeHtml(detailsJson)}</pre>` : ''}
+                </div>`;
+            }).join('');
+            if (activityAutoScroll) {
+                feed.scrollTop = 0;
+            }
+        }
+
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text || '';
+            return d.innerHTML;
+        }
+
+        function toggleDetails(id) {
+            const row = document.querySelector(`.activity-row[data-id="${id}"]`);
+            if (row) row.classList.toggle('expanded');
+        }
+
+        function prependActivity(entry) {
+            if (activityEntries.some(e => e.id === entry.id)) return;
+            activityEntries.unshift(entry);
+            if (activityEntries.length > 300) activityEntries.length = 300;
+            renderActivityFeed();
+        }
+
+        async function refreshActivity() {
+            if (!deviceId) return;
+            try {
+                const lvl = document.getElementById('filter-level').value;
+                const cat = document.getElementById('filter-category').value;
+                let q = `/activity?limit=150&device_id=${enc(deviceId)}`;
+                if (lvl) q += `&level=${lvl}`;
+                if (cat) q += `&category=${cat}`;
+                activityEntries = await api(q);
+                renderActivityFeed();
+            } catch (err) {
+                document.getElementById('activity-feed').innerHTML =
+                    `<div class="activity-empty">Activity log unavailable (${escapeHtml(err.message)})</div>`;
+            }
+        }
+
+        function toggleAutoscroll() {
+            activityAutoScroll = !activityAutoScroll;
+            document.getElementById('btn-autoscroll').classList.toggle('active', activityAutoScroll);
+        }
+
+        function togglePause() {
+            activityPaused = !activityPaused;
+            const btn = document.getElementById('btn-pause');
+            btn.textContent = activityPaused ? 'Resume live' : 'Pause live';
+            btn.classList.toggle('active', activityPaused);
+            if (!activityPaused) refreshActivity();
+        }
+
+        ['filter-level', 'filter-category'].forEach(id => {
+            document.getElementById(id).addEventListener('change', refreshActivity);
+        });
+
+        function refreshScreenshot() {
+            if (!deviceId) return;
+            const img = document.getElementById('phone-screen');
+            const placeholder = document.getElementById('phone-screen-placeholder');
+            const url = `/api/devices/${enc(deviceId)}/screenshot?t=${Date.now()}`;
+            const probe = new Image();
+            probe.onload = () => {
+                img.src = url;
+                img.style.display = 'block';
+                placeholder.style.display = 'none';
+                screenshotLoaded = true;
+            };
+            probe.onerror = () => {
+                if (!screenshotLoaded) {
+                    img.style.display = 'none';
+                    placeholder.style.display = 'block';
+                }
+            };
+            probe.src = url;
+        }
+
+        function updateDeviceUI(device) {
+            document.getElementById('phone-title').textContent =
+                device.display_label || `Phone ${PHONE_SLOT}`;
+            document.getElementById('conn-dot').className =
+                `status-dot ${device.connected ? 'online' : 'offline'}`;
+            document.getElementById('phone-connected').textContent =
+                device.connected ? 'Connected' : 'Disconnected';
+            const stateEl = document.getElementById('phone-state');
+            stateEl.textContent = device.current_state;
+            stateEl.className = `badge ${device.current_state}`;
+            document.getElementById('meta-workflow').textContent =
+                (device.workflow_name || '—') + (device.workflow_paused ? ' (paused)' : '');
+            document.getElementById('meta-action').textContent = device.last_action || '—';
+            document.getElementById('meta-errors').textContent = device.error_count || 0;
+            document.getElementById('meta-seen').textContent =
+                device.last_seen_at ? formatTime(device.last_seen_at) : '—';
+            const btn = document.getElementById('btn-connect');
+            btn.textContent = device.connected ? 'Reconnect AirPlay' : 'Connect AirPlay';
+            btn.className = `btn btn-sm ${device.connected ? 'btn-ghost' : 'btn-connect'}`;
+        }
+
+        async function updateDeviceMeta() {
+            if (!deviceId) return;
+            try {
+                const device = await api(`/devices/${enc(deviceId)}`);
+                updateDeviceUI(device);
+            } catch (_) { /* keep existing UI */ }
+        }
+
+        async function findPhone12() {
+            const devices = await api('/devices');
+            const phone = devices.find(d => d.user_name === PHONE_SLOT) ||
+                devices.find(d => (d.display_label || '').includes(`Phone ${PHONE_SLOT}`));
+            if (!phone) {
+                showBanner(`Phone ${PHONE_SLOT} not found. Connect it in iMouseXP first.`);
+                return null;
+            }
+            return phone;
+        }
+
+        async function connectDevice() {
+            if (!deviceId) return;
+            const btn = document.getElementById('btn-connect');
+            btn.disabled = true;
+            btn.textContent = 'Connecting…';
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/connect`, { method: 'POST' });
+                await updateDeviceMeta();
+                if (!res.connected) {
+                    alert('AirPlay connect failed — open iMouseXP and connect the phone there, then try again.');
+                }
+            } catch (err) {
+                alert(`Connect failed: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+                await updateDeviceMeta();
+            }
+        }
+
+        async function captureScreen() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/screenshot`, { method: 'POST' });
+                refreshScreenshot();
+                refreshActivity();
+            } catch (err) {
+                alert(`Screenshot failed: ${err.message}`);
+            }
+        }
+
+        async function startWorkflow() {
+            if (!deviceId) return;
+            try {
+                const name = document.getElementById('workflow-select').value || 'tiktok_prep';
+                await api('/workflows/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workflow_name: name, device_id: deviceId })
+                });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) {
+                alert(`Start failed: ${err.message}`);
+            }
+        }
+
+        async function stopWorkflow() {
+            if (!deviceId) return;
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/workflows/stop`, { method: 'POST' });
+                if (!res.success) {
+                    alert('Nothing to stop — no active workflow on this device.');
+                    return;
+                }
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) {
+                alert(`Stop failed: ${err.message}`);
+            }
+        }
+
+        async function runDebugTest() {
+            if (!deviceId) return;
+            const select = document.getElementById('debug-test-select');
+            const testId = select.value;
+            if (!testId) return;
+            const btn = document.getElementById('btn-debug-run');
+            btn.disabled = true;
+            btn.textContent = 'Running…';
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/debug/${testId}`, { method: 'POST' });
+                refreshScreenshot();
+                refreshActivity();
+                if (!res.success) {
+                    alert(res.message || `${select.options[select.selectedIndex].text} failed`);
+                } else if (res.file_count != null) {
+                    showBanner(res.message);
+                }
+            } catch (err) {
+                alert(`Debug test failed: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Run test';
+            }
+        }
+
+        async function waitForServerBack() {
+            const btn = document.getElementById('btn-restart-server');
+            btn.disabled = true;
+            btn.textContent = 'Waiting…';
+            for (let i = 0; i < 45; i++) {
+                await new Promise(r => setTimeout(r, 2000));
+                try {
+                    const res = await fetch('/api/health');
+                    if (res.ok) {
+                        btn.disabled = false;
+                        btn.textContent = 'Restart server';
+                        await loadDebugTests();
+                        await loadWorkflows();
+                        if (deviceId) {
+                            await updateDeviceMeta();
+                            refreshActivity();
+                            refreshScreenshot();
+                        }
+                        connectWS();
+                        showBanner('Server restarted');
+                        return;
+                    }
+                } catch (_) {}
+            }
+            btn.disabled = false;
+            btn.textContent = 'Restart server';
+            alert('Server did not come back — run restart.ps1 or START.bat manually.');
+        }
+
+        async function restartServer() {
+            if (!confirm('Restart the farm server? Reloads code and config. The page reconnects when it is back.')) {
+                return;
+            }
+            const btn = document.getElementById('btn-restart-server');
+            btn.disabled = true;
+            btn.textContent = 'Restarting…';
+            try {
+                await api('/server/restart', { method: 'POST' });
+            } catch (_) {
+                // connection drops when the process exits
+            }
+            waitForServerBack();
+        }
+
+        async function loadDebugTests() {
+            try {
+                const tests = await api('/debug/tests');
+                document.getElementById('debug-test-select').innerHTML =
+                    tests.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.label)}</option>`).join('');
+            } catch (err) {
+                document.getElementById('debug-test-select').innerHTML =
+                    '<option value="">Debug tests unavailable — restart server</option>';
+                console.warn('loadDebugTests failed:', err.message);
+            }
+        }
+
+        async function execAction(type) {
+            if (!deviceId) return;
+            await api(`/devices/${enc(deviceId)}/actions/execute`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action_type: type, params: {} })
+            });
+            refreshActivity();
+        }
+
+        async function loadWorkflows() {
+            const workflows = await api('/workflows');
+            document.getElementById('workflow-select').innerHTML =
+                workflows.map(w => `<option value="${w.name}">${escapeHtml(w.name)}</option>`).join('');
+        }
+
+        async function init() {
+            connectWS();
+            try {
+                const phone = await findPhone12();
+                if (!phone) return;
+                deviceId = phone.device_id;
+                updateDeviceUI(phone);
+                refreshScreenshot();
+                await loadWorkflows();
+                await loadDebugTests();
+                await refreshActivity();
+            } catch (e) {
+                showBanner('Failed to load Phone 12: ' + e.message);
+            }
+            setInterval(() => {
+                updateDeviceMeta().catch(() => {});
+                refreshScreenshot();
+            }, 10000);
+        }
+        init();
+    </script>
+</body>
+</html>
