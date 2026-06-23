@@ -15,6 +15,23 @@ from imouse_farm.vision.base import VisionAnalysis, VisionProvider
 
 logger = get_logger(__name__)
 
+# Small UI icons; backgrounds often vary (video frame behind button).
+_SMALL_ICON_NAMES = frozenset(
+    {
+        "vpn",
+        "shadowrocket",
+        "vpntoggle",
+        "tiktok",
+        "photos",
+        "plus",
+        "gallery",
+        "aa",
+        "border",
+        "border2",
+        "editor",
+    }
+)
+
 
 class OpenCVVisionProvider(VisionProvider):
     """Version 1 vision: OpenCV template matching + Tesseract OCR."""
@@ -60,12 +77,26 @@ class OpenCVVisionProvider(VisionProvider):
         templates = self._resolve_templates(template_names)
         requested = set(template_names or [])
         for name, (template, threshold) in templates.items():
-            search_screen = screen
+            search_screen, offset_x, offset_y = self._search_region(screen, name)
+            element = self._ui_element_for(name)
+            match_white = bool(element.get("match_white_text", False))
             if name == "vpn":
                 roi_h = max(int(screen.shape[0] * 0.12), template.shape[0] + 4)
                 search_screen = screen[0:roi_h, :]
-            result = match_template(search_screen, template, threshold, name)
+                offset_x, offset_y = 0, 0
+            result = match_template(
+                search_screen, template, threshold, name, match_white_text=match_white
+            )
             if result:
+                result = DetectionResult(
+                    name=result.name,
+                    confidence=result.confidence,
+                    x=result.x + offset_x,
+                    y=result.y + offset_y,
+                    width=result.width,
+                    height=result.height,
+                    detection_type=result.detection_type,
+                )
                 detections.append(result)
 
         if requested:
@@ -84,11 +115,31 @@ class OpenCVVisionProvider(VisionProvider):
                     tmpl = load_image(path)
                     if tmpl is not None:
                         threshold = element.get("threshold", self._config.template_match_threshold)
-                        if ename in {"vpn", "shadowrocket", "vpntoggle", "tiktok", "photos"}:
+                        if ename in _SMALL_ICON_NAMES:
                             threshold = min(threshold, self._config.small_template_threshold)
-                        result = match_template(screen, tmpl, threshold, ename)
+                        search_screen, offset_x, offset_y = self._search_region(screen, ename)
+                        if ename == "vpn":
+                            roi_h = max(int(screen.shape[0] * 0.12), tmpl.shape[0] + 4)
+                            search_screen = screen[0:roi_h, :]
+                            offset_x, offset_y = 0, 0
+                        match_white = bool(element.get("match_white_text", False))
+                        result = match_template(
+                            search_screen,
+                            tmpl,
+                            threshold,
+                            ename,
+                            match_white_text=match_white,
+                        )
                         if result:
-                            result.detection_type = "ui_element"
+                            result = DetectionResult(
+                                name=result.name,
+                                confidence=result.confidence,
+                                x=result.x + offset_x,
+                                y=result.y + offset_y,
+                                width=result.width,
+                                height=result.height,
+                                detection_type="ui_element",
+                            )
                             detections.append(result)
 
         processed = preprocess_for_ocr(screen)
@@ -126,6 +177,45 @@ class OpenCVVisionProvider(VisionProvider):
         threshold, _ = self._lookup_template(name)
         return threshold
 
+    def search_rect_for(
+        self, name: str, *, width: int | None = None, height: int | None = None
+    ) -> list[int] | None:
+        element = self._ui_element_for(name)
+        w = width or 406
+        h = height or 720
+        pct = element.get("search_rect_pct")
+        if isinstance(pct, list) and len(pct) == 4:
+            return [
+                int(w * float(pct[0])),
+                int(h * float(pct[1])),
+                int(w * float(pct[2])),
+                int(h * float(pct[3])),
+            ]
+        rect = element.get("search_rect")
+        if isinstance(rect, list) and len(rect) == 4:
+            return [int(v) for v in rect]
+        return None
+
+    def _ui_element_for(self, name: str) -> dict[str, Any]:
+        for element in self._iter_ui_elements():
+            if element.get("name") == name:
+                return element
+        return {}
+
+    def _search_region(
+        self, screen: Any, name: str
+    ) -> tuple[Any, int, int]:
+        h, w = screen.shape[:2]
+        rect = self.search_rect_for(name, width=w, height=h)
+        if not rect:
+            return screen, 0, 0
+        x1, y1, x2, y2 = rect
+        x1 = max(0, min(x1, w - 1))
+        x2 = max(x1 + 1, min(x2, w))
+        y1 = max(0, min(y1, h - 1))
+        y2 = max(y1 + 1, min(y2, h))
+        return screen[y1:y2, x1:x2], x1, y1
+
     def _lookup_template(self, name: str) -> tuple[float, Path]:
         threshold = self._config.template_match_threshold
         filename = f"{name}.jpg"
@@ -146,7 +236,7 @@ class OpenCVVisionProvider(VisionProvider):
                 if alt.exists():
                     path = alt
                     break
-        if name in {"vpn", "shadowrocket", "vpntoggle", "tiktok", "photos"}:
+        if name in _SMALL_ICON_NAMES:
             threshold = min(threshold, self._config.small_template_threshold)
         return threshold, path
 

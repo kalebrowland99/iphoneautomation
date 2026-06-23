@@ -40,6 +40,7 @@ New iMouse features should be added to `DeviceController` first, then exposed vi
 ## Known iMouseXP constraints (from production use)
 
 - **`mouse_swipe`**: `direction` is **required** (positional), even when using `sx/sy/ex/ey` coordinates.
+- **Drag while held**: use `mouse_down` → stepped `mouse_move` → `mouse_up`. Do not call `mouse_swipe` after `mouse_down`; swipe is its own full gesture and releases at the start.
 - **`shortcut_album_upload`**: `files` must be **absolute Windows paths** the iMouse kernel can read.
 - **`pic_find_text`**: on-device OCR for tapping UI labels (preferred over PC-side Tesseract for live taps).
 - **`key_sendkey`**: `key=` for text; `fn_key=` for hotkeys (`home`, `selectall`, `delete`, etc.).

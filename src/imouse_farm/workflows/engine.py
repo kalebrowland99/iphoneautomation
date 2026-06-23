@@ -22,6 +22,7 @@ from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.popups.manager import PopupManager
 from imouse_farm.screenshots.service import ScreenshotService
 from imouse_farm.state.machine import StateMachine
+from imouse_farm.post.post_caption_store import get_post_caption
 from imouse_farm.utils.gallery import phone_gallery_folder
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.vision.base import VisionAnalysis, VisionProvider
@@ -180,6 +181,7 @@ class WorkflowRunner:
         self._variables["phone_name"] = device.phone_name
         self._variables["device_slot"] = device.user_name
         self._variables["gallery_folder"] = str(folder)
+        self._variables["post_caption"] = get_post_caption()
         logger.info(
             "workflow_variables",
             device_id=self._device_id,
@@ -347,13 +349,21 @@ class WorkflowRunner:
             return detections
 
         controller = self._device_manager.controller
+        device = self._device_manager.get_device(self._device_id)
+        sw = int(device.screen_width) if device and device.screen_width else 406
+        sh = int(device.screen_height) if device and device.screen_height else 720
         for name in template_names:
             path = self._vision.template_path_for(name)
             if not path:
                 continue
             threshold = self._vision.threshold_for(name)
+            rect = (
+                self._vision.search_rect_for(name, width=sw, height=sh)
+                if hasattr(self._vision, "search_rect_for")
+                else None
+            )
             hit = await controller.find_template_on_device(
-                self._device_id, path, threshold
+                self._device_id, path, threshold, rect=rect
             )
             if not hit:
                 continue
@@ -439,6 +449,20 @@ class WorkflowRunner:
         action_type = ActionType(action_def.get("type", "tap_detection"))
         params = {k: v for k, v in action_def.items() if k != "type"}
 
+        if (
+            action_type == ActionType.TAP_DETECTION
+            and params.get("refind_on_device")
+            and params.get("detection")
+        ):
+            detection_name = str(params["detection"])
+            refreshed = await self._merge_device_template_detections(
+                [detection_name], {}
+            )
+            current = dict(self._actions._last_detections.get(self._device_id, {}))
+            if detection_name in refreshed:
+                current[detection_name] = refreshed[detection_name]
+            self._actions.set_detections(self._device_id, current)
+
         if action_type == ActionType.TAP and "x" in params and "y" in params and "detection" not in params:
             logger.warning(
                 "blind_tap_warning",
@@ -520,7 +544,10 @@ class WorkflowRunner:
 
     def _substitute(self, text: str) -> Any:
         def replacer(match: re.Match[str]) -> str:
-            return str(self._variables.get(match.group(1), match.group(0)))
+            key = match.group(1)
+            if key == "post_caption":
+                return get_post_caption()
+            return str(self._variables.get(key, match.group(0)))
         result = re.sub(r"\$\{(\w+)\}", replacer, text)
         try:
             return int(result)

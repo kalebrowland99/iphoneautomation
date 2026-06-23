@@ -46,6 +46,26 @@ ui_elements:
   - name: tiktok
     template: tiktok.jpg
     threshold: 0.42
+  - name: plus
+    template: plus.jpg
+    threshold: 0.38
+  - name: gallery
+    template: gallery.jpg
+    threshold: 0.32
+  - name: aa
+    template: aa.jpg
+    threshold: 0.40
+    search_rect_pct: [0.9, 0.0, 1.0, 1.0]
+    match_white_text: true
+  - name: border
+    template: border.jpg
+    threshold: 0.30
+  - name: border2
+    template: border2.jpg
+    threshold: 0.28
+  - name: editor
+    template: editor.jpg
+    threshold: 0.32
   - name: photos
     template: photos.jpg
     threshold: 0.42

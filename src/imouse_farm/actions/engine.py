@@ -216,8 +216,12 @@ class ActionEngine:
                 return await ctrl.tap(device_id, int(params["x"]), int(params["y"]))
             case ActionType.TAP_DETECTION:
                 name = params.get("detection", "")
+                optional = bool(params.get("optional", False))
                 det = self._last_detections.get(device_id, {}).get(name)
                 if not det:
+                    if optional:
+                        logger.info("tap_detection_skipped", device_id=device_id, detection=name)
+                        return True
                     raise RuntimeError(f"Detection '{name}' not found — analyze screen first")
                 return await ctrl.tap(device_id, int(det["x"]), int(det["y"]))
             case ActionType.TAP_OCR:
@@ -233,36 +237,58 @@ class ActionEngine:
                 prefer_top = bool(params.get("prefer_top", False))
                 threshold = float(params.get("threshold", 0.75))
                 contain = bool(params.get("contain", True))
-                all_matches: list[dict[str, Any]] = []
-                for text in candidates:
-                    matches = await ctrl.find_text_on_device(
-                        device_id,
-                        [text],
-                        threshold=threshold,
-                        contain=contain,
-                    )
-                    for match in matches:
-                        all_matches.append({**match, "text": match.get("text") or text})
-                if all_matches:
+                wait_timeout = float(params.get("wait_timeout_seconds", 0))
+                poll_interval = float(params.get("poll_interval_seconds", 2))
+
+                def _pick_best_match(matches: list[dict[str, Any]]) -> dict[str, Any]:
                     if prefer_top:
-                        best = min(
-                            all_matches,
+                        return min(
+                            matches,
                             key=lambda m: (int(m["y"]), -float(m.get("confidence", 0))),
                         )
-                    else:
-                        best = max(
-                            all_matches,
-                            key=lambda m: (float(m.get("confidence", 0)), -int(m["y"])),
-                        )
-                    logger.info(
-                        "tap_ocr",
-                        device_id=device_id,
-                        text=best.get("text"),
-                        x=best["x"],
-                        y=best["y"],
-                        prefer_top=prefer_top,
+                    return max(
+                        matches,
+                        key=lambda m: (
+                            float(m.get("confidence", 0)),
+                            len(str(m.get("text", ""))),
+                            -int(m["y"]),
+                        ),
                     )
-                    return await ctrl.tap(device_id, int(best["x"]), int(best["y"]))
+
+                async def _try_tap_once() -> bool:
+                    # Try each candidate in order so specific labels (e.g. full song
+                    # title) win over shorter partial OCR hits elsewhere on screen.
+                    for text in candidates:
+                        matches = await ctrl.find_text_on_device(
+                            device_id,
+                            [text],
+                            threshold=threshold,
+                            contain=contain,
+                        )
+                        if not matches:
+                            continue
+                        annotated = [{**m, "text": m.get("text") or text} for m in matches]
+                        best = _pick_best_match(annotated)
+                        logger.info(
+                            "tap_ocr",
+                            device_id=device_id,
+                            text=best.get("text"),
+                            x=best["x"],
+                            y=best["y"],
+                            prefer_top=prefer_top,
+                            query=text,
+                        )
+                        await ctrl.tap(device_id, int(best["x"]), int(best["y"]))
+                        return True
+                    return False
+
+                deadline = time.monotonic() + wait_timeout if wait_timeout > 0 else time.monotonic()
+                while True:
+                    if await _try_tap_once():
+                        return True
+                    if wait_timeout <= 0 or time.monotonic() >= deadline:
+                        break
+                    await asyncio.sleep(poll_interval)
                 if optional:
                     logger.info("tap_ocr_skipped", device_id=device_id, texts=candidates)
                     return True
@@ -282,6 +308,19 @@ class ActionEngine:
                     device_id, int(params["x"]), int(params["y"]),
                     int(params.get("duration_ms", 1000)),
                 )
+            case ActionType.DRAG:
+                return await ctrl.drag(
+                    device_id,
+                    int(params["x1"]),
+                    int(params["y1"]),
+                    x2=_coerce_int(params.get("x2")),
+                    y2=_coerce_int(params.get("y2")),
+                    direction=str(params["direction"]).strip() if params.get("direction") else None,
+                    distance=_coerce_int(params.get("distance")),
+                    duration_ms=int(params.get("duration_ms", 1000)),
+                    move_ms=int(params.get("move_ms", 10)),
+                    hold_ms=int(params.get("hold_ms", 0)),
+                )
             case ActionType.TEXT_INPUT:
                 return await ctrl.send_text(device_id, str(params.get("text", "")))
             case ActionType.CLEAR_TEXT:
@@ -296,6 +335,8 @@ class ActionEngine:
                 raise RuntimeError("key action requires fn_key or key")
             case ActionType.HOME:
                 return await ctrl.press_home(device_id)
+            case ActionType.MOUSE_RESET:
+                return await ctrl.reset_cursor(device_id)
             case ActionType.LOCK:
                 return await ctrl.press_lock(device_id)
             case ActionType.UNLOCK:
@@ -340,6 +381,7 @@ class ActionEngine:
                     album_name=params.get("album_name"),
                     timeout_ms=int(params.get("timeout_ms", 300000)),
                     zip_files=bool(params.get("zip", False)),
+                    verify=bool(params.get("verify", True)),
                 )
             case _:
                 raise ValueError(f"Unknown action type: {action}")

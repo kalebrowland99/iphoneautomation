@@ -18,7 +18,12 @@ from pydantic import BaseModel, Field
 
 from imouse_farm.config.models import ActionType, AppConfig
 from imouse_farm.dashboard.activity import enrich_activity
-from imouse_farm.dashboard.test_actions import list_debug_tests, run_debug_test, tap_vpntoggle
+from imouse_farm.dashboard.test_actions import (
+    list_debug_tests,
+    run_debug_test,
+    tap_vpntoggle,
+)
+from imouse_farm.post.post_caption_store import get_post_caption, set_post_caption
 from imouse_farm.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -32,6 +37,10 @@ class ActionBody(BaseModel):
 class WorkflowStartBody(BaseModel):
     workflow_name: str
     device_id: str
+
+
+class PostCaptionBody(BaseModel):
+    text: str = ""
 
 
 class ApplicationState:
@@ -195,8 +204,17 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         return {"success": success, "connected": bool(updated and updated.is_online)}
 
     @app.get("/api/debug/tests")
-    async def get_debug_tests() -> list[dict[str, str]]:
-        return list_debug_tests()
+    async def get_debug_tests(group: str | None = None) -> list[dict[str, str]]:
+        return list_debug_tests(group)
+
+    @app.get("/api/post-caption")
+    async def get_post_caption_route() -> dict[str, str]:
+        return {"text": get_post_caption()}
+
+    @app.put("/api/post-caption")
+    async def set_post_caption_route(body: PostCaptionBody) -> dict[str, str]:
+        set_post_caption(body.text)
+        return {"text": get_post_caption()}
 
     @app.post("/api/devices/{device_id:path}/debug/{test_id}")
     async def run_device_debug_test(device_id: str, test_id: str) -> dict[str, Any]:

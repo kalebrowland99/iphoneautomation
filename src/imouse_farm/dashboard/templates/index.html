@@ -103,8 +103,9 @@
         .debug-actions {
             display: flex;
             flex-wrap: wrap;
+            flex-direction: column;
+            align-items: stretch;
             gap: 0.5rem;
-            align-items: center;
             margin-top: 0.5rem;
             padding-top: 0.5rem;
             border-top: 1px dashed var(--border);
@@ -129,6 +130,54 @@
         .btn-debug {
             color: var(--debug);
             border-color: var(--border);
+        }
+        .post-caption-wrap {
+            margin-top: 0.75rem;
+        }
+        .post-caption-wrap label {
+            display: block;
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            font-weight: 600;
+            margin-bottom: 0.35rem;
+        }
+        .post-caption-wrap textarea {
+            width: 100%;
+            min-height: 4.5rem;
+            resize: vertical;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            padding: 0.5rem 0.625rem;
+            font-size: 0.875rem;
+            font-family: inherit;
+        }
+        .post-caption-wrap textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .debug-tabs {
+            display: flex;
+            gap: 0.25rem;
+            width: 100%;
+        }
+        .debug-tabs button {
+            flex: 1;
+            padding: 0.3rem 0.5rem;
+            font-size: 0.75rem;
+            border: 1px solid var(--border);
+            background: var(--surface2);
+            color: var(--muted);
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .debug-tabs button.active {
+            color: var(--accent);
+            border-color: var(--accent);
+            background: rgba(59, 130, 246, 0.1);
         }
         .logs-panel {
             display: flex;
@@ -274,6 +323,10 @@
                 <div><span class="label">Errors</span><br><span id="meta-errors">0</span></div>
                 <div><span class="label">Last seen</span><br><span id="meta-seen">—</span></div>
             </div>
+            <div class="post-caption-wrap">
+                <label for="post-caption">Post caption (typed into TikTok)</label>
+                <textarea id="post-caption" placeholder="Type caption for tiktok_post workflow…" rows="3"></textarea>
+            </div>
             <div class="phone-actions">
                 <select id="workflow-select"></select>
                 <button class="btn btn-sm" id="btn-connect" onclick="connectDevice()">Connect AirPlay</button>
@@ -284,6 +337,10 @@
             </div>
             <div class="debug-actions">
                 <span class="debug-label">Debug</span>
+                <div class="debug-tabs">
+                    <button type="button" id="debug-tab-prep" class="active" onclick="setDebugTab('prep')">Prep</button>
+                    <button type="button" id="debug-tab-post" onclick="setDebugTab('post')">Post</button>
+                </div>
                 <select id="debug-test-select"></select>
                 <button class="btn btn-sm btn-debug" id="btn-debug-run" onclick="runDebugTest()">Run test</button>
                 <button class="btn btn-sm btn-ghost" id="btn-restart-server" onclick="restartServer()">Restart server</button>
@@ -327,6 +384,8 @@
         let activityAutoScroll = true;
         let activityPaused = false;
         let screenshotLoaded = false;
+        let debugTab = 'prep';
+        let captionSaveTimer = null;
 
         function connectWS() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -599,16 +658,25 @@
             }
         }
 
+        let debugTestRunning = false;
+
         async function runDebugTest() {
-            if (!deviceId) return;
+            if (!deviceId || debugTestRunning) return;
             const select = document.getElementById('debug-test-select');
             const testId = select.value;
             if (!testId) return;
             const btn = document.getElementById('btn-debug-run');
+            const controller = new AbortController();
+            // Safety net: if the request hangs (e.g. the device drops mid-test and
+            // a blocking SDK call never returns), the awaited POST would never
+            // settle and the button would stay stuck on "Running…". This ceiling
+            // is generous enough for long tests (uploads) but guarantees a reset.
+            const watchdog = setTimeout(() => controller.abort(), 10 * 60 * 1000);
+            debugTestRunning = true;
             btn.disabled = true;
             btn.textContent = 'Running…';
             try {
-                const res = await api(`/devices/${enc(deviceId)}/debug/${testId}`, { method: 'POST' });
+                const res = await api(`/devices/${enc(deviceId)}/debug/${testId}`, { method: 'POST', signal: controller.signal });
                 refreshScreenshot();
                 refreshActivity();
                 if (!res.success) {
@@ -617,8 +685,14 @@
                     showBanner(res.message);
                 }
             } catch (err) {
-                alert(`Debug test failed: ${err.message}`);
+                if (err.name === 'AbortError') {
+                    alert('Debug test timed out (no response) — the device may be offline. Button reset.');
+                } else {
+                    alert(`Debug test failed: ${err.message}`);
+                }
             } finally {
+                clearTimeout(watchdog);
+                debugTestRunning = false;
                 btn.disabled = false;
                 btn.textContent = 'Run test';
             }
@@ -670,14 +744,51 @@
 
         async function loadDebugTests() {
             try {
-                const tests = await api('/debug/tests');
-                document.getElementById('debug-test-select').innerHTML =
+                const tests = await api(`/debug/tests?group=${encodeURIComponent(debugTab)}`);
+                const select = document.getElementById('debug-test-select');
+                if (!tests.length) {
+                    select.innerHTML = `<option value="">No ${debugTab} debug tests</option>`;
+                    return;
+                }
+                select.innerHTML =
                     tests.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.label)}</option>`).join('');
             } catch (err) {
                 document.getElementById('debug-test-select').innerHTML =
                     '<option value="">Debug tests unavailable — restart server</option>';
                 console.warn('loadDebugTests failed:', err.message);
             }
+        }
+
+        function setDebugTab(tab) {
+            debugTab = tab;
+            document.getElementById('debug-tab-prep').classList.toggle('active', tab === 'prep');
+            document.getElementById('debug-tab-post').classList.toggle('active', tab === 'post');
+            loadDebugTests();
+        }
+
+        async function loadPostCaption() {
+            try {
+                const res = await api('/post-caption');
+                document.getElementById('post-caption').value = res.text || '';
+            } catch (err) {
+                console.warn('loadPostCaption failed:', err.message);
+            }
+        }
+
+        function scheduleCaptionSave() {
+            if (captionSaveTimer) clearTimeout(captionSaveTimer);
+            captionSaveTimer = setTimeout(async () => {
+                const text = document.getElementById('post-caption').value;
+                try {
+                    await api('/post-caption', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text })
+                    });
+                } catch (err) {
+                    console.warn('savePostCaption failed:', err.message);
+                }
+            }, 400);
         }
 
         async function execAction(type) {
@@ -693,11 +804,17 @@
         async function loadWorkflows() {
             const workflows = await api('/workflows');
             document.getElementById('workflow-select').innerHTML =
-                workflows.map(w => `<option value="${w.name}">${escapeHtml(w.name)}</option>`).join('');
+                workflows.map(w => `<option value="${escapeHtml(w.name)}">${escapeHtml(w.name)}</option>`).join('');
+            const select = document.getElementById('workflow-select');
+            if ([...select.options].some(o => o.value === 'tiktok_post')) {
+                select.value = 'tiktok_post';
+            }
         }
 
         async function init() {
             connectWS();
+            document.getElementById('post-caption').addEventListener('input', scheduleCaptionSave);
+            await loadPostCaption();
             try {
                 const phone = await findPhone12();
                 if (!phone) return;

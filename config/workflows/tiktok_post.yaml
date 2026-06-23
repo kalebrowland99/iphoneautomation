@@ -1,0 +1,304 @@
+name: tiktok_post
+description: >
+  TikTok post editor flow: plus → gallery → media pick → music → text overlay →
+  editor scrub. Caption text comes from the dashboard post-caption box
+  (${post_caption}). Add template images to config/templates/: plus.jpg,
+  gallery.jpg, aa.jpg, border.jpg, editor.jpg.
+
+loop: false
+
+steps:
+  # ── 1. Tap + (create post) ──────────────────────────────────────────
+  - type: screenshot
+    name: screen_plus
+    templates: [plus]
+
+  - type: analyze_screen
+    name: analyze_plus
+    templates: [plus]
+
+  - type: execute_action
+    name: tap_plus
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: plus
+    skip_post_action: true
+
+  - type: wait
+    name: after_plus
+    duration_seconds: 2
+
+  # ── 2. Tap gallery ──────────────────────────────────────────────────
+  - type: screenshot
+    name: screen_gallery
+    templates: [gallery]
+
+  - type: analyze_screen
+    name: analyze_gallery
+    templates: [gallery]
+
+  - type: execute_action
+    name: tap_gallery
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: gallery
+    skip_post_action: true
+
+  - type: wait
+    name: after_gallery
+    duration_seconds: 3
+
+  # ── 3. Pick media (coordinate) ──────────────────────────────────────
+  - type: execute_action
+    name: tap_gallery_item
+    on_failure: pause
+    action:
+      type: tap
+      x: 82
+      y: 201
+    skip_post_action: true
+
+  - type: wait
+    name: after_gallery_item
+    duration_seconds: 3
+
+  # ── 4. Music gallery button ─────────────────────────────────────────
+  - type: execute_action
+    name: tap_music_gallery
+    on_failure: pause
+    action:
+      type: tap
+      x: 194
+      y: 39
+    skip_post_action: true
+
+  - type: wait
+    name: after_music_gallery
+    duration_seconds: 3
+
+  # ── 5. Wait for Favorites, then tap ─────────────────────────────────
+  - type: execute_action
+    name: tap_favorites
+    on_failure: pause
+    action:
+      type: tap_ocr
+      texts: ["Favorites", "FAVORITES"]
+      wait_timeout_seconds: 60
+      poll_interval_seconds: 2
+      optional: false
+    skip_post_action: true
+
+  - type: wait
+    name: after_favorites
+    duration_seconds: 3
+
+  # ── 6. Wait for Hvitserk's choice, then tap ─────────────────────────
+  - type: execute_action
+    name: tap_hvitserk_choice
+    on_failure: pause
+    action:
+      type: tap_ocr
+      texts:
+        - "Hvitserk's choice"
+        - "Hvitserk's Choice"
+        - "Hvitserks choice"
+        - "Hvitserks Choice"
+        - "HVITSERK'S CHOICE"
+      wait_timeout_seconds: 60
+      poll_interval_seconds: 2
+      threshold: 0.65
+      optional: false
+    skip_post_action: true
+
+  - type: wait
+    name: after_hvitserk
+    duration_seconds: 3
+
+  # ── 7. Dismiss music picker (center tap) ────────────────────────────
+  - type: execute_action
+    name: dismiss_music_box
+    action:
+      type: tap
+      x: 187
+      y: 334
+    skip_post_action: true
+
+  - type: wait
+    name: after_dismiss_music
+    duration_seconds: 3
+
+  # ── 8. Tap AA (add text) ────────────────────────────────────────────
+  - type: screenshot
+    name: screen_aa
+    templates: [aa]
+
+  - type: analyze_screen
+    name: analyze_aa
+    templates: [aa]
+
+  - type: execute_action
+    name: tap_aa
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: aa
+      refind_on_device: true
+    skip_post_action: true
+
+  - type: wait
+    name: after_aa
+    duration_seconds: 2
+
+  # ── 9. Type caption from dashboard textbox ──────────────────────────
+  - type: execute_action
+    name: type_post_caption
+    on_failure: pause
+    action:
+      type: text_input
+      text: ${post_caption}
+    skip_post_action: true
+
+  - type: wait
+    name: after_caption
+    duration_seconds: 3
+
+  # ── 10. White background — tap border / border2 once each if visible ─
+  - type: screenshot
+    name: screen_border
+    templates: [border, border2]
+
+  - type: analyze_screen
+    name: analyze_border
+    templates: [border, border2]
+
+  - type: execute_action
+    name: tap_border_if_visible
+    on_failure: continue
+    action:
+      type: tap_detection
+      detection: border
+      optional: true
+    skip_post_action: true
+
+  - type: wait
+    name: between_border_taps
+    duration_seconds: 1
+
+  - type: screenshot
+    name: screen_border2
+    templates: [border, border2]
+
+  - type: analyze_screen
+    name: analyze_border2
+    templates: [border, border2]
+
+  - type: execute_action
+    name: tap_border2_if_visible
+    on_failure: continue
+    action:
+      type: tap_detection
+      detection: border2
+      optional: true
+    skip_post_action: true
+
+  - type: wait
+    name: after_border
+    duration_seconds: 3
+
+  # ── 11. Done (top-right) ────────────────────────────────────────────
+  - type: execute_action
+    name: tap_done
+    on_failure: pause
+    action:
+      type: tap_ocr
+      texts: ["Done", "DONE"]
+      prefer_top: true
+      optional: false
+    skip_post_action: true
+
+  - type: wait
+    name: after_done
+    duration_seconds: 3
+
+  # ── 12. Editor icon ─────────────────────────────────────────────────
+  - type: screenshot
+    name: screen_editor
+    templates: [editor]
+
+  - type: analyze_screen
+    name: analyze_editor
+    templates: [editor]
+
+  - type: execute_action
+    name: tap_editor
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: editor
+    skip_post_action: true
+
+  - type: wait
+    name: after_editor
+    duration_seconds: 3
+
+  # ── 13. Swipe left twice (timeline scrub area) ──────────────────────
+  - type: execute_action
+    name: swipe_left_1
+    action:
+      type: swipe
+      direction: left
+      sx: 341
+      sy: 533
+      ex: 40
+      ey: 533
+    skip_post_action: true
+
+  - type: wait
+    name: after_swipe_1
+    duration_seconds: 3
+
+  - type: execute_action
+    name: swipe_left_2
+    action:
+      type: swipe
+      direction: left
+      sx: 341
+      sy: 533
+      ex: 40
+      ey: 533
+    skip_post_action: true
+
+  - type: wait
+    name: after_swipe_2
+    duration_seconds: 3
+
+  # ── 14. Text scrub marker ───────────────────────────────────────────
+  - type: execute_action
+    name: tap_text_scrub
+    on_failure: pause
+    action:
+      type: tap
+      x: 161
+      y: 561
+    skip_post_action: true
+
+  - type: wait
+    name: after_text_scrub
+    duration_seconds: 3
+
+  # ── 15. Hold + drag clip trim ───────────────────────────────────────
+  - type: execute_action
+    name: drag_trim
+    on_failure: pause
+    action:
+      type: drag
+      x1: 214
+      y1: 508
+      direction: left
+      distance: 172
+      duration_ms: 1000
+      move_ms: 10
+      hold_ms: 0
+    skip_post_action: true

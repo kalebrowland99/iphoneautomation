@@ -26,7 +26,50 @@ from imouse_farm.actions.permission_prompts import UPLOAD_PERMISSION_TEXTS
 from imouse_farm.config.models import ActionType
 from imouse_farm.utils.gallery import list_media_files, phone_gallery_folder
 
-DebugKind = Literal["tap", "upload_gallery", "album_clear", "album_list", "tap_ocr", "open_photos_spotlight"]
+from imouse_farm.post.post_caption_store import get_post_caption
+
+DebugKind = Literal[
+    "tap",
+    "upload_gallery",
+    "album_clear",
+    "album_list",
+    "tap_ocr",
+    "open_photos_spotlight",
+    "tap_xy",
+    "swipe",
+    "drag",
+    "type_caption",
+]
+
+_POST_TEMPLATE_NAMES = frozenset({"plus", "gallery", "aa", "border", "border2", "editor"})
+
+_POST_TEMPLATE_LABELS: dict[str, str] = {
+    "plus": "Post: Tap plus (+ button)",
+    "gallery": "Post: Tap gallery — after tapping plus",
+    "aa": "Post: Tap aa (add text) — after dismissing music",
+    "border": "Post: Tap border — after typing caption",
+    "border2": "Post: Tap border2 — after typing caption",
+    "editor": "Post: Tap editor — after Done",
+}
+
+_POST_DEBUG_LIST_PRIORITY = (
+    "tap-plus",
+    "tap-gallery",
+    "post-tap-gallery-item",
+    "post-tap-music",
+    "post-tap-favorites",
+    "post-tap-hvitserk",
+    "post-dismiss-music",
+    "tap-aa",
+    "post-type-caption",
+    "tap-border",
+    "tap-border2",
+    "post-tap-done",
+    "tap-editor",
+    "post-swipe-left",
+    "post-tap-text-scrub",
+    "post-drag-trim",
+)
 
 OFFLINE_HINT = "Device offline — click Connect AirPlay first"
 
@@ -43,8 +86,28 @@ SPOTLIGHT_SWIPE: dict[str, int | str] = {
 class DebugTest(TypedDict, total=False):
     label: str
     kind: DebugKind
+    group: str  # prep | post
     detection: str
     texts: list[str]
+    x: int
+    y: int
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+    direction: str
+    distance: int
+    direction: str
+    sx: int
+    sy: int
+    ex: int
+    ey: int
+    duration_ms: int
+    move_ms: int
+    hold_ms: int
+    wait_timeout_seconds: float
+    threshold: float
+    prefer_top: bool
     hint: str
     offline_hint: str
 
@@ -54,21 +117,25 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
     "upload-gallery": {
         "label": "Upload gallery files",
         "kind": "upload_gallery",
+        "group": "prep",
         "offline_hint": OFFLINE_HINT,
     },
     "clear-album": {
         "label": "Clear photo library",
         "kind": "album_clear",
+        "group": "prep",
         "offline_hint": OFFLINE_HINT,
     },
     "list-album": {
         "label": "List album contents (Recents)",
         "kind": "album_list",
+        "group": "prep",
         "offline_hint": OFFLINE_HINT,
     },
     "tap-ocr-allow": {
         "label": "Tap Allow / Always Allow",
         "kind": "tap_ocr",
+        "group": "prep",
         "texts": list(UPLOAD_PERMISSION_TEXTS),
         "hint": "Show the photos permission dialog on screen first.",
         "offline_hint": OFFLINE_HINT,
@@ -76,6 +143,7 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
     "tap-ocr-delete": {
         "label": "Tap Delete",
         "kind": "tap_ocr",
+        "group": "prep",
         "texts": ["Delete"],
         "hint": "Show the delete confirmation dialog on screen first.",
         "offline_hint": OFFLINE_HINT,
@@ -83,6 +151,106 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
     "open-photos-spotlight": {
         "label": "Open Photos (Spotlight)",
         "kind": "open_photos_spotlight",
+        "group": "prep",
+        "offline_hint": OFFLINE_HINT,
+    },
+}
+
+TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
+    "post-tap-gallery-item": {
+        "label": "Post: Tap gallery item (82, 201) — after tapping gallery",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 82,
+        "y": 201,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-tap-music": {
+        "label": "Post: Tap music gallery (194, 39) — after tapping gallery item",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 194,
+        "y": 39,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-tap-favorites": {
+        "label": "Post: Wait + tap Favorites — after tapping music",
+        "kind": "tap_ocr",
+        "group": "post",
+        "texts": ["Favorites", "FAVORITES"],
+        "wait_timeout_seconds": 60,
+        "hint": "Open the music picker and wait for Favorites to appear.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-tap-hvitserk": {
+        "label": "Post: Wait + tap text \"Hvitserk's choice\" (OCR) — after Favorites",
+        "kind": "tap_ocr",
+        "group": "post",
+        "texts": [
+            "Hvitserk's choice",
+            "Hvitserk's Choice",
+            "Hvitserks choice",
+            "Hvitserks Choice",
+            "HVITSERK'S CHOICE",
+        ],
+        "wait_timeout_seconds": 60,
+        "threshold": 0.65,
+        "hint": "Wait for the track row, then tap the Hvitserk's choice text.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-dismiss-music": {
+        "label": "Post: Dismiss music (187, 334) — after Hvitserk's choice",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 187,
+        "y": 334,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-type-caption": {
+        "label": "Post: Type dashboard caption — after tapping aa",
+        "kind": "type_caption",
+        "group": "post",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-tap-done": {
+        "label": "Post: Tap Done — after tapping border",
+        "kind": "tap_ocr",
+        "group": "post",
+        "texts": ["Done", "DONE"],
+        "prefer_top": True,
+        "hint": "Show the text editor with Done in the top-right.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-swipe-left": {
+        "label": "Post: Swipe left (341,533)→(40,533) — after tapping editor",
+        "kind": "swipe",
+        "group": "post",
+        "direction": "left",
+        "sx": 341,
+        "sy": 533,
+        "ex": 40,
+        "ey": 533,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-tap-text-scrub": {
+        "label": "Post: Tap text scrub (161, 561) — after swiping left",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 161,
+        "y": 561,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-drag-trim": {
+        "label": "Post: Drag trim (214,508) left fast, release after 1s — after text scrub",
+        "kind": "drag",
+        "group": "post",
+        "x1": 214,
+        "y1": 508,
+        "direction": "left",
+        "distance": 172,
+        "duration_ms": 1000,
+        "move_ms": 10,
+        "hold_ms": 0,
         "offline_hint": OFFLINE_HINT,
     },
 }
@@ -115,9 +283,12 @@ def _template_debug_tests(workflows_dir: str = "config/workflows") -> dict[str, 
         if not name:
             continue
         template = str(element.get("template", f"{name}.jpg"))
+        is_post = name in _POST_TEMPLATE_NAMES
+        label = _POST_TEMPLATE_LABELS.get(name, f"Tap {name.replace('_', ' ')}")
         tests[f"tap-{name}"] = {
-            "label": f"Tap {name.replace('_', ' ')}",
+            "label": label,
             "detection": name,
+            "group": "post" if is_post else "prep",
             "hint": f"Show the target on screen. Template: config/templates/{template}",
             "offline_hint": OFFLINE_HINT,
         }
@@ -127,6 +298,7 @@ def _template_debug_tests(workflows_dir: str = "config/workflows") -> dict[str, 
 def get_debug_registry(workflows_dir: str = "config/workflows") -> dict[str, DebugTest]:
     registry = _template_debug_tests(workflows_dir)
     registry.update(MANUAL_DEBUG_TESTS)
+    registry.update(TIKTOK_POST_DEBUG_TESTS)
     return registry
 
 
@@ -143,11 +315,31 @@ _DEBUG_LIST_PRIORITY = (
 )
 
 
-def list_debug_tests() -> list[dict[str, str]]:
+def list_debug_tests(group: str | None = None) -> list[dict[str, str]]:
     registry = get_debug_registry()
-    ordered = [i for i in _DEBUG_LIST_PRIORITY if i in registry]
-    ordered.extend(i for i in registry if i not in ordered)
-    return [{"id": test_id, "label": registry[test_id]["label"]} for test_id in ordered]
+    if group == "post":
+        priority = _POST_DEBUG_LIST_PRIORITY
+        ordered = [i for i in priority if i in registry]
+        ordered.extend(
+            i for i in registry if registry[i].get("group") == "post" and i not in ordered
+        )
+    else:
+        priority = _DEBUG_LIST_PRIORITY
+        ordered = [i for i in priority if i in registry]
+        ordered.extend(i for i in registry if i not in ordered)
+    items = [
+        {
+            "id": test_id,
+            "label": registry[test_id]["label"],
+            "group": registry[test_id].get("group", "prep"),
+        }
+        for test_id in ordered
+    ]
+    if group == "prep":
+        items = [item for item in items if item["group"] == "prep"]
+    elif group == "post":
+        items = [item for item in items if item["group"] == "post"]
+    return items
 
 
 async def run_debug_test(app: Any, device_id: str, test_id: str) -> dict[str, Any]:
@@ -165,6 +357,14 @@ async def run_debug_test(app: Any, device_id: str, test_id: str) -> dict[str, An
         return await tap_ocr_debug(app, device_id, test_id, spec)
     if kind == "open_photos_spotlight":
         return await open_photos_spotlight_debug(app, device_id, test_id, spec)
+    if kind == "tap_xy":
+        return await tap_xy_debug(app, device_id, test_id, spec)
+    if kind == "swipe":
+        return await swipe_debug(app, device_id, test_id, spec)
+    if kind == "drag":
+        return await drag_debug(app, device_id, test_id, spec)
+    if kind == "type_caption":
+        return await type_caption_debug(app, device_id, test_id, spec)
     return await tap_detection(
         app,
         device_id,
@@ -228,6 +428,34 @@ async def tap_ocr_debug(
     texts = list(spec.get("texts") or [])
     if not texts:
         raise HTTPException(500, f"Debug test {test_id} has no texts configured")
+
+    wait_timeout = spec.get("wait_timeout_seconds")
+    if wait_timeout:
+        params: dict[str, Any] = {
+            "texts": texts,
+            "optional": False,
+            "wait_timeout_seconds": float(wait_timeout),
+            "poll_interval_seconds": 2,
+            "prefer_top": bool(spec.get("prefer_top", False)),
+        }
+        if "threshold" in spec:
+            params["threshold"] = float(spec["threshold"])
+        ok = await app.action_engine.execute_direct(
+            device_id,
+            ActionType.TAP_OCR,
+            params,
+            step_name=f"debug_{test_id}",
+        )
+        await app.screenshot_service.capture(device_id)
+        message = f"Tapped {texts[0]}" if ok else f"Text not found — {spec.get('hint', '')}"
+        await app.db.log_activity(
+            "info" if ok else "warn",
+            "test",
+            f"Debug OCR tap: {message}",
+            device_id,
+            {"test_id": test_id, "texts": texts},
+        )
+        return {"success": ok, "message": message, "texts": texts}
 
     tapped = await tap_permission_prompts(app, device_id, texts, test_id=test_id, rounds=1)
     await app.screenshot_service.capture(device_id)
@@ -447,6 +675,74 @@ async def upload_gallery_debug(
     }
 
 
+async def _require_online_device(app: Any, device_id: str, spec: DebugTest) -> Any:
+    device = app.device_manager.get_device(device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    if not device.is_online:
+        raise HTTPException(503, spec.get("offline_hint", OFFLINE_HINT))
+    return device
+
+
+async def tap_xy_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
+    await _require_online_device(app, device_id, spec)
+    x, y = int(spec["x"]), int(spec["y"])
+    ok = await app.action_engine.execute_direct(
+        device_id, ActionType.TAP, {"x": x, "y": y}, step_name=f"debug_{test_id}"
+    )
+    await app.screenshot_service.capture(device_id)
+    return {"success": ok, "message": f"Tapped ({x}, {y})", "x": x, "y": y}
+
+
+async def swipe_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
+    await _require_online_device(app, device_id, spec)
+    params = {
+        "direction": spec.get("direction", "left"),
+        "sx": spec.get("sx"),
+        "sy": spec.get("sy"),
+        "ex": spec.get("ex"),
+        "ey": spec.get("ey"),
+    }
+    ok = await app.action_engine.execute_direct(
+        device_id, ActionType.SWIPE, params, step_name=f"debug_{test_id}"
+    )
+    await app.screenshot_service.capture(device_id)
+    return {"success": ok, "message": f"Swipe {params['direction']}"}
+
+
+async def drag_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
+    await _require_online_device(app, device_id, spec)
+    params: dict[str, Any] = {
+        "x1": int(spec["x1"]),
+        "y1": int(spec["y1"]),
+        "duration_ms": int(spec.get("duration_ms", 1000)),
+        "move_ms": int(spec.get("move_ms", 10)),
+        "hold_ms": int(spec.get("hold_ms", 0)),
+    }
+    if "x2" in spec and "y2" in spec:
+        params["x2"] = int(spec["x2"])
+        params["y2"] = int(spec["y2"])
+    if spec.get("direction"):
+        params["direction"] = str(spec["direction"])
+    if "distance" in spec:
+        params["distance"] = int(spec["distance"])
+    ok = await app.action_engine.execute_direct(
+        device_id, ActionType.DRAG, params, step_name=f"debug_{test_id}"
+    )
+    await app.screenshot_service.capture(device_id)
+    return {"success": ok, "message": "Drag complete", **params}
+
+
+async def type_caption_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
+    await _require_online_device(app, device_id, spec)
+    text = get_post_caption()
+    ok = await app.action_engine.execute_direct(
+        device_id, ActionType.TEXT_INPUT, {"text": text}, step_name=f"debug_{test_id}"
+    )
+    await app.screenshot_service.capture(device_id)
+    return {"success": ok, "message": f"Typed caption ({len(text)} chars)", "text": text}
+
+
 async def tap_detection(
     app: Any,
     device_id: str,
@@ -483,7 +779,16 @@ async def tap_detection(
         path = vision.template_path_for(detection)
         if path:
             threshold = vision.threshold_for(detection)
-            hit = await dm.controller.find_template_on_device(device_id, path, threshold)
+            sw = int(device.screen_width) if device.screen_width else 406
+            sh = int(device.screen_height) if device.screen_height else 720
+            rect = (
+                vision.search_rect_for(detection, width=sw, height=sh)
+                if hasattr(vision, "search_rect_for")
+                else None
+            )
+            hit = await dm.controller.find_template_on_device(
+                device_id, path, threshold, rect=rect
+            )
             if hit:
                 existing = detections.get(detection)
                 if not existing or hit["confidence"] >= existing.get("confidence", 0):

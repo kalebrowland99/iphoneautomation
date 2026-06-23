@@ -286,6 +286,84 @@ class DeviceController:
         )
         return await self._run_sync(_swipe)
 
+    async def drag(
+        self,
+        device_id: str,
+        x1: int,
+        y1: int,
+        *,
+        x2: int | None = None,
+        y2: int | None = None,
+        direction: str | None = None,
+        distance: int | None = None,
+        duration_ms: int = 1000,
+        move_ms: int = 10,
+        hold_ms: int = 0,
+    ) -> bool:
+        """Press at (x1,y1), drag to end over move_ms, release after duration_ms total."""
+        ex, ey = x2, y2
+        if ex is None or ey is None:
+            if not direction:
+                raise ValueError("drag requires x2/y2 or direction")
+            dist = int(distance if distance is not None else 172)
+            match direction.lower():
+                case "left":
+                    ex, ey = x1 - dist, y1
+                case "right":
+                    ex, ey = x1 + dist, y1
+                case "up":
+                    ex, ey = x1, y1 - dist
+                case "down":
+                    ex, ey = x1, y1 + dist
+                case _:
+                    raise ValueError(f"unsupported drag direction: {direction}")
+
+        def _drag() -> bool:
+            ids = self._ids(device_id)
+            if not self._ok(self._api.mouse_move(ids, x1, y1)):
+                return False
+            if not self._ok(self._api.mouse_down(ids)):
+                return False
+            down_at = time.monotonic()
+            if hold_ms > 0:
+                time.sleep(hold_ms / 1000.0)
+            travel_ms = max(1, move_ms)
+            if travel_ms <= 50:
+                steps = 2
+            else:
+                steps = max(8, min(40, travel_ms // 25))
+            step_delay = travel_ms / 1000.0 / steps if steps > 1 else 0
+            for i in range(1, steps + 1):
+                t = i / steps
+                cx = int(round(x1 + (ex - x1) * t))
+                cy = int(round(y1 + (ey - y1) * t))
+                if not self._ok(self._api.mouse_move(ids, cx, cy)):
+                    self._api.mouse_up(ids)
+                    return False
+                if i < steps and step_delay > 0:
+                    time.sleep(step_delay)
+            elapsed_ms = (time.monotonic() - down_at) * 1000
+            remaining_ms = duration_ms - elapsed_ms
+            if remaining_ms > 0:
+                time.sleep(remaining_ms / 1000.0)
+            self._api.mouse_up(ids)
+            return True
+
+        logger.info(
+            "action_drag",
+            device_id=device_id,
+            x1=x1,
+            y1=y1,
+            x2=ex,
+            y2=ey,
+            direction=direction,
+            distance=distance,
+            duration_ms=duration_ms,
+            move_ms=move_ms,
+            hold_ms=hold_ms,
+        )
+        return await self._run_sync(_drag)
+
     async def long_press(self, device_id: str, x: int, y: int, duration_ms: int = 1000) -> bool:
         logger.info("action_long_press", device_id=device_id, x=x, y=y)
         return await self._run_sync(
@@ -338,6 +416,21 @@ class DeviceController:
 
         logger.info("action_home", device_id=device_id)
         return await self._run_sync(_home)
+
+    async def reset_cursor(self, device_id: str) -> bool:
+        def _reset() -> bool:
+            response = self._api.mouse_reset(self._ids(device_id))
+            if self._ok(response):
+                return True
+            logger.error(
+                "mouse_reset_failed",
+                device_id=device_id,
+                message=self._error_message(response),
+            )
+            return False
+
+        logger.info("action_mouse_reset", device_id=device_id)
+        return await self._run_sync(_reset)
 
     async def press_lock(self, device_id: str) -> bool:
         logger.info("action_lock", device_id=device_id)
@@ -401,6 +494,8 @@ class DeviceController:
         timeout_ms: int = 120000,
         *,
         post_grace_seconds: float = 45.0,
+        settle_after_delete: float = 3.0,
+        no_delete_timeout: float = 10.0,
     ) -> bool:
         """Clear the album via shortcut_album_clear, tapping the iOS delete dialog.
 
@@ -408,16 +503,25 @@ class DeviceController:
         shortcut_album_clear call returns, so we keep scanning and tapping
         Delete for a grace window once the API completes (and also during it).
 
+        We return as soon as the Delete press settles (no new tap for
+        ``settle_after_delete`` seconds) so the caller can trigger the upload
+        right off the delete press, rather than always waiting the full grace.
+        ``post_grace_seconds`` is the hard cap, and ``no_delete_timeout`` lets
+        us bail early when the dialog never shows (album already empty).
+
         Note: we deliberately do NOT pre-check with album_get — the shortcut's
         get can report 0 items even when the library is full, which would skip
         the clear entirely.
         """
         from imouse_farm.actions.permission_prompts import DELETE_CONFIRM_TEXTS
 
+        loop = asyncio.get_event_loop()
         label = album_name or "recents"
         error_message = ""
         stop = asyncio.Event()
+        delete_pressed = asyncio.Event()
         tap_count = 0
+        last_tap_time = 0.0
 
         def _clear() -> bool:
             nonlocal error_message
@@ -463,10 +567,12 @@ class DeviceController:
 
         async def _watch_and_tap() -> None:
             """Constantly look for the Delete confirmation and tap it, for the whole run."""
-            nonlocal tap_count
+            nonlocal tap_count, last_tap_time
             while not stop.is_set():
                 if await _tap_delete_once():
                     tap_count += 1
+                    last_tap_time = loop.time()
+                    delete_pressed.set()
                     # Let the popup dismiss so the next scan doesn't tap empty space.
                     await asyncio.sleep(1.5)
                 else:
@@ -478,16 +584,38 @@ class DeviceController:
             ok = await self._run_sync(_clear)
             if not ok:
                 raise RuntimeError(error_message or "album clear failed")
-            # The popup commonly appears AFTER the API returns (and may reappear
-            # in batches), so keep the watcher scanning for a grace window.
-            await asyncio.sleep(post_grace_seconds)
+            # The "Delete N Items" popup appears AFTER the API returns. Wait for
+            # it to be pressed, then return as soon as the taps go quiet — that
+            # delete press is the trigger for the upload that follows.
+            clear_done = loop.time()
+            deadline = clear_done + post_grace_seconds
+            while loop.time() < deadline:
+                if delete_pressed.is_set():
+                    # Delete tapped (possibly in batches): return once no new
+                    # tap for `settle_after_delete` seconds.
+                    while (
+                        loop.time() < deadline
+                        and (loop.time() - last_tap_time) < settle_after_delete
+                    ):
+                        await asyncio.sleep(0.2)
+                    break
+                # Dialog never showed (album already empty) → don't hang.
+                if (loop.time() - clear_done) >= no_delete_timeout:
+                    break
+                await asyncio.sleep(0.2)
         finally:
             stop.set()
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watcher
 
-        logger.info("album_clear_done", device_id=device_id, album=label, delete_taps=tap_count)
+        logger.info(
+            "album_clear_done",
+            device_id=device_id,
+            album=label,
+            delete_taps=tap_count,
+            delete_pressed=delete_pressed.is_set(),
+        )
         return True
 
     async def album_upload(
@@ -497,10 +625,34 @@ class DeviceController:
         album_name: str | None = None,
         timeout_ms: int = 300000,
         zip_files: bool = False,
+        *,
+        verify: bool = True,
+        post_grace_seconds: float = 8.0,
     ) -> bool:
-        abs_files = [str(Path(f).resolve()) for f in files]
+        """Upload files to the album and confirm they actually landed.
 
-        def _upload() -> bool:
+        On success ``shortcut_album_upload`` returns the album's latest items
+        (up to 10). Because the workflow clears the album immediately before
+        uploading, that returned list is our uploaded files, so we confirm the
+        reported count matches what we sent before letting the caller proceed.
+        If the response doesn't include the list, we fall back to a fresh
+        ``album_list`` ("refresh") to double-check. Returns ``False`` when the
+        upload can't be confirmed so the caller can pause/retry.
+
+        A background watcher taps "Always Allow" / "Allow" (and related labels
+        on newer iOS) while the upload runs so a permission dialog can't block
+        the shortcut until timeout.
+        """
+        from imouse_farm.actions.permission_prompts import UPLOAD_PERMISSION_TEXTS
+
+        abs_files = [str(Path(f).resolve()) for f in files]
+        expected = len(abs_files)
+        stop = asyncio.Event()
+        allow_tap_count = 0
+        # Never tap deny/cancel variants — "Allow" is a partial match on those.
+        negative_words = ("don't", "dont", "cancel", "deny", "not now", "don't allow")
+
+        def _upload() -> int:
             response = self._api.shortcut_album_upload(
                 self._ids(device_id),
                 files=abs_files,
@@ -517,17 +669,100 @@ class DeviceController:
                     files=abs_files,
                 )
                 raise RuntimeError(message)
+            items = getattr(getattr(response, "data", None), "list", None) or []
+            return len(items)
+
+        async def _tap_allow_once() -> bool:
+            """Prefer specific labels first (Always Allow before bare Allow)."""
+            for text in UPLOAD_PERMISSION_TEXTS:
+                matches = await self.find_text_on_device(device_id, [text])
+                candidates = [
+                    m
+                    for m in matches
+                    if not any(neg in str(m.get("text", "")).lower() for neg in negative_words)
+                ]
+                if not candidates:
+                    continue
+                best = max(candidates, key=lambda m: m.get("confidence", 0))
+                await self.tap(device_id, int(best["x"]), int(best["y"]))
+                logger.info(
+                    "album_upload_permission_tap",
+                    device_id=device_id,
+                    text=best.get("text") or text,
+                    x=int(best["x"]),
+                    y=int(best["y"]),
+                )
+                return True
+            return False
+
+        async def _watch_and_tap() -> None:
+            nonlocal allow_tap_count
+            while not stop.is_set():
+                if await _tap_allow_once():
+                    allow_tap_count += 1
+                    await asyncio.sleep(1.5)
+                else:
+                    await asyncio.sleep(0.4)
+
+        logger.info("album_upload", device_id=device_id, file_count=expected)
+        watcher = asyncio.create_task(_watch_and_tap())
+        try:
+            reported = await self._run_sync(_upload)
+            # Permission dialogs can appear just after the API returns too.
+            await asyncio.sleep(post_grace_seconds)
+        finally:
+            stop.set()
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+
+        if allow_tap_count:
+            logger.info(
+                "album_upload_permissions_tapped",
+                device_id=device_id,
+                tap_count=allow_tap_count,
+            )
+
+        if not verify:
             return True
 
-        logger.info("album_upload", device_id=device_id, file_count=len(abs_files))
-        return await self._run_sync(_upload)
+        # The shortcut returns up to 10 latest items; on a freshly-cleared
+        # album that means our uploads, so this many confirms success.
+        needed = min(expected, 10)
+        confirmed = reported
+
+        # If the upload response didn't echo the list, refresh via album_list.
+        if confirmed < needed:
+            try:
+                items = await self.album_list(device_id, album_name=album_name)
+                confirmed = max(confirmed, len(items))
+            except Exception as exc:  # noqa: BLE001 — verification best-effort
+                logger.warning("album_upload_verify_list_failed", device_id=device_id, error=str(exc))
+
+        if confirmed < needed:
+            logger.warning(
+                "album_upload_unconfirmed",
+                device_id=device_id,
+                expected=expected,
+                confirmed=confirmed,
+            )
+            return False
+
+        logger.info(
+            "album_upload_done",
+            device_id=device_id,
+            expected=expected,
+            confirmed=confirmed,
+        )
+        return True
 
     async def find_image_on_device(
-        self, device_id: str, template_base64: str, threshold: float = 0.8
+        self, device_id: str, template_base64: str, threshold: float = 0.8,
+        rect: list[int] | None = None,
     ) -> list[dict[str, Any]]:
         def _find() -> list[dict[str, Any]]:
             response = self._api.pic_find_image_cv(
-                device_id, [template_base64], similarity=threshold
+                device_id, [template_base64], similarity=threshold, rect=rect
             )
             if not response or not self._ok(response):
                 return []
@@ -547,6 +782,7 @@ class DeviceController:
         device_id: str,
         template_path: Path,
         threshold: float = 0.42,
+        rect: list[int] | None = None,
     ) -> dict[str, Any] | None:
         import base64
 
@@ -554,10 +790,10 @@ class DeviceController:
             logger.warning("template_file_missing", path=str(template_path))
             return None
         path_str = str(template_path.resolve())
-        matches = await self.find_image_on_device(device_id, path_str, threshold)
+        matches = await self.find_image_on_device(device_id, path_str, threshold, rect=rect)
         if not matches:
             b64 = base64.b64encode(template_path.read_bytes()).decode()
-            matches = await self.find_image_on_device(device_id, b64, threshold)
+            matches = await self.find_image_on_device(device_id, b64, threshold, rect=rect)
         if not matches:
             return None
         return max(matches, key=lambda m: m["confidence"])

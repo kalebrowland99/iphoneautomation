@@ -27,8 +27,10 @@ class ActionType(str, Enum):
     TAP_OCR = "tap_ocr"  # tap text found via iMouse on-device OCR
     SWIPE = "swipe"
     LONG_PRESS = "long_press"
+    DRAG = "drag"  # press-hold at start, swipe to end, release
     TEXT_INPUT = "text_input"
     HOME = "home"
+    MOUSE_RESET = "mouse_reset"  # iMouse cursor reset
     LOCK = "lock"
     UNLOCK = "unlock"
     LAUNCH_APP = "launch_app"
