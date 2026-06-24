@@ -18,12 +18,32 @@ from pydantic import BaseModel, Field
 
 from imouse_farm.config.models import ActionType, AppConfig
 from imouse_farm.dashboard.activity import enrich_activity
+from imouse_farm.dashboard.stop import stop_device_automation
 from imouse_farm.dashboard.test_actions import (
     list_debug_tests,
     run_debug_test,
     tap_vpntoggle,
 )
-from imouse_farm.post.post_caption_store import get_post_caption, set_post_caption
+from imouse_farm.captions.ai_generator import generate_post_captions
+from imouse_farm.captions.prompt_store import (
+    get_ai_settings,
+    set_ai_hashtags,
+    set_ai_prompt,
+)
+from imouse_farm.post.post_caption_store import (
+    POST_COUNT,
+    get_final_caption,
+    get_onscreen_text,
+    list_post_texts,
+    set_final_caption,
+    set_onscreen_text,
+)
+from imouse_farm.settings.device_settings import (
+    get_debug_skip_post,
+    get_device_settings,
+    set_debug_skip_post,
+)
+from imouse_farm.utils.gallery import list_media_stems_for_posts, phone_gallery_folder
 from imouse_farm.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -39,8 +59,22 @@ class WorkflowStartBody(BaseModel):
     device_id: str
 
 
-class PostCaptionBody(BaseModel):
+class CaptionAISettingsBody(BaseModel):
+    prompt: str = ""
+    hashtags: str = ""
+
+
+class CaptionAIGenerateBody(BaseModel):
+    prompt: str | None = None
+    hashtags: str | None = None
+
+
+class PostTextFieldBody(BaseModel):
     text: str = ""
+
+
+class DeviceSettingsBody(BaseModel):
+    debug_skip_post: bool = False
 
 
 class ApplicationState:
@@ -130,7 +164,9 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
         template_path = Path(__file__).parent / "templates" / "index.html"
-        return template_path.read_text(encoding="utf-8")
+        html = template_path.read_text(encoding="utf-8")
+        slots = int(getattr(config.dashboard, "farm_slots", 20) or 20)
+        return html.replace("__FARM_SLOTS__", str(slots))
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
@@ -146,7 +182,13 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
     @app.get("/api/devices")
     async def list_devices() -> list[dict[str, Any]]:
         dm = app_instance.device_manager
-        return [dm.to_dict(d) for d in dm.devices.values()]
+        result: list[dict[str, Any]] = []
+        for device in dm.devices.values():
+            data = dm.to_dict(device)
+            data["debug_skip_post"] = get_debug_skip_post(device.device_id)
+            data["pipeline"] = app_instance.workflow_pipeline.get_status(device.device_id)
+            result.append(data)
+        return result
 
     _IMAGE_MEDIA = {
         ".bmp": "image/bmp",
@@ -207,14 +249,163 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
     async def get_debug_tests(group: str | None = None) -> list[dict[str, str]]:
         return list_debug_tests(group)
 
-    @app.get("/api/post-caption")
-    async def get_post_caption_route() -> dict[str, str]:
-        return {"text": get_post_caption()}
+    @app.get("/api/devices/{device_id:path}/settings")
+    async def get_device_settings_route(device_id: str) -> dict[str, Any]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        settings = get_device_settings(device_id)
+        pipeline = app_instance.workflow_pipeline.get_status(device_id)
+        return {"settings": settings, "pipeline": pipeline}
 
-    @app.put("/api/post-caption")
-    async def set_post_caption_route(body: PostCaptionBody) -> dict[str, str]:
-        set_post_caption(body.text)
-        return {"text": get_post_caption()}
+    @app.put("/api/devices/{device_id:path}/settings")
+    async def update_device_settings(device_id: str, body: DeviceSettingsBody) -> dict[str, Any]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        set_debug_skip_post(device_id, body.debug_skip_post)
+        return {"settings": get_device_settings(device_id)}
+
+    @app.post("/api/devices/{device_id:path}/pipeline/start")
+    async def start_pipeline(device_id: str) -> dict[str, Any]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        success = await app_instance.workflow_pipeline.start(device_id)
+        if not success:
+            raise HTTPException(400, "Failed to start full run — workflow may already be active")
+        return {"success": True}
+
+    @app.post("/api/devices/{device_id:path}/pipeline/pause")
+    async def pause_pipeline(device_id: str) -> dict[str, Any]:
+        success = await app_instance.workflow_pipeline.pause(device_id)
+        if not success:
+            raise HTTPException(400, "No active full run to pause")
+        return {"success": True}
+
+    @app.post("/api/devices/{device_id:path}/pipeline/resume")
+    async def resume_pipeline(device_id: str) -> dict[str, Any]:
+        success = await app_instance.workflow_pipeline.resume(device_id)
+        if not success:
+            raise HTTPException(400, "Full run is not paused")
+        return {"success": True}
+
+    @app.post("/api/devices/{device_id:path}/pipeline/stop")
+    async def stop_pipeline(device_id: str) -> dict[str, Any]:
+        return await stop_device_automation(app_instance, device_id)
+
+    @app.get("/api/devices/{device_id:path}/post-texts")
+    async def get_device_post_texts(device_id: str) -> dict[str, Any]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        gallery = app_instance.config.gallery
+        folder = phone_gallery_folder(
+            gallery.base_directory,
+            device.user_name,
+            device.phone_name,
+        )
+        media_stems = list_media_stems_for_posts(folder, gallery.media_extensions, POST_COUNT)
+        posts = []
+        for row in list_post_texts(device_id):
+            post_num = int(row["post"])
+            stem = media_stems[post_num - 1] if post_num <= len(media_stems) else ""
+            posts.append({
+                **row,
+                "media_file": stem,
+                "placeholder": stem,
+            })
+        return {"posts": posts, "media_files": media_stems}
+
+    @app.put("/api/devices/{device_id:path}/post-texts/{post_num}/onscreen")
+    async def set_device_onscreen_text(
+        device_id: str, post_num: int, body: PostTextFieldBody
+    ) -> dict[str, str]:
+        if post_num < 1 or post_num > POST_COUNT:
+            raise HTTPException(400, f"post_num must be 1..{POST_COUNT}")
+        set_onscreen_text(device_id, post_num, body.text)
+        return {"text": get_onscreen_text(device_id, post_num)}
+
+    @app.put("/api/devices/{device_id:path}/post-texts/{post_num}/final")
+    async def set_device_final_caption(
+        device_id: str, post_num: int, body: PostTextFieldBody
+    ) -> dict[str, str]:
+        if post_num < 1 or post_num > POST_COUNT:
+            raise HTTPException(400, f"post_num must be 1..{POST_COUNT}")
+        set_final_caption(device_id, post_num, body.text)
+        return {"text": get_final_caption(device_id, post_num)}
+
+    @app.get("/api/caption-ai/settings")
+    async def get_caption_ai_settings() -> dict[str, str]:
+        return get_ai_settings()
+
+    @app.put("/api/caption-ai/settings")
+    async def update_caption_ai_settings(body: CaptionAISettingsBody) -> dict[str, str]:
+        set_ai_prompt(body.prompt)
+        set_ai_hashtags(body.hashtags)
+        return get_ai_settings()
+
+    @app.post("/api/devices/{device_id:path}/caption-ai/generate")
+    async def generate_device_captions(
+        device_id: str, body: CaptionAIGenerateBody | None = None
+    ) -> dict[str, Any]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        openai_cfg = app_instance.config.openai
+        if not openai_cfg.enabled:
+            raise HTTPException(400, "OpenAI caption generation is disabled in config")
+
+        settings = get_ai_settings()
+        prompt = (body.prompt if body and body.prompt is not None else settings["prompt"]).strip()
+        hashtags = (
+            body.hashtags if body and body.hashtags is not None else settings["hashtags"]
+        ).strip()
+
+        gallery = app_instance.config.gallery
+        folder = phone_gallery_folder(
+            gallery.base_directory,
+            device.user_name,
+            device.phone_name,
+        )
+        media_stems = list_media_stems_for_posts(folder, gallery.media_extensions, POST_COUNT)
+        if not any(media_stems):
+            raise HTTPException(
+                400,
+                f"No media files in gallery folder: {folder}",
+            )
+
+        try:
+            generated = await generate_post_captions(
+                media_stems,
+                user_prompt=prompt,
+                hashtags=hashtags,
+                config=openai_cfg,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            logger.error("caption_ai_generate_failed", device_id=device_id, error=str(exc))
+            raise HTTPException(502, f"OpenAI request failed: {exc}") from exc
+
+        posts: list[dict[str, Any]] = []
+        for i, cap in enumerate(generated, start=1):
+            set_final_caption(device_id, i, cap["final"])
+            posts.append({
+                "post": i,
+                "onscreen": get_onscreen_text(device_id, i),
+                "final": cap["final"],
+                "media_file": media_stems[i - 1] if i <= len(media_stems) else "",
+            })
+
+        await app_instance.db.log_activity(
+            "info",
+            "caption",
+            f"AI final captions generated for {device.display_label}",
+            device_id,
+            {"posts": len(posts)},
+        )
+        return {"posts": posts, "media_files": media_stems}
 
     @app.post("/api/devices/{device_id:path}/debug/{test_id}")
     async def run_device_debug_test(device_id: str, test_id: str) -> dict[str, Any]:
@@ -233,20 +424,18 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
 
     @app.post("/api/devices/{device_id:path}/workflows/stop")
     async def stop_device_workflow(device_id: str) -> dict[str, Any]:
-        """Stop whatever workflow is on this device (running or paused)."""
-        success = await app_instance.workflow_engine.stop_device(device_id)
-        if success:
-            await app_instance.db.log_activity(
-                "warn", "workflow", "Stopped workflow", device_id, {"source": "dashboard"}
-            )
-        return {"success": success}
+        """Stop pipeline, workflows, queued actions, and duplicate server PIDs."""
+        return await stop_device_automation(app_instance, device_id)
 
     @app.get("/api/devices/{device_id:path}")
     async def get_device(device_id: str) -> dict[str, Any]:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
-        return app_instance.device_manager.to_dict(device)
+        data = app_instance.device_manager.to_dict(device)
+        data["debug_skip_post"] = get_debug_skip_post(device_id)
+        data["pipeline"] = app_instance.workflow_pipeline.get_status(device_id)
+        return data
 
     @app.get("/api/workflows")
     async def list_workflows() -> list[dict[str, Any]]:

@@ -36,6 +36,7 @@ class ActionType(str, Enum):
     LAUNCH_APP = "launch_app"
     OPEN_URL = "open_url"
     CLOSE_APP = "close_app"
+    KILL_APP = "kill_app"
     ALBUM_CLEAR = "album_clear"
     ALBUM_UPLOAD = "album_upload"
     CLEAR_TEXT = "clear_text"
@@ -131,10 +132,20 @@ class NotificationsConfig(BaseModel):
     repeated_failure_threshold: int = 3
 
 
+class OpenAICaptionConfig(BaseModel):
+    """OpenAI settings for AI-generated TikTok captions."""
+
+    enabled: bool = True
+    api_key: str = ""
+    model: str = "gpt-4o-mini"
+    temperature: float = 0.85
+
+
 class DashboardConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8080
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    farm_slots: int = 20
 
 
 class LoggingConfig(BaseModel):
@@ -148,6 +159,7 @@ class AppConfig(BaseModel):
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     screenshots: ScreenshotsConfig = Field(default_factory=ScreenshotsConfig)
     gallery: GalleryConfig = Field(default_factory=GalleryConfig)
+    openai: OpenAICaptionConfig = Field(default_factory=OpenAICaptionConfig)
     analysis: AnalysisConfig = Field(default_factory=AnalysisConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     timing: TimingConfig = Field(default_factory=TimingConfig)
@@ -165,6 +177,9 @@ class WorkflowStepConfig(BaseModel):
     when_state: DeviceState | None = None
     when_detection: str | None = None
     unless_detection: str | None = None
+    when_post_index: int | None = None
+    when_debug_skip_post: bool | None = None
+    unless_debug_skip_post: bool | None = None
     requires_screenshot: bool = False
     requires_analysis: bool = False
     duration_seconds: float | None = None

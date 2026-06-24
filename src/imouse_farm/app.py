@@ -14,12 +14,14 @@ from imouse_farm.dashboard.app import app_state, create_app
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.notifications.service import NotificationService
+from imouse_farm.permissions.watcher import PermissionWatcherManager
 from imouse_farm.popups.manager import PopupManager
 from imouse_farm.screenshots.service import ScreenshotService
 from imouse_farm.state.machine import StateMachine
 from imouse_farm.utils.logging import get_logger, setup_logging
 from imouse_farm.vision.factory import create_vision_provider
 from imouse_farm.workflows.engine import WorkflowEngine
+from imouse_farm.workflows.pipeline import WorkflowPipeline
 
 logger = get_logger(__name__)
 
@@ -39,6 +41,7 @@ class IMouseFarmApp:
         )
         self.vision = create_vision_provider(config)
         self.popup_manager = PopupManager(config.workflows_directory)
+        self.permission_watchers = PermissionWatcherManager(self.controller)
         self.state_machine = StateMachine(self.device_manager)
         self.action_engine = ActionEngine(
             config, self.controller, self.device_manager, self.db
@@ -53,6 +56,12 @@ class IMouseFarmApp:
             self.popup_manager,
             self.state_machine,
             self.action_engine,
+            self.db,
+            self.permission_watchers,
+        )
+        self.workflow_pipeline = WorkflowPipeline(
+            self.workflow_engine,
+            self.device_manager,
             self.db,
         )
         self._frozen_check_task: asyncio.Task[None] | None = None
@@ -93,6 +102,7 @@ class IMouseFarmApp:
         self.device_manager.on_event(self._on_event)
         self.action_engine.on_event(self._on_event)
         self.workflow_engine.on_event(self._on_event)
+        self.workflow_pipeline.on_event(self._on_event)
         self.popup_manager.on_event(self._on_event)
 
         await self.device_manager.start()
@@ -106,6 +116,8 @@ class IMouseFarmApp:
     async def stop(self) -> None:
         self._running = False
         await self.workflow_engine.stop_all()
+        await self.workflow_pipeline.stop_all()
+        await self.permission_watchers.stop_all()
         await self.screenshot_service.stop()
         await self.action_engine.stop()
         await self.device_manager.stop()

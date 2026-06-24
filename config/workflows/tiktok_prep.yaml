@@ -1,9 +1,11 @@
 name: tiktok_prep
 description: >
   Sequential prep: unlock → home → clear gallery via iMouse album API → upload
-  gallery → VPN (Shadowrocket + vpntoggle) → TikTok. VPN runs AFTER the album
-  clear/upload so it can't interfere with the Photos shortcut, and TikTok only
-  opens once the VPN banner is confirmed. Phone slot folder (e.g. gallery/12/).
+  gallery → VPN (Shadowrocket — "Not Connected" OCR + vpntoggle) → TikTok. VPN runs
+  AFTER the album clear/upload so it can't interfere with the Photos shortcut.
+  Phone slot folder (e.g. gallery/12/).
+
+loop: false
 
 steps:
   # ── 0. Reset iMouse cursor (twice) ─────────────────────────────────
@@ -15,7 +17,7 @@ steps:
 
   - type: wait
     name: after_mouse_reset_1
-    duration_seconds: 1
+    duration_seconds: 0.25
 
   - type: execute_action
     name: mouse_reset_2
@@ -25,16 +27,16 @@ steps:
 
   - type: wait
     name: after_mouse_reset_2
-    duration_seconds: 1
+    duration_seconds: 0.25
 
   # ── 1. Unlock if locked ─────────────────────────────────────────────
   - type: screenshot
     name: initial_screen
-    templates: [lock_screen, vpn]
+    templates: [lock_screen]
 
   - type: analyze_screen
     name: analyze_initial
-    templates: [lock_screen, vpn]
+    templates: [lock_screen]
 
   - type: execute_action
     name: unlock_device
@@ -61,7 +63,7 @@ steps:
   - type: wait
     name: after_unlock
     when_detection: lock_screen
-    duration_seconds: 3
+    duration_seconds: 2
 
   # ── 2. Go home ──────────────────────────────────────────────────────
   - type: execute_action
@@ -72,22 +74,10 @@ steps:
 
   - type: wait
     name: settle_home
-    duration_seconds: 1
+    duration_seconds: 0.5
 
   # ── 3. Clear photo library (iMouse album API — Photos app not required) ─
-  - type: execute_action
-    name: go_home_before_clear
-    action:
-      type: home
-    skip_post_action: true
-
-  - type: wait
-    name: before_clear
-    duration_seconds: 2
-
-  # album_clear taps the iOS "Delete" confirmation itself while it runs, so
-  # there is no separate Delete-tap step here (that extra tap could land on
-  # the wrong place after the dialog had already closed).
+  # go_home above — no second home press before clear.
   - type: execute_action
     name: clear_album
     on_failure: pause
@@ -115,35 +105,19 @@ steps:
     name: upload_progress
     duration_seconds: 10
 
-  - type: screenshot
-    name: after_upload_screen
-
   - type: execute_action
     name: tap_allow_upload
     action:
       type: tap_ocr
       texts: ["Always Allow", "Allow Full Access", "Allow Access to All Photos", "Allow Paste", "Allow"]
       optional: true
-    skip_post_action: true
-
-  - type: wait
-    name: after_allow
-    duration_seconds: 3
-
-  - type: screenshot
-    name: allow_retry_screen
-
-  - type: execute_action
-    name: tap_allow_retry
-    action:
-      type: tap_ocr
-      texts: ["Always Allow", "Allow Full Access", "Allow Access to All Photos", "Allow Paste", "Allow"]
-      optional: true
+      wait_timeout_seconds: 10
+      poll_interval_seconds: 1.5
     skip_post_action: true
 
   - type: wait
     name: upload_settle
-    duration_seconds: 6
+    duration_seconds: 5
 
   # ── 5. Go home before VPN check ─────────────────────────────────────
   - type: execute_action
@@ -154,30 +128,19 @@ steps:
 
   - type: wait
     name: settle_home_vpn
-    duration_seconds: 1
+    duration_seconds: 0.5
 
-  # ── 6. Check VPN banner (top-left vpn.jpg) ──────────────────────────
+  # ── 6. Open Shadowrocket → VPN status via "Not Connected" text ─────
   - type: screenshot
-    name: home_for_vpn_check
-    templates: [vpn, shadowrocket]
+    name: home_for_shadowrocket
+    templates: [shadowrocket]
 
   - type: analyze_screen
-    name: analyze_vpn_status
-    templates: [vpn, shadowrocket]
+    name: analyze_shadowrocket
+    templates: [shadowrocket]
 
-  - type: determine_state
-    name: vpn_state
-    state_rules:
-      - condition: template_match
-        template: vpn
-        state: ACTIVE
-      - condition: default
-        state: WAITING
-
-  # ── 7. VPN off → Shadowrocket → vpntoggle → verify ──────────────────
   - type: execute_action
     name: open_shadowrocket
-    when_state: WAITING
     on_failure: pause
     action:
       type: tap_detection
@@ -186,11 +149,23 @@ steps:
 
   - type: wait
     name: shadowrocket_open
-    when_state: WAITING
     duration_seconds: 2
 
+  - type: check_ocr_state
+    name: vpn_state
+    action:
+      texts: ["Not Connected", "NOT CONNECTED", "Not connected"]
+      threshold: 0.65
+      duration_seconds: 12
+      retry_delay: 1.5
+      state_if_found: WAITING
+      state_if_missing: ACTIVE
+      fallback_template: vpntoggle
+      state_if_fallback: WAITING
+
+  # ── 7. VPN off → tap vpntoggle → verify "Not Connected" gone ───────
   - type: screenshot
-    name: shadowrocket_screen
+    name: shadowrocket_toggle_screen
     when_state: WAITING
     templates: [vpntoggle]
 
@@ -199,103 +174,44 @@ steps:
     when_state: WAITING
     templates: [vpntoggle]
 
-  - type: verify
-    name: confirm_vpntoggle_visible
-    when_state: WAITING
-    condition: template_match
-    template: vpntoggle
-    on_failure: continue
-
-  # Only wait again if toggle not visible yet
-  - type: wait
-    name: vpntoggle_retry_wait
-    when_state: WAITING
-    unless_detection: vpntoggle
-    duration_seconds: 2
-
-  - type: screenshot
-    name: vpntoggle_retry_screen
-    when_state: WAITING
-    unless_detection: vpntoggle
-    templates: [vpntoggle]
-
-  - type: analyze_screen
-    name: analyze_vpntoggle_retry
-    when_state: WAITING
-    unless_detection: vpntoggle
-    templates: [vpntoggle]
-
-  - type: verify
-    name: confirm_vpntoggle_visible_final
-    when_state: WAITING
-    condition: template_match
-    template: vpntoggle
-    on_failure: pause
-
   - type: execute_action
     name: tap_vpntoggle
     when_state: WAITING
+    when_detection: vpntoggle
     on_failure: pause
     action:
       type: tap_detection
       detection: vpntoggle
+      refind_on_device: true
     skip_post_action: true
 
   - type: wait
     name: after_vpn_toggle
     when_state: WAITING
-    duration_seconds: 2.5
-
-  - type: screenshot
-    name: verify_vpn_screen
-    when_state: WAITING
-    templates: [vpn]
-
-  - type: analyze_screen
-    name: analyze_vpn_after_toggle
-    when_state: WAITING
-    templates: [vpn]
-
-  - type: verify
-    name: confirm_vpn_on
-    when_state: WAITING
-    condition: template_match
-    template: vpn
-    on_failure: continue
-
-  - type: wait
-    name: vpn_on_retry_wait
-    when_state: WAITING
-    unless_detection: vpn
     duration_seconds: 2
 
   - type: screenshot
-    name: vpn_on_retry_screen
+    name: verify_vpn_connected_screen
     when_state: WAITING
-    unless_detection: vpn
-    templates: [vpn]
 
   - type: analyze_screen
-    name: analyze_vpn_on_retry
+    name: analyze_vpn_connected
     when_state: WAITING
-    unless_detection: vpn
-    templates: [vpn]
+    ocr_keywords: ["Not Connected"]
 
   - type: verify
-    name: confirm_vpn_on_final
+    name: confirm_vpn_connected
     when_state: WAITING
-    condition: template_match
-    template: vpn
+    condition: ocr_missing
+    template: "Not Connected"
     on_failure: pause
 
-  # VPN confirmed after toggle — mark ACTIVE so we don't re-check on home
-  # (that second check often sees shadowrocket but misses vpn.jpg).
   - type: determine_state
     name: vpn_active_confirmed
     when_state: WAITING
     state_rules:
-      - condition: template_match
-        template: vpn
+      - condition: ocr_missing
+        text: "Not Connected"
         state: ACTIVE
       - condition: default
         state: WAITING
@@ -309,69 +225,98 @@ steps:
 
   - type: wait
     name: after_vpn_home
-    duration_seconds: 5
+    duration_seconds: 2
 
-  # ── 9. Confirm VPN — only if never confirmed ACTIVE this run ────────
-  - type: screenshot
-    name: home_for_vpn_before_tiktok
+  # ── 9. Re-check VPN in Shadowrocket before TikTok (if still WAITING) ─
+  - type: execute_action
+    name: go_home_before_vpn_recheck
     when_state: WAITING
-    templates: [vpn, shadowrocket]
-
-  - type: analyze_screen
-    name: analyze_vpn_before_tiktok
-    when_state: WAITING
-    templates: [vpn, shadowrocket]
-
-  - type: verify
-    name: confirm_vpn_before_tiktok
-    when_state: WAITING
-    condition: template_match
-    template: vpn
-    on_failure: continue
+    action:
+      type: home
+    skip_post_action: true
 
   - type: wait
-    name: vpn_before_tiktok_retry_wait
+    name: before_vpn_recheck
     when_state: WAITING
-    unless_detection: vpn
-    duration_seconds: 5
+    duration_seconds: 1
 
   - type: screenshot
-    name: vpn_before_tiktok_retry_screen
+    name: home_for_shadowrocket_recheck
     when_state: WAITING
-    unless_detection: vpn
-    templates: [vpn, shadowrocket]
+    templates: [shadowrocket]
 
   - type: analyze_screen
-    name: analyze_vpn_before_tiktok_retry
+    name: analyze_shadowrocket_recheck
     when_state: WAITING
-    unless_detection: vpn
-    templates: [vpn, shadowrocket]
+    templates: [shadowrocket]
 
-  - type: verify
-    name: confirm_vpn_before_tiktok_final
+  - type: execute_action
+    name: open_shadowrocket_recheck
     when_state: WAITING
-    condition: template_match
-    template: vpn
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: shadowrocket
+    skip_post_action: true
+
+  - type: wait
+    name: shadowrocket_open_recheck
+    when_state: WAITING
+    duration_seconds: 2
+
+  - type: check_ocr_state
+    name: vpn_confirmed_before_tiktok
+    when_state: WAITING
+    on_failure: pause
+    action:
+      texts: ["Not Connected", "NOT CONNECTED", "Not connected"]
+      threshold: 0.65
+      duration_seconds: 12
+      retry_delay: 1.5
+      state_if_found: WAITING
+      state_if_missing: ACTIVE
+      fallback_template: vpntoggle
+      state_if_fallback: WAITING
+      require_state: ACTIVE
+
+  # ── 10. TikTok (home screen) ────────────────────────────────────────
+  - type: execute_action
+    name: go_home_for_tiktok
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: settle_for_tiktok
+    duration_seconds: 1
+
+  - type: wait_for_detection
+    name: wait_for_tiktok_icon
+    templates: [tiktok]
+    when_detection: tiktok
+    duration_seconds: 60
+    min_seconds: 2
     on_failure: pause
 
-  # ── 10. TikTok ──────────────────────────────────────────────────────
   - type: screenshot
-    name: home_for_tiktok
+    name: fresh_tiktok_screen
     templates: [tiktok]
 
   - type: analyze_screen
-    name: analyze_tiktok
+    name: fresh_tiktok_analyze
     templates: [tiktok]
 
   - type: verify
-    name: confirm_tiktok_visible
+    name: confirm_tiktok_before_tap
     condition: template_match
     template: tiktok
     on_failure: pause
 
   - type: execute_action
     name: open_tiktok
+    requires_analysis: true
     on_failure: pause
     action:
       type: tap_detection
       detection: tiktok
+    skip_post_action: true

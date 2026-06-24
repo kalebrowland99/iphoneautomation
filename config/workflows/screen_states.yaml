@@ -9,15 +9,14 @@ screen_states:
         threshold: 0.75
 
   vpn_active:
-    description: "VPN connected (status bar banner)"
-    templates:
-      - name: vpn
-        path: vpn.jpg
-        threshold: 0.42
+    description: "VPN connected (Shadowrocket — no Not Connected label)"
+    ocr_keywords:
+      - "Not Connected"
 
   vpn_off:
-    description: "Home screen, VPN not connected"
-    templates: []
+    description: "VPN disconnected (Shadowrocket shows Not Connected)"
+    ocr_keywords:
+      - "Not Connected"
 
   shadowrocket_home:
     description: "Shadowrocket app on home screen"
@@ -27,31 +26,43 @@ screen_states:
         threshold: 0.42
 
   shadowrocket_toggle:
-    description: "Shadowrocket VPN toggle switch"
+    description: "Shadowrocket VPN toggle switch (on / prep)"
     templates:
       - name: vpntoggle
         path: vpntoggle.jpg
         threshold: 0.42
 
+  shadowrocket_toggle_off:
+    description: "Shadowrocket blue toggle (VPN on — tap to turn off)"
+    templates:
+      - name: bluetoggle
+        path: bluetoggle.jpg
+        threshold: 0.42
+
 ui_elements:
-  - name: vpn
-    template: vpn.jpg
-    threshold: 0.42
   - name: shadowrocket
     template: shadowrocket.jpg
     threshold: 0.42
   - name: vpntoggle
     template: vpntoggle.jpg
     threshold: 0.42
+  - name: bluetoggle
+    template: bluetoggle.jpg
+    threshold: 0.42
   - name: tiktok
     template: tiktok.jpg
     threshold: 0.42
   - name: plus
     template: plus.jpg
-    threshold: 0.38
+    threshold: 0.50
+    device_threshold: 0.50
+    min_confidence: 0.48
+    search_rect_pct: [0.30, 0.82, 0.70, 1.0]
   - name: gallery
-    template: gallery.jpg
-    threshold: 0.32
+    template: gallery2.jpg
+    threshold: 0.20
+    search_rect_pct: [0.0, 0.72, 0.50, 1.0]
+    tap_offset: [-29, 0]
   - name: aa
     template: aa.jpg
     threshold: 0.40
@@ -65,7 +76,17 @@ ui_elements:
     threshold: 0.28
   - name: editor
     template: editor.jpg
+    threshold: 0.40
+    device_threshold: 0.60
+    min_confidence: 0.62
+    search_rect_pct: [0.50, 0.68, 1.0, 0.90]
+    match_white_text: true
+  - name: continuearrow
+    template: continuearrow.jpg
     threshold: 0.32
+  - name: post
+    template: post.jpg
+    threshold: 0.38
   - name: photos
     template: photos.jpg
     threshold: 0.42

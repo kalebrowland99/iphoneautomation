@@ -40,7 +40,7 @@ def match_template(
     use_multiscale = multiscale
     if use_multiscale is None:
         h, w = template.shape[:2]
-        use_multiscale = max(h, w) < 120
+        use_multiscale = max(h, w) < 120 or min(h, w) < 30
 
     if use_multiscale:
         return _match_template_multiscale(screen, template, threshold, name)
@@ -66,6 +66,14 @@ def match_template(
     return None
 
 
+def _multiscale_factors(template: np.ndarray) -> tuple[float, ...]:
+    """Scale factors for template matching; narrow strips need extra range."""
+    h, w = template.shape[:2]
+    if min(h, w) < 30:
+        return (0.35, 0.5, 0.65, 0.8, 1.0, 1.2, 1.4, 1.6, 2.0, 2.5, 3.0)
+    return (0.5, 0.65, 0.8, 1.0, 1.2, 1.4, 1.6, 2.0)
+
+
 def _match_template_multiscale(
     screen: np.ndarray,
     template: np.ndarray,
@@ -77,7 +85,7 @@ def _match_template_multiscale(
     best_loc = (0, 0)
     best_size = (template.shape[1], template.shape[0])
 
-    for scale in (0.5, 0.65, 0.8, 1.0, 1.2, 1.4, 1.6, 2.0):
+    for scale in _multiscale_factors(template):
         tw = int(template.shape[1] * scale)
         th = int(template.shape[0] * scale)
         if tw < 4 or th < 4:

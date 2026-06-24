@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Phone 12 — iMouse Farm</title>
+    <title>iMouse Farm</title>
     <style>
         :root {
             --bg: #0f1117;
@@ -49,12 +49,121 @@
         .main {
             flex: 1;
             display: grid;
-            grid-template-columns: minmax(280px, 420px) 1fr;
+            grid-template-columns: minmax(220px, 300px) 1fr minmax(260px, 380px);
             gap: 0;
             min-height: 0;
         }
-        @media (max-width: 800px) {
-            .main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+        .farm-section {
+            flex-shrink: 0;
+            background: var(--surface2);
+            border-bottom: 1px solid var(--border);
+            padding: 0.5rem 0.75rem 0.625rem;
+        }
+        .farm-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
+        .farm-toolbar .spacer { flex: 1; }
+        .farm-label {
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text);
+        }
+        .farm-grid {
+            display: grid;
+            grid-template-columns: repeat(10, minmax(0, 1fr));
+            gap: 6px;
+            max-height: 36vh;
+            overflow-y: auto;
+            padding-bottom: 2px;
+        }
+        @media (max-width: 1500px) {
+            .farm-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+        }
+        .device-tile {
+            background: var(--surface);
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .device-tile:hover { border-color: #3f4454; }
+        .device-tile.selected {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent);
+        }
+        .device-tile.running { border-color: rgba(34, 197, 94, 0.55); }
+        .device-tile.offline { opacity: 0.72; }
+        .device-tile.empty { opacity: 0.45; cursor: default; }
+        .device-tile-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.2rem 0.4rem;
+            font-size: 0.6875rem;
+            font-weight: 600;
+            background: rgba(0,0,0,0.2);
+        }
+        .device-tile-num { color: var(--text); }
+        .device-tile-screen {
+            aspect-ratio: 9 / 16;
+            max-height: 108px;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        .device-tile-screen img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+        .tile-empty {
+            color: var(--muted);
+            font-size: 0.6875rem;
+        }
+        .device-tile-bottom {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.25rem;
+            padding: 0.15rem 0.35rem;
+            font-size: 0.625rem;
+            background: rgba(0,0,0,0.15);
+        }
+        .device-tile-bottom .badge {
+            font-size: 0.5625rem;
+            padding: 0.05rem 0.3rem;
+        }
+        .tile-pipe {
+            color: var(--success);
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+        .header-stats {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            font-size: 0.8125rem;
+        }
+        .header-stat-muted { color: var(--muted); }
+        @media (max-width: 1100px) {
+            .main {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto auto 1fr;
+                overflow-y: auto;
+            }
         }
         .phone-panel {
             background: var(--surface);
@@ -62,6 +171,27 @@
             display: flex;
             flex-direction: column;
             padding: 1rem;
+            min-height: 0;
+        }
+        .captions-panel {
+            background: var(--surface);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 1rem;
+            min-height: 0;
+            overflow-y: auto;
+        }
+        .captions-panel h2 {
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            margin-bottom: 0.75rem;
+            flex-shrink: 0;
+        }
+        #post-texts {
+            flex: 1;
             min-height: 0;
         }
         .phone-screen-wrap {
@@ -94,6 +224,51 @@
             gap: 0.375rem 0.75rem;
         }
         .phone-meta .label { color: var(--muted); }
+        .production-panel {
+            margin-top: 0.75rem;
+            padding: 0.625rem 0.75rem;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .production-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+        .production-label {
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--success);
+            font-weight: 600;
+        }
+        .production-status {
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
+        .production-toggle {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+            font-size: 0.8125rem;
+            color: var(--text);
+            cursor: pointer;
+        }
+        .production-toggle input { margin-top: 0.2rem; accent-color: var(--accent); }
+        .production-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        .btn-production {
+            color: var(--success);
+            border-color: rgba(34, 197, 94, 0.35);
+        }
         .phone-actions {
             display: flex;
             flex-wrap: wrap;
@@ -132,7 +307,26 @@
             border-color: var(--border);
         }
         .post-caption-wrap {
+            margin-top: 0.5rem;
+        }
+        .post-caption-wrap:first-of-type {
+            margin-top: 0;
+        }
+        .post-group {
             margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--border);
+        }
+        .post-group:first-child {
+            margin-top: 0;
+            border-top: none;
+            padding-top: 0;
+        }
+        .post-group-title {
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 0.35rem;
         }
         .post-caption-wrap label {
             display: block;
@@ -145,7 +339,7 @@
         }
         .post-caption-wrap textarea {
             width: 100%;
-            min-height: 4.5rem;
+            min-height: 3.5rem;
             resize: vertical;
             background: var(--surface2);
             border: 1px solid var(--border);
@@ -159,6 +353,58 @@
             outline: none;
             border-color: var(--accent);
         }
+        .ai-caption-section {
+            margin-bottom: 1rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .ai-caption-section h3 {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--text);
+            margin-bottom: 0.5rem;
+        }
+        .ai-caption-section label {
+            display: block;
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            font-weight: 600;
+            margin-bottom: 0.35rem;
+            margin-top: 0.5rem;
+        }
+        .ai-caption-section label:first-of-type {
+            margin-top: 0;
+        }
+        .ai-caption-section textarea,
+        .ai-caption-section input[type="text"] {
+            width: 100%;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            padding: 0.5rem 0.625rem;
+            font-size: 0.8125rem;
+        }
+        .ai-caption-section textarea {
+            min-height: 4rem;
+            resize: vertical;
+        }
+        .ai-caption-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.625rem;
+        }
+        .ai-caption-status {
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
+        .ai-caption-status.error { color: var(--error); }
+        .ai-caption-status.success { color: var(--success); }
         .debug-tabs {
             display: flex;
             gap: 0.25rem;
@@ -302,16 +548,27 @@
 </head>
 <body>
     <header>
-        <h1><span id="phone-title">Phone 12</span></h1>
-        <div class="header-right">
+        <h1>iMouse Farm</h1>
+        <div class="header-right header-stats">
+            <span id="farm-online-count" class="header-stat-muted">0/20 online</span>
             <span><span id="conn-dot" class="status-dot offline"></span><span id="phone-connected">—</span></span>
+            <span>Selected: <strong id="phone-title">—</strong></span>
             <span>State: <span id="phone-state" class="badge DISCONNECTED">—</span></span>
             <span id="live-indicator" class="badge lvl-success" style="display:none">LIVE</span>
             <span id="connection-status">Connecting...</span>
         </div>
     </header>
     <div id="page-banner" class="banner-warn"></div>
-    <div class="main">
+    <section class="farm-section">
+        <div class="farm-toolbar">
+            <span class="farm-label">Devices</span>
+            <span id="farm-selected-hint" class="header-stat-muted">Click a phone to control it</span>
+            <div class="spacer"></div>
+            <button class="btn btn-sm btn-ghost" type="button" onclick="refreshFarmDevices()">Refresh grid</button>
+        </div>
+        <div id="farm-grid" class="farm-grid"></div>
+    </section>
+    <div class="main workspace">
         <div class="phone-panel">
             <div class="phone-screen-wrap">
                 <img id="phone-screen" alt="Phone 12 screen" style="display:none">
@@ -323,9 +580,21 @@
                 <div><span class="label">Errors</span><br><span id="meta-errors">0</span></div>
                 <div><span class="label">Last seen</span><br><span id="meta-seen">—</span></div>
             </div>
-            <div class="post-caption-wrap">
-                <label for="post-caption">Post caption (typed into TikTok)</label>
-                <textarea id="post-caption" placeholder="Type caption for tiktok_post workflow…" rows="3"></textarea>
+            <div class="production-panel">
+                <div class="production-header">
+                    <span class="production-label">Production</span>
+                    <span class="production-status" id="pipeline-status">Idle</span>
+                </div>
+                <label class="production-toggle">
+                    <input type="checkbox" id="debug-skip-post" onchange="saveDebugSkipPost()">
+                    <span>Debug: skip post (kill TikTok &amp; reopen instead of tapping Post)</span>
+                </label>
+                <div class="production-actions">
+                    <button class="btn btn-sm btn-production" id="btn-pipeline-start" onclick="startPipeline()">Full start</button>
+                    <button class="btn btn-sm btn-ghost" id="btn-pipeline-pause" onclick="pausePipeline()">Pause</button>
+                    <button class="btn btn-sm btn-ghost" id="btn-pipeline-resume" onclick="resumePipeline()">Resume</button>
+                    <button class="btn btn-sm btn-ghost" id="btn-pipeline-stop" onclick="stopPipeline()">Stop all</button>
+                </div>
             </div>
             <div class="phone-actions">
                 <select id="workflow-select"></select>
@@ -340,6 +609,7 @@
                 <div class="debug-tabs">
                     <button type="button" id="debug-tab-prep" class="active" onclick="setDebugTab('prep')">Prep</button>
                     <button type="button" id="debug-tab-post" onclick="setDebugTab('post')">Post</button>
+                    <button type="button" id="debug-tab-end" onclick="setDebugTab('end')">End</button>
                 </div>
                 <select id="debug-test-select"></select>
                 <button class="btn btn-sm btn-debug" id="btn-debug-run" onclick="runDebugTest()">Run test</button>
@@ -375,17 +645,70 @@
                 <div class="activity-empty">Loading activity...</div>
             </div>
         </div>
+        <div class="captions-panel">
+            <h2>Post text</h2>
+            <div class="ai-caption-section">
+                <h3>AI captions</h3>
+                <label for="ai-prompt">Caption prompt</label>
+                <textarea id="ai-prompt" rows="8" placeholder="Reads each video filename to find the food, then writes lowercase viral captions…"></textarea>
+                <label for="ai-hashtags">Hashtags</label>
+                <input type="text" id="ai-hashtags" placeholder="#fyp #food #foodtok #recipe">
+                <div class="ai-caption-actions">
+                    <button type="button" class="btn btn-sm btn-primary" id="btn-ai-generate" onclick="generateAiCaptions()">Generate final captions</button>
+                    <span class="ai-caption-status" id="ai-caption-status"></span>
+                </div>
+                <p class="ai-caption-status" style="margin-top:0.35rem">Reads gallery filenames per post (e.g. chicken_tikka_masala.mp4) and fills final captions only.</p>
+            </div>
+            <div id="post-texts">
+                <div class="post-group" data-post="1">
+                    <div class="post-group-title">Post 1</div>
+                    <div class="post-caption-wrap">
+                        <label for="onscreen-1">Onscreen text</label>
+                        <textarea id="onscreen-1" data-post="1" data-field="onscreen" placeholder="Text overlay for post 1…" rows="2"></textarea>
+                    </div>
+                    <div class="post-caption-wrap">
+                        <label for="final-1">Final Post Caption +Hashtags</label>
+                        <textarea id="final-1" data-post="1" data-field="final" placeholder="Description and hashtags for post 1…" rows="3"></textarea>
+                    </div>
+                </div>
+                <div class="post-group" data-post="2">
+                    <div class="post-group-title">Post 2</div>
+                    <div class="post-caption-wrap">
+                        <label for="onscreen-2">Onscreen text</label>
+                        <textarea id="onscreen-2" data-post="2" data-field="onscreen" placeholder="Text overlay for post 2…" rows="2"></textarea>
+                    </div>
+                    <div class="post-caption-wrap">
+                        <label for="final-2">Final Post Caption +Hashtags</label>
+                        <textarea id="final-2" data-post="2" data-field="final" placeholder="Description and hashtags for post 2…" rows="3"></textarea>
+                    </div>
+                </div>
+                <div class="post-group" data-post="3">
+                    <div class="post-group-title">Post 3</div>
+                    <div class="post-caption-wrap">
+                        <label for="onscreen-3">Onscreen text</label>
+                        <textarea id="onscreen-3" data-post="3" data-field="onscreen" placeholder="Text overlay for post 3…" rows="2"></textarea>
+                    </div>
+                    <div class="post-caption-wrap">
+                        <label for="final-3">Final Post Caption +Hashtags</label>
+                        <textarea id="final-3" data-post="3" data-field="final" placeholder="Description and hashtags for post 3…" rows="3"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
     <script>
-        const PHONE_SLOT = '12';
+        const FARM_SLOTS = __FARM_SLOTS__;
         let deviceId = null;
+        let selectedSlot = null;
+        let farmDevices = [];
+        let slotToDevice = {};
         let ws = null;
         let activityEntries = [];
         let activityAutoScroll = true;
         let activityPaused = false;
         let screenshotLoaded = false;
         let debugTab = 'prep';
-        let captionSaveTimer = null;
+        let postTextSaveTimers = {};
 
         function connectWS() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -406,12 +729,17 @@
                 }
                 if (['screenshot_captured', 'workflow_started', 'state_changed',
                      'action_completed', 'action_failed', 'popup_detected',
-                     'device_disconnected', 'device_connected'].includes(msg.event)) {
-                    if (msg.event === 'screenshot_captured' && deviceId &&
-                        msg.data && msg.data.device_id === deviceId) {
-                        refreshScreenshot();
+                     'device_disconnected', 'device_connected',
+                     'pipeline_started', 'pipeline_paused', 'pipeline_resumed',
+                     'pipeline_stopped', 'pipeline_completed', 'pipeline_failed'].includes(msg.event)) {
+                    if (msg.event === 'screenshot_captured' && msg.data && msg.data.device_id) {
+                        refreshTileScreenshot(msg.data.device_id);
+                        if (deviceId === msg.data.device_id) {
+                            refreshScreenshot();
+                        }
                     }
-                    updateDeviceMeta();
+                    refreshFarmDevices({ quiet: true });
+                    if (deviceId) updateDeviceMeta();
                 }
             };
         }
@@ -433,6 +761,151 @@
             const el = document.getElementById('page-banner');
             el.textContent = msg;
             el.style.display = 'block';
+        }
+
+        function hideBanner() {
+            document.getElementById('page-banner').style.display = 'none';
+        }
+
+        function deviceSlot(device) {
+            const slot = String(device.user_name || '').trim();
+            if (slot) return slot;
+            const m = (device.display_label || '').match(/Phone\s+(\d+)/i);
+            return m ? m[1] : '';
+        }
+
+        function updateFarmHeaderStats() {
+            const online = farmDevices.filter(d => d.connected).length;
+            document.getElementById('farm-online-count').textContent =
+                `${online}/${FARM_SLOTS} online`;
+        }
+
+        function renderFarmGrid() {
+            const grid = document.getElementById('farm-grid');
+            const tiles = [];
+            for (let i = 1; i <= FARM_SLOTS; i++) {
+                const key = String(i);
+                const d = slotToDevice[key];
+                const selected = selectedSlot === key;
+                const online = Boolean(d && d.connected);
+                const state = d ? d.current_state : 'DISCONNECTED';
+                const pipe = d && d.pipeline;
+                let pipeHint = '';
+                if (pipe && pipe.status === 'running') {
+                    pipeHint = `P${pipe.step}/${pipe.total_steps}`;
+                } else if (pipe && pipe.status === 'paused') {
+                    pipeHint = '||';
+                }
+                const stateLabel = !d ? 'empty' : (online ? state : 'OFF');
+                tiles.push(`
+                <div class="device-tile ${selected ? 'selected' : ''} ${d ? (online ? '' : 'offline') : 'empty'} ${pipe && pipe.status === 'running' ? 'running' : ''}"
+                     data-slot="${key}" onclick="selectSlot('${key}')"
+                     title="${d ? escapeHtml(d.display_label || ('Phone ' + key)) : 'Phone ' + key + ' — not connected'}">
+                    <div class="device-tile-top">
+                        <span class="device-tile-num">${key}</span>
+                        <span class="status-dot ${online ? 'online' : 'offline'}"></span>
+                    </div>
+                    <div class="device-tile-screen">
+                        ${d ? `<img data-tile-slot="${key}" alt="">` : '<span class="tile-empty">—</span>'}
+                    </div>
+                    <div class="device-tile-bottom">
+                        <span class="badge ${stateLabel === 'empty' ? 'DISCONNECTED' : stateLabel}">${stateLabel}</span>
+                        ${pipeHint ? `<span class="tile-pipe">${pipeHint}</span>` : ''}
+                    </div>
+                </div>`);
+            }
+            grid.innerHTML = tiles.join('');
+            refreshAllThumbnails();
+        }
+
+        async function refreshFarmDevices(opts = {}) {
+            try {
+                farmDevices = await api('/devices');
+                slotToDevice = {};
+                for (const d of farmDevices) {
+                    const slot = deviceSlot(d);
+                    if (slot && !slotToDevice[slot]) {
+                        slotToDevice[slot] = d;
+                    }
+                }
+                updateFarmHeaderStats();
+                renderFarmGrid();
+                if (selectedSlot) {
+                    const current = slotToDevice[selectedSlot];
+                    if (current && current.device_id === deviceId) {
+                        updateDeviceUI(current);
+                    }
+                }
+            } catch (err) {
+                if (!opts.quiet) {
+                    showBanner('Failed to load devices: ' + err.message);
+                }
+            }
+        }
+
+        function refreshTileScreenshot(id) {
+            const d = farmDevices.find(dev => dev.device_id === id);
+            if (!d) return;
+            const slot = deviceSlot(d);
+            const img = document.querySelector(`img[data-tile-slot="${slot}"]`);
+            if (!img) return;
+            const url = `/api/devices/${enc(id)}/screenshot?t=${Date.now()}`;
+            const probe = new Image();
+            probe.onload = () => { img.src = url; };
+            probe.onerror = () => {};
+            probe.src = url;
+        }
+
+        function refreshAllThumbnails() {
+            for (const d of farmDevices) {
+                refreshTileScreenshot(d.device_id);
+            }
+        }
+
+        function firstOnlineSlot() {
+            for (let i = 1; i <= FARM_SLOTS; i++) {
+                const d = slotToDevice[String(i)];
+                if (d && d.connected) return String(i);
+            }
+            for (let i = 1; i <= FARM_SLOTS; i++) {
+                if (slotToDevice[String(i)]) return String(i);
+            }
+            return '1';
+        }
+
+        async function selectSlot(slot) {
+            selectedSlot = slot;
+            localStorage.setItem('farmSelectedSlot', slot);
+            document.getElementById('farm-selected-hint').textContent =
+                `Selected slot ${slot}`;
+            renderFarmGrid();
+            const d = slotToDevice[slot];
+            if (!d) {
+                deviceId = null;
+                screenshotLoaded = false;
+                document.getElementById('phone-title').textContent = `Phone ${slot}`;
+                document.getElementById('phone-connected').textContent = 'Not connected';
+                document.getElementById('conn-dot').className = 'status-dot offline';
+                document.getElementById('phone-state').textContent = '—';
+                document.getElementById('phone-state').className = 'badge DISCONNECTED';
+                document.getElementById('meta-workflow').textContent = '—';
+                document.getElementById('meta-action').textContent = '—';
+                document.getElementById('meta-errors').textContent = '0';
+                document.getElementById('meta-seen').textContent = '—';
+                document.getElementById('phone-screen').style.display = 'none';
+                document.getElementById('phone-screen-placeholder').style.display = 'block';
+                document.getElementById('phone-screen-placeholder').textContent =
+                    `Phone ${slot} not in iMouse — connect in iMouseXP`;
+                showBanner(`Phone ${slot} not found. Set user name / slot ${slot} in iMouseXP.`);
+                return;
+            }
+            hideBanner();
+            deviceId = d.device_id;
+            updateDeviceUI(d);
+            await loadPostTexts();
+            refreshScreenshot();
+            await updateDeviceMeta();
+            await refreshActivity();
         }
 
         function formatTime(iso) {
@@ -559,7 +1032,7 @@
 
         function updateDeviceUI(device) {
             document.getElementById('phone-title').textContent =
-                device.display_label || `Phone ${PHONE_SLOT}`;
+                device.display_label || `Phone ${selectedSlot || device.user_name || '?'}`;
             document.getElementById('conn-dot').className =
                 `status-dot ${device.connected ? 'online' : 'offline'}`;
             document.getElementById('phone-connected').textContent =
@@ -567,8 +1040,14 @@
             const stateEl = document.getElementById('phone-state');
             stateEl.textContent = device.current_state;
             stateEl.className = `badge ${device.current_state}`;
-            document.getElementById('meta-workflow').textContent =
-                (device.workflow_name || '—') + (device.workflow_paused ? ' (paused)' : '');
+            let wfLabel = device.workflow_name || '—';
+            if (device.workflow_paused) wfLabel += ' (paused)';
+            if (device.pipeline && device.pipeline.status === 'running') {
+                wfLabel = `pipeline ${device.pipeline.step}/${device.pipeline.total_steps}: ${device.pipeline.current_workflow || wfLabel}`;
+            } else if (device.pipeline && device.pipeline.status === 'paused') {
+                wfLabel = `pipeline paused (${device.pipeline.current_workflow || '—'})`;
+            }
+            document.getElementById('meta-workflow').textContent = wfLabel;
             document.getElementById('meta-action').textContent = device.last_action || '—';
             document.getElementById('meta-errors').textContent = device.error_count || 0;
             document.getElementById('meta-seen').textContent =
@@ -576,6 +1055,96 @@
             const btn = document.getElementById('btn-connect');
             btn.textContent = device.connected ? 'Reconnect AirPlay' : 'Connect AirPlay';
             btn.className = `btn btn-sm ${device.connected ? 'btn-ghost' : 'btn-connect'}`;
+            updatePipelineUI(device);
+        }
+
+        function updatePipelineUI(device) {
+            const statusEl = document.getElementById('pipeline-status');
+            const pipe = device.pipeline;
+            const debugCb = document.getElementById('debug-skip-post');
+            if (typeof device.debug_skip_post === 'boolean') {
+                debugCb.checked = device.debug_skip_post;
+            }
+            const running = pipe && pipe.status === 'running';
+            const paused = pipe && pipe.status === 'paused';
+            if (!pipe || pipe.status === 'completed') {
+                statusEl.textContent = 'Idle';
+            } else if (running) {
+                statusEl.textContent = `Running ${pipe.step}/${pipe.total_steps}: ${pipe.current_workflow}`;
+            } else if (paused) {
+                statusEl.textContent = `Paused at ${pipe.current_workflow}`;
+            } else {
+                statusEl.textContent = pipe.status || 'Idle';
+            }
+            document.getElementById('btn-pipeline-start').disabled = running || paused;
+            document.getElementById('btn-pipeline-pause').disabled = !running;
+            document.getElementById('btn-pipeline-resume').disabled = !paused;
+        }
+
+        async function saveDebugSkipPost() {
+            if (!deviceId) return;
+            const enabled = document.getElementById('debug-skip-post').checked;
+            try {
+                await api(`/devices/${enc(deviceId)}/settings`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ debug_skip_post: enabled })
+                });
+                refreshActivity();
+            } catch (err) {
+                alert(`Failed to save debug setting: ${err.message}`);
+            }
+        }
+
+        async function startPipeline() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/pipeline/start`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) {
+                alert(`Full start failed: ${err.message}`);
+            }
+        }
+
+        async function pausePipeline() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/pipeline/pause`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) {
+                alert(`Pause failed: ${err.message}`);
+            }
+        }
+
+        async function resumePipeline() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/pipeline/resume`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) {
+                alert(`Resume failed: ${err.message}`);
+            }
+        }
+
+        async function stopPipeline() {
+            if (!deviceId) return;
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/pipeline/stop`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+                if (res.orphans_killed && res.orphans_killed.length) {
+                    console.info(`Cleaned up duplicate server PIDs: ${res.orphans_killed.join(', ')}`);
+                }
+            } catch (err) {
+                alert(`Stop failed: ${err.message}`);
+            }
         }
 
         async function updateDeviceMeta() {
@@ -586,17 +1155,6 @@
             } catch (_) { /* keep existing UI */ }
         }
 
-        async function findPhone12() {
-            const devices = await api('/devices');
-            const phone = devices.find(d => d.user_name === PHONE_SLOT) ||
-                devices.find(d => (d.display_label || '').includes(`Phone ${PHONE_SLOT}`));
-            if (!phone) {
-                showBanner(`Phone ${PHONE_SLOT} not found. Connect it in iMouseXP first.`);
-                return null;
-            }
-            return phone;
-        }
-
         async function connectDevice() {
             if (!deviceId) return;
             const btn = document.getElementById('btn-connect');
@@ -604,6 +1162,7 @@
             btn.textContent = 'Connecting…';
             try {
                 const res = await api(`/devices/${enc(deviceId)}/connect`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
                 await updateDeviceMeta();
                 if (!res.connected) {
                     alert('AirPlay connect failed — open iMouseXP and connect the phone there, then try again.');
@@ -647,12 +1206,11 @@
             if (!deviceId) return;
             try {
                 const res = await api(`/devices/${enc(deviceId)}/workflows/stop`, { method: 'POST' });
-                if (!res.success) {
-                    alert('Nothing to stop — no active workflow on this device.');
-                    return;
-                }
                 await updateDeviceMeta();
                 refreshActivity();
+                if (res.orphans_killed && res.orphans_killed.length) {
+                    console.info(`Cleaned up duplicate server PIDs: ${res.orphans_killed.join(', ')}`);
+                }
             } catch (err) {
                 alert(`Stop failed: ${err.message}`);
             }
@@ -679,7 +1237,9 @@
                 const res = await api(`/devices/${enc(deviceId)}/debug/${testId}`, { method: 'POST', signal: controller.signal });
                 refreshScreenshot();
                 refreshActivity();
-                if (!res.success) {
+                if (testId.startsWith('detect-')) {
+                    showBanner(res.message || (res.success ? 'Detection succeeded' : 'Detection failed'));
+                } else if (!res.success) {
                     alert(res.message || `${select.options[select.selectedIndex].text} failed`);
                 } else if (res.file_count != null) {
                     showBanner(res.message);
@@ -763,32 +1323,129 @@
             debugTab = tab;
             document.getElementById('debug-tab-prep').classList.toggle('active', tab === 'prep');
             document.getElementById('debug-tab-post').classList.toggle('active', tab === 'post');
+            document.getElementById('debug-tab-end').classList.toggle('active', tab === 'end');
             loadDebugTests();
         }
 
-        async function loadPostCaption() {
+        async function loadCaptionAiSettings() {
             try {
-                const res = await api('/post-caption');
-                document.getElementById('post-caption').value = res.text || '';
+                const settings = await api('/caption-ai/settings');
+                const promptEl = document.getElementById('ai-prompt');
+                const tagsEl = document.getElementById('ai-hashtags');
+                if (promptEl && settings.prompt) promptEl.value = settings.prompt;
+                if (tagsEl && settings.hashtags) tagsEl.value = settings.hashtags;
             } catch (err) {
-                console.warn('loadPostCaption failed:', err.message);
+                console.warn('loadCaptionAiSettings failed:', err.message);
             }
         }
 
-        function scheduleCaptionSave() {
-            if (captionSaveTimer) clearTimeout(captionSaveTimer);
-            captionSaveTimer = setTimeout(async () => {
-                const text = document.getElementById('post-caption').value;
+        let aiSettingsSaveTimer = null;
+        function scheduleCaptionAiSettingsSave() {
+            if (aiSettingsSaveTimer) clearTimeout(aiSettingsSaveTimer);
+            aiSettingsSaveTimer = setTimeout(async () => {
+                const prompt = document.getElementById('ai-prompt')?.value || '';
+                const hashtags = document.getElementById('ai-hashtags')?.value || '';
                 try {
-                    await api('/post-caption', {
+                    await api('/caption-ai/settings', {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ text })
+                        body: JSON.stringify({ prompt, hashtags })
                     });
                 } catch (err) {
-                    console.warn('savePostCaption failed:', err.message);
+                    console.warn('saveCaptionAiSettings failed:', err.message);
+                }
+            }, 500);
+        }
+
+        function bindCaptionAiInputs() {
+            const promptEl = document.getElementById('ai-prompt');
+            const tagsEl = document.getElementById('ai-hashtags');
+            if (promptEl) promptEl.addEventListener('input', scheduleCaptionAiSettingsSave);
+            if (tagsEl) tagsEl.addEventListener('input', scheduleCaptionAiSettingsSave);
+        }
+
+        async function generateAiCaptions() {
+            if (!deviceId) {
+                showBanner('Select a phone first');
+                return;
+            }
+            const statusEl = document.getElementById('ai-caption-status');
+            const btn = document.getElementById('btn-ai-generate');
+            const prompt = document.getElementById('ai-prompt')?.value || '';
+            const hashtags = document.getElementById('ai-hashtags')?.value || '';
+            if (statusEl) {
+                statusEl.textContent = 'Generating…';
+                statusEl.className = 'ai-caption-status';
+            }
+            if (btn) btn.disabled = true;
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/caption-ai/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt, hashtags })
+                });
+                await loadPostTexts();
+                if (statusEl) {
+                    statusEl.textContent = `Generated ${(res.posts || []).length} final captions`;
+                    statusEl.className = 'ai-caption-status success';
+                }
+            } catch (err) {
+                if (statusEl) {
+                    statusEl.textContent = err.message;
+                    statusEl.className = 'ai-caption-status error';
+                }
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        async function loadPostTexts() {
+            if (!deviceId) return;
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/post-texts`);
+                for (const p of res.posts || []) {
+                    const on = document.getElementById(`onscreen-${p.post}`);
+                    const fin = document.getElementById(`final-${p.post}`);
+                    const placeholder = p.placeholder || p.media_file || '';
+                    if (on) {
+                        on.value = p.onscreen || '';
+                        on.placeholder = placeholder || `Text overlay for post ${p.post}…`;
+                    }
+                    if (fin) {
+                        fin.value = p.final || '';
+                        fin.placeholder = placeholder || `Description and hashtags for post ${p.post}…`;
+                    }
+                }
+            } catch (err) {
+                console.warn('loadPostTexts failed:', err.message);
+            }
+        }
+
+        function schedulePostTextSave(postNum, field) {
+            const key = `${postNum}-${field}`;
+            if (postTextSaveTimers[key]) clearTimeout(postTextSaveTimers[key]);
+            postTextSaveTimers[key] = setTimeout(async () => {
+                if (!deviceId) return;
+                const el = document.getElementById(`${field}-${postNum}`);
+                if (!el) return;
+                try {
+                    await api(`/devices/${enc(deviceId)}/post-texts/${postNum}/${field}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: el.value })
+                    });
+                } catch (err) {
+                    console.warn('savePostText failed:', err.message);
                 }
             }, 400);
+        }
+
+        function bindPostTextInputs() {
+            document.querySelectorAll('#post-texts textarea[data-post]').forEach(el => {
+                el.addEventListener('input', () => {
+                    schedulePostTextSave(el.dataset.post, el.dataset.field);
+                });
+            });
         }
 
         async function execAction(type) {
@@ -813,24 +1470,25 @@
 
         async function init() {
             connectWS();
-            document.getElementById('post-caption').addEventListener('input', scheduleCaptionSave);
-            await loadPostCaption();
+            bindPostTextInputs();
+            bindCaptionAiInputs();
             try {
-                const phone = await findPhone12();
-                if (!phone) return;
-                deviceId = phone.device_id;
-                updateDeviceUI(phone);
-                refreshScreenshot();
                 await loadWorkflows();
+                await loadCaptionAiSettings();
                 await loadDebugTests();
-                await refreshActivity();
+                await refreshFarmDevices();
+                const urlSlot = new URLSearchParams(location.search).get('slot');
+                const savedSlot = localStorage.getItem('farmSelectedSlot');
+                const startSlot = urlSlot || savedSlot || firstOnlineSlot();
+                await selectSlot(startSlot);
             } catch (e) {
-                showBanner('Failed to load Phone 12: ' + e.message);
+                showBanner('Failed to initialize dashboard: ' + e.message);
             }
             setInterval(() => {
-                updateDeviceMeta().catch(() => {});
-                refreshScreenshot();
+                refreshFarmDevices({ quiet: true });
+                if (deviceId) updateDeviceMeta().catch(() => {});
             }, 10000);
+            setInterval(() => refreshAllThumbnails(), 20000);
         }
         init();
     </script>

@@ -52,6 +52,10 @@ class VisionProvider(ABC):
             elif condition == "ocr_contains":
                 if rule.get("text", "").lower() in analysis.ocr_text.lower():
                     return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
+            elif condition == "ocr_missing":
+                text = rule.get("text", "")
+                if text and text.lower() not in analysis.ocr_text.lower():
+                    return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
             elif condition == "default":
                 return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
         return DeviceState.UNKNOWN_SCREEN
@@ -61,8 +65,12 @@ class VisionProvider(ABC):
     ) -> bool:
         if condition == "template_match" and template:
             return any(d.name == template for d in analysis.detections)
+        if condition == "template_missing" and template:
+            return not any(d.name == template for d in analysis.detections)
         if condition == "ocr_contains" and template:
             return template.lower() in analysis.ocr_text.lower()
+        if condition == "ocr_missing" and template:
+            return template.lower() not in analysis.ocr_text.lower()
         return False
 
     def find_detection(self, analysis: VisionAnalysis, name: str) -> DetectionResult | None:

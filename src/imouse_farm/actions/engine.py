@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+from asyncio import QueueEmpty
 from typing import Any, Callable, Awaitable
 
 from imouse_farm.actions.queue import ActionQueue, QueuedAction
 from pathlib import Path
 
-from imouse_farm.config.models import ActionRequest, ActionType, AppConfig
+from imouse_farm.config.models import ActionRequest, ActionType, AppConfig, DeviceState
 from imouse_farm.controller.device_controller import DeviceController
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
@@ -223,7 +224,15 @@ class ActionEngine:
                         logger.info("tap_detection_skipped", device_id=device_id, detection=name)
                         return True
                     raise RuntimeError(f"Detection '{name}' not found — analyze screen first")
-                return await ctrl.tap(device_id, int(det["x"]), int(det["y"]))
+                x, y = int(det["x"]), int(det["y"])
+                tap_count = max(1, int(params.get("tap_count", 1)))
+                interval = float(params.get("tap_interval_seconds", 0.4))
+                for tap_idx in range(tap_count):
+                    if not await ctrl.tap(device_id, x, y):
+                        return False
+                    if tap_idx < tap_count - 1:
+                        await asyncio.sleep(interval)
+                return True
             case ActionType.TAP_OCR:
                 texts_param = params.get("texts")
                 if texts_param:
@@ -256,6 +265,23 @@ class ActionEngine:
                     )
 
                 async def _try_tap_once() -> bool:
+                    expect_missing = bool(params.get("expect_missing"))
+                    if expect_missing:
+                        for text in candidates:
+                            matches = await ctrl.find_text_on_device(
+                                device_id,
+                                [text],
+                                threshold=threshold,
+                                contain=contain,
+                            )
+                            if matches:
+                                return False
+                        logger.info(
+                            "ocr_missing_verified",
+                            device_id=device_id,
+                            texts=candidates,
+                        )
+                        return True
                     # Try each candidate in order so specific labels (e.g. full song
                     # title) win over shorter partial OCR hits elsewhere on screen.
                     for text in candidates:
@@ -269,6 +295,14 @@ class ActionEngine:
                             continue
                         annotated = [{**m, "text": m.get("text") or text} for m in matches]
                         best = _pick_best_match(annotated)
+                        if params.get("verify_only"):
+                            logger.info(
+                                "ocr_verified",
+                                device_id=device_id,
+                                text=best.get("text"),
+                                query=text,
+                            )
+                            return True
                         logger.info(
                             "tap_ocr",
                             device_id=device_id,
@@ -292,6 +326,8 @@ class ActionEngine:
                 if optional:
                     logger.info("tap_ocr_skipped", device_id=device_id, texts=candidates)
                     return True
+                if params.get("expect_missing"):
+                    raise RuntimeError(f"Expected text absent but found {candidates!r} on screen")
                 raise RuntimeError(f"None of {candidates!r} found on screen")
             case ActionType.SWIPE:
                 return await ctrl.swipe(
@@ -355,24 +391,26 @@ class ActionEngine:
                 return await ctrl.launch_app(device_id, str(params.get("url", "")))
             case ActionType.CLOSE_APP:
                 return await ctrl.close_app(device_id)
+            case ActionType.KILL_APP:
+                return await ctrl.kill_app(device_id)
             case ActionType.ALBUM_CLEAR:
+                self._block_album_when_vpn_on(device_id, "Album clear")
                 return await ctrl.album_clear(
                     device_id,
                     album_name=params.get("album_name"),
                     timeout_ms=int(params.get("timeout_ms", 120000)),
                 )
             case ActionType.ALBUM_UPLOAD:
+                self._block_album_when_vpn_on(device_id, "Album upload")
+                from imouse_farm.utils.gallery import list_media_files
+
                 folder = Path(str(params.get("folder", ""))).resolve()
                 if not folder.is_dir():
                     raise RuntimeError(f"Upload folder not found: {folder}")
-                extensions = {e.lower() for e in params.get("extensions", [])}
-                if not extensions:
-                    extensions = {".mp4", ".mov", ".m4v", ".jpg", ".jpeg", ".png", ".heic"}
-                files = sorted(
-                    str(p.resolve())
-                    for p in folder.iterdir()
-                    if p.is_file() and p.suffix.lower() in extensions
-                )
+                extensions = params.get("extensions") or [
+                    ".mp4", ".mov", ".m4v", ".jpg", ".jpeg", ".png", ".heic"
+                ]
+                files = list_media_files(folder, extensions)
                 if not files:
                     raise RuntimeError(f"No media files in {folder}")
                 return await ctrl.album_upload(
@@ -386,6 +424,30 @@ class ActionEngine:
             case _:
                 raise ValueError(f"Unknown action type: {action}")
 
+    async def cancel_pending(self, device_id: str) -> int:
+        """Drop queued actions for a device (e.g. after Stop)."""
+        queue = self._queues.get(device_id)
+        if not queue:
+            return 0
+        cancelled = 0
+        while True:
+            try:
+                queued = queue._queue.get_nowait()  # noqa: SLF001
+            except QueueEmpty:
+                break
+            if queued.future and not queued.future.done():
+                queued.future.set_result(False)
+                cancelled += 1
+            queue.task_done()
+        return cancelled
+
     def queue_size(self, device_id: str) -> int:
         queue = self._queues.get(device_id)
         return queue.size if queue else 0
+
+    def _block_album_when_vpn_on(self, device_id: str, action_label: str) -> None:
+        device = self._device_manager.get_device(device_id)
+        if device and device.current_state == DeviceState.ACTIVE:
+            raise RuntimeError(
+                f"{action_label} blocked while VPN is active — album sync must run before VPN"
+            )

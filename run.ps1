@@ -20,6 +20,18 @@ if (-not (Test-Path "data")) { New-Item -ItemType Directory -Path "data" | Out-N
 if (-not (Test-Path "data\screenshots")) { New-Item -ItemType Directory -Path "data\screenshots" | Out-Null }
 if (-not (Test-Path "data\logs")) { New-Item -ItemType Directory -Path "data\logs" | Out-Null }
 
+$envFile = Join-Path $ProjectRoot ".env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        $line = $_.Trim()
+        if (-not $line -or $line.StartsWith("#") -or $line -notmatch "=") { return }
+        $parts = $line -split "=", 2
+        $name = $parts[0].Trim()
+        $value = $parts[1].Trim().Trim('"').Trim("'")
+        if ($name) { Set-Item -Path "Env:$name" -Value $value }
+    }
+}
+
 if (-not $NoReload) {
     Write-Host "Starting iMouse Farm (dev mode - auto-restart on file changes)..." -ForegroundColor Cyan
     & $venvPython (Join-Path $ProjectRoot "scripts\watch_restart.py")

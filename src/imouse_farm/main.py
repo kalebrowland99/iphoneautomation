@@ -10,6 +10,7 @@ import uvicorn
 
 from imouse_farm.app import create_application
 from imouse_farm.dashboard.app import create_app
+from imouse_farm.utils.env_file import load_env_file
 from imouse_farm.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -44,6 +45,7 @@ def cli() -> None:
         help="Path to configuration file",
     )
     args = parser.parse_args()
+    load_env_file()
 
     try:
         asyncio.run(run_server(args.config))

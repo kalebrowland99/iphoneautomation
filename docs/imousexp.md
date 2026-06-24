@@ -43,8 +43,9 @@ New iMouse features should be added to `DeviceController` first, then exposed vi
 - **Drag while held**: use `mouse_down` → stepped `mouse_move` → `mouse_up`. Do not call `mouse_swipe` after `mouse_down`; swipe is its own full gesture and releases at the start.
 - **`shortcut_album_upload`**: `files` must be **absolute Windows paths** the iMouse kernel can read.
 - **`pic_find_text`**: on-device OCR for tapping UI labels (preferred over PC-side Tesseract for live taps).
-- **`key_sendkey`**: `key=` for text; `fn_key=` for hotkeys (`home`, `selectall`, `delete`, etc.).
+- **`key_sendkey`** (`/key/sendkey`): `key=` for text; `fn_key=` for hotkeys. iMouseXP console buttons map to `fn_key` strings — **App** = `AppSwitch`, **Home** = `WIN+h` (this project also accepts `home`).
 - **Responses**: check `response.status == 200` and `response.data.code == 0` via `is_success()`.
+- **`kill_app`**: `fn_key=AppSwitch`, then swipe up **5 times** on center card (~406×720).
 - **AirPlay**: drops on server restart; reconnect manually or via `device_airplay_connect`.
 
 ## Change checklist

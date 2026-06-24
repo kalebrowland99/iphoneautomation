@@ -373,10 +373,45 @@ class DeviceController:
         )
 
     async def send_text(self, device_id: str, text: str) -> bool:
-        logger.info("action_text_input", device_id=device_id, length=len(text))
-        return await self._run_sync(
-            lambda: self._ok(self._api.key_sendkey(self._ids(device_id), key=text))
+        from imouse_farm.utils.text_input import typing_segments
+
+        segments = typing_segments(text)
+        logger.info(
+            "action_text_input",
+            device_id=device_id,
+            length=len(text),
+            segments=len(segments),
+            multiline=len(segments) > 1,
         )
+        if len(segments) == 1 and segments[0] is not None:
+            chunk = segments[0]
+            return await self._run_sync(
+                lambda: self._ok(self._api.key_sendkey(self._ids(device_id), key=chunk))
+            )
+
+        for segment in segments:
+            if segment is None:
+                if not await self._send_line_break(device_id):
+                    return False
+            else:
+                ok = await self._run_sync(
+                    lambda s=segment: self._ok(
+                        self._api.key_sendkey(self._ids(device_id), key=s)
+                    )
+                )
+                if not ok:
+                    return False
+            await asyncio.sleep(0.12)
+        return True
+
+    async def _send_line_break(self, device_id: str) -> bool:
+        from imouse_farm.utils.text_input import LINE_BREAK_FN_KEYS
+
+        for fn_key in LINE_BREAK_FN_KEYS:
+            if await self.send_fn_key(device_id, fn_key):
+                return True
+        logger.warning("line_break_fn_key_failed", device_id=device_id)
+        return False
 
     async def send_fn_key(self, device_id: str, fn_key: str) -> bool:
         logger.info("action_fn_key", device_id=device_id, fn_key=fn_key)
@@ -455,6 +490,60 @@ class DeviceController:
         logger.info("action_close_app", device_id=device_id)
         return await self.press_home(device_id)
 
+    async def open_app_switcher(self, device_id: str) -> bool:
+        """Open iOS app switcher (iMouseXP App button → key_sendkey fn_key AppSwitch)."""
+        logger.info("action_app_switcher", device_id=device_id)
+        return await self.send_fn_key(device_id, "AppSwitch")
+
+    async def kill_app(self, device_id: str) -> bool:
+        """Force-quit apps: iMouse App button (app switcher), then swipe up five times."""
+        def _kill() -> bool:
+            ids = self._ids(device_id)
+            for attempt in range(2):
+                response = self._api.key_sendkey(ids, fn_key="AppSwitch")
+                if not self._ok(response):
+                    logger.error(
+                        "kill_app_switcher_failed",
+                        device_id=device_id,
+                        attempt=attempt + 1,
+                        message=self._error_message(response),
+                    )
+                    if attempt == 0:
+                        time.sleep(0.75)
+                        continue
+                    return False
+                time.sleep(1.5)
+                swipes_ok = 0
+                for i in range(5):
+                    swipe_resp = self._api.mouse_swipe(
+                        ids, "up", sx=203, sy=500, ex=203, ey=100
+                    )
+                    if self._ok(swipe_resp):
+                        swipes_ok += 1
+                    else:
+                        logger.warning(
+                            "kill_app_swipe_failed",
+                            device_id=device_id,
+                            swipe=i + 1,
+                            attempt=attempt + 1,
+                            message=self._error_message(swipe_resp),
+                        )
+                    time.sleep(0.5)
+                logger.info(
+                    "kill_app_swipes",
+                    device_id=device_id,
+                    swipes_ok=swipes_ok,
+                    attempt=attempt + 1,
+                )
+                if swipes_ok > 0:
+                    return True
+                if attempt == 0:
+                    time.sleep(0.75)
+            return False
+
+        logger.info("action_kill_app", device_id=device_id)
+        return await self._run_sync(_kill)
+
     def _album_list_sync(
         self,
         device_id: str,
@@ -513,7 +602,12 @@ class DeviceController:
         get can report 0 items even when the library is full, which would skip
         the clear entirely.
         """
-        from imouse_farm.actions.permission_prompts import DELETE_CONFIRM_TEXTS
+        from imouse_farm.actions.permission_prompts import (
+            DELETE_CONFIRM_TEXTS,
+            DELETE_SHEET_MIN_Y,
+            delete_match_is_stable,
+            pick_delete_confirm_match,
+        )
 
         loop = asyncio.get_event_loop()
         label = album_name or "recents"
@@ -522,6 +616,9 @@ class DeviceController:
         delete_pressed = asyncio.Event()
         tap_count = 0
         last_tap_time = 0.0
+        delete_rect = [0, 320, 406, 720]
+        delete_stable_delay = 0.35
+        delete_settle_after_tap = 2.5
 
         def _clear() -> bool:
             nonlocal error_message
@@ -534,47 +631,69 @@ class DeviceController:
             logger.error("album_clear_failed", device_id=device_id, album=label, message=error_message)
             return False
 
-        # "Delete" is a partial match, so it also hits the negative button
-        # ("Don't Delete" / "Cancel" / "Keep"). Never tap those.
-        negative_words = ("don't", "dont", "cancel", "keep", "stop", "not now")
+        async def _scan_delete_button() -> dict | None:
+            """Collect delete OCR hits in the bottom sheet and pick the safest match."""
+            collected: list[dict] = []
+            for query in DELETE_CONFIRM_TEXTS:
+                matches = await self.find_text_on_device(
+                    device_id,
+                    [query],
+                    threshold=0.72,
+                    contain=True,
+                    rect=delete_rect,
+                )
+                collected.extend(matches)
+            picked = pick_delete_confirm_match(collected, min_y=DELETE_SHEET_MIN_Y)
+            if not picked and collected:
+                logger.debug(
+                    "album_clear_delete_scan_miss",
+                    device_id=device_id,
+                    raw_texts=[m.get("text", "") for m in collected[:8]],
+                )
+            return picked
+
+        async def _locate_delete_button_stable() -> dict | None:
+            """Require the same delete button on two scans before tapping."""
+            first = await _scan_delete_button()
+            if not first:
+                return None
+            await asyncio.sleep(delete_stable_delay)
+            second = await _scan_delete_button()
+            if not second or not delete_match_is_stable(first, second):
+                logger.info(
+                    "album_clear_delete_unstable",
+                    device_id=device_id,
+                    first_text=first.get("text", ""),
+                    second_text=(second or {}).get("text", ""),
+                )
+                return None
+            return second
 
         async def _tap_delete_once() -> bool:
-            """Scan the live screen for the affirmative Delete button and tap it once."""
-            matches = await self.find_text_on_device(device_id, list(DELETE_CONFIRM_TEXTS))
-            candidates = [
-                m
-                for m in matches
-                if not any(neg in str(m.get("text", "")).lower() for neg in negative_words)
-            ]
-            if not candidates:
-                if matches:
-                    logger.info(
-                        "album_clear_skip_negative",
-                        device_id=device_id,
-                        texts=[m.get("text", "") for m in matches],
-                    )
+            """Tap delete exactly once after the button is verified stable."""
+            target = await _locate_delete_button_stable()
+            if not target:
                 return False
-            best = max(candidates, key=lambda m: m.get("confidence", 0))
-            await self.tap(device_id, int(best["x"]), int(best["y"]))
+            await self.tap(device_id, int(target["x"]), int(target["y"]))
             logger.info(
                 "album_clear_delete_tap",
                 device_id=device_id,
-                text=best.get("text", ""),
-                x=int(best["x"]),
-                y=int(best["y"]),
+                text=target.get("text", ""),
+                x=int(target["x"]),
+                y=int(target["y"]),
             )
             return True
 
         async def _watch_and_tap() -> None:
-            """Constantly look for the Delete confirmation and tap it, for the whole run."""
+            """Wait for the sheet, verify delete, tap once, then pause before retry."""
             nonlocal tap_count, last_tap_time
+            await asyncio.sleep(1.0)
             while not stop.is_set():
                 if await _tap_delete_once():
                     tap_count += 1
                     last_tap_time = loop.time()
                     delete_pressed.set()
-                    # Let the popup dismiss so the next scan doesn't tap empty space.
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(delete_settle_after_tap)
                 else:
                     await asyncio.sleep(0.4)
 
@@ -652,10 +771,10 @@ class DeviceController:
         # Never tap deny/cancel variants — "Allow" is a partial match on those.
         negative_words = ("don't", "dont", "cancel", "deny", "not now", "don't allow")
 
-        def _upload() -> int:
+        def _upload_batch(batch: list[str]) -> int:
             response = self._api.shortcut_album_upload(
                 self._ids(device_id),
-                files=abs_files,
+                files=batch,
                 album_name=album_name,
                 zip=1 if zip_files else 0,
                 outtime=timeout_ms,
@@ -666,7 +785,7 @@ class DeviceController:
                     "album_upload_failed",
                     device_id=device_id,
                     message=message,
-                    files=abs_files,
+                    files=batch,
                 )
                 raise RuntimeError(message)
             items = getattr(getattr(response, "data", None), "list", None) or []
@@ -704,10 +823,22 @@ class DeviceController:
                 else:
                     await asyncio.sleep(0.4)
 
-        logger.info("album_upload", device_id=device_id, file_count=expected)
+        logger.info(
+            "album_upload",
+            device_id=device_id,
+            file_count=expected,
+            order=[Path(f).name for f in abs_files],
+        )
         watcher = asyncio.create_task(_watch_and_tap())
+        reported = 0
         try:
-            reported = await self._run_sync(_upload)
+            # Upload one file at a time, last file in list last, so post 1's video
+            # lands in the first gallery picker slot (iOS recents are newest-first).
+            for path in reversed(abs_files):
+                batch_reported = await self._run_sync(lambda p=path: _upload_batch([p]))
+                reported = max(reported, batch_reported)
+                if path != abs_files[0]:
+                    await asyncio.sleep(1.5)
             # Permission dialogs can appear just after the API returns too.
             await asyncio.sleep(post_grace_seconds)
         finally:
@@ -805,10 +936,11 @@ class DeviceController:
         *,
         threshold: float = 0.75,
         contain: bool = True,
+        rect: list[int] | None = None,
     ) -> list[dict[str, Any]]:
         def _find() -> list[dict[str, Any]]:
             response = self._api.pic_find_text(
-                device_id, texts, similarity=threshold, contain=contain
+                device_id, texts, similarity=threshold, contain=contain, rect=rect
             )
             if not response or not self._ok(response):
                 return []

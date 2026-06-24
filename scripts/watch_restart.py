@@ -12,6 +12,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 CONFIG = PROJECT_ROOT / "config" / "config.yaml"
 
+# Load .env before spawning the server subprocess.
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from imouse_farm.utils.env_file import load_env_file  # noqa: E402
+
+load_env_file(PROJECT_ROOT / ".env")
+
 WATCH_DIRS = (
     PROJECT_ROOT / "src",
     PROJECT_ROOT / "config",

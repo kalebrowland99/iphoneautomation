@@ -38,6 +38,7 @@ async def test_stop_device_clears_paused_without_runner() -> None:
         state_machine=MagicMock(),
         action_engine=MagicMock(),
         db=MagicMock(),
+        permission_watchers=None,
     )
 
     assert await engine.stop_device(device_id) is True

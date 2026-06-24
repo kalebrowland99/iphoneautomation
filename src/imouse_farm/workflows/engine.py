@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+import time
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
@@ -19,13 +20,26 @@ from imouse_farm.config.models import (
 )
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
+from imouse_farm.permissions.watcher import PermissionWatcherManager
 from imouse_farm.popups.manager import PopupManager
 from imouse_farm.screenshots.service import ScreenshotService
 from imouse_farm.state.machine import StateMachine
-from imouse_farm.post.post_caption_store import get_post_caption
+from imouse_farm.post.post_caption_store import (
+    get_final_caption,
+    get_gallery_coords,
+    get_onscreen_text,
+)
+from imouse_farm.settings.device_settings import get_debug_skip_post
 from imouse_farm.utils.gallery import phone_gallery_folder
 from imouse_farm.utils.logging import get_logger
-from imouse_farm.vision.base import VisionAnalysis, VisionProvider
+from imouse_farm.vision.fallbacks import (
+    apply_detection_fallbacks,
+    apply_exclusive_detections,
+    apply_tap_offsets,
+    detection_satisfied,
+    DETECTION_FALLBACKS,
+    expand_template_names,
+)
 
 logger = get_logger(__name__)
 
@@ -52,6 +66,7 @@ class WorkflowRunner:
         action_engine: ActionEngine,
         db: DatabaseRepository,
         on_event: EventCallback | None = None,
+        on_finished: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._workflow = workflow
         self._device_id = device_id
@@ -64,6 +79,7 @@ class WorkflowRunner:
         self._actions = action_engine
         self._db = db
         self._on_event = on_event
+        self._on_finished = on_finished
         self._running = False
         self._step_failed = False
         self._failure_message = ""
@@ -127,6 +143,13 @@ class WorkflowRunner:
                 if self._workflow.max_iterations > 0 and iteration > self._workflow.max_iterations:
                     break
 
+                self._refresh_post_variables(iteration)
+                await self._log_activity(
+                    "info",
+                    "workflow",
+                    f"{self._workflow.name} post {iteration}/{self._workflow.max_iterations or iteration}",
+                )
+
                 for step in self._workflow.steps:
                     if not self._running:
                         break
@@ -168,6 +191,8 @@ class WorkflowRunner:
         finally:
             self._running = False
             await self._device_manager.set_workflow(self._device_id, "")
+            if self._on_finished:
+                await self._on_finished(self._device_id)
 
     def _init_device_variables(self) -> None:
         device = self._device_manager.get_device(self._device_id)
@@ -181,7 +206,6 @@ class WorkflowRunner:
         self._variables["phone_name"] = device.phone_name
         self._variables["device_slot"] = device.user_name
         self._variables["gallery_folder"] = str(folder)
-        self._variables["post_caption"] = get_post_caption()
         logger.info(
             "workflow_variables",
             device_id=self._device_id,
@@ -190,10 +214,103 @@ class WorkflowRunner:
             gallery_folder=str(folder),
         )
 
+    def _refresh_post_variables(self, post_index: int) -> None:
+        self._variables["post_index"] = post_index
+        self._variables["post_caption"] = get_onscreen_text(self._device_id, post_index)
+        self._variables["final_post_caption"] = get_final_caption(self._device_id, post_index)
+        gx, gy = get_gallery_coords(post_index)
+        self._variables["gallery_x"] = gx
+        self._variables["gallery_y"] = gy
+        logger.info(
+            "workflow_post_variables",
+            device_id=self._device_id,
+            post_index=post_index,
+            gallery_x=gx,
+            gallery_y=gy,
+        )
+
+    def _filter_min_confidence(self, detections: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        if not hasattr(self._vision, "min_confidence_for"):
+            return detections
+        result = dict(detections)
+        for name in list(result):
+            min_conf = self._vision.min_confidence_for(name)
+            if min_conf is not None and float(result[name].get("confidence", 0)) < min_conf:
+                del result[name]
+        return result
+
+    def _current_detections(self) -> dict[str, dict[str, Any]]:
+        detections: dict[str, dict[str, Any]] = {}
+        if self._last_analysis:
+            detections = {
+                d.name: {"x": d.x, "y": d.y, "confidence": d.confidence}
+                for d in self._last_analysis.detections
+            }
+        stored = self._actions._last_detections.get(self._device_id, {})
+        for name, hit in stored.items():
+            if name not in detections:
+                detections[name] = dict(hit)
+        return detections
+
     def _has_detection(self, name: str) -> bool:
-        if not self._last_analysis or not name:
+        if not name:
             return False
-        return any(d.name == name for d in self._last_analysis.detections)
+        detections = apply_detection_fallbacks(self._current_detections())
+        return detection_satisfied(detections, name)
+
+    def _set_detection(self, name: str, hit: dict[str, Any]) -> None:
+        entry = {
+            "x": int(hit["x"]),
+            "y": int(hit["y"]),
+            "confidence": float(hit.get("confidence", 1.0)),
+        }
+        if hit.get("matched_via"):
+            entry["matched_via"] = hit["matched_via"]
+        detections = self._current_detections()
+        detections[name] = entry
+        self._actions.set_detections(self._device_id, detections)
+        if self._last_analysis:
+            remaining = [d for d in self._last_analysis.detections if d.name != name]
+            remaining.append(
+                DetectionResult(
+                    name=name,
+                    confidence=entry["confidence"],
+                    x=entry["x"],
+                    y=entry["y"],
+                    detection_type=str(hit.get("detection_type", "ocr")),
+                )
+            )
+            self._last_analysis.detections = remaining
+
+    async def _device_ocr_best_hit(
+        self,
+        texts: list[str],
+        *,
+        threshold: float = 0.75,
+        prefer_bottom: bool = False,
+    ) -> dict[str, Any] | None:
+        ctrl = self._device_manager.controller
+        for text in texts:
+            query = str(text).strip()
+            if not query:
+                continue
+            matches = await ctrl.find_text_on_device(
+                self._device_id,
+                [query],
+                threshold=threshold,
+                contain=True,
+            )
+            if not matches:
+                continue
+            if prefer_bottom:
+                best = max(
+                    matches,
+                    key=lambda m: (int(m["y"]), float(m.get("confidence", 0))),
+                )
+            else:
+                best = max(matches, key=lambda m: float(m.get("confidence", 0)))
+            return {**best, "text": best.get("text") or query}
+        return None
 
     async def _log_activity(
         self,
@@ -215,10 +332,23 @@ class WorkflowRunner:
             device = self._device_manager.get_device(self._device_id)
             if device and device.current_state != step.when_state:
                 return f"state is {device.current_state.value}, need {step.when_state.value}"
-        if step.when_detection and not self._has_detection(step.when_detection):
+        if (
+            step.when_detection
+            and step.type != "wait_for_detection"
+            and not self._has_detection(step.when_detection)
+        ):
             return f"'{step.when_detection}' not detected"
         if step.unless_detection and self._has_detection(step.unless_detection):
             return f"'{step.unless_detection}' is present"
+        if step.when_post_index is not None:
+            current = int(self._variables.get("post_index", 0))
+            if current != step.when_post_index:
+                return f"post {current}, need post {step.when_post_index}"
+        debug_skip = get_debug_skip_post(self._device_id)
+        if step.when_debug_skip_post is True and not debug_skip:
+            return "debug skip post is off"
+        if step.unless_debug_skip_post is True and debug_skip:
+            return "debug skip post is on"
         return None
 
     async def _execute_step(self, step: WorkflowStepConfig) -> None:
@@ -254,6 +384,8 @@ class WorkflowRunner:
                     await self._step_analyze(step)
                 case "determine_state":
                     await self._step_determine_state(step)
+                case "check_ocr_state":
+                    await self._step_check_ocr_state(step)
                 case "check_popups" | "handle_popups":
                     await self._step_check_popups(step)
                 case "execute_action":
@@ -262,6 +394,8 @@ class WorkflowRunner:
                     await self._step_verify(step)
                 case "wait" | "wait_random":
                     await self._step_wait(step)
+                case "wait_for_detection":
+                    await self._step_wait_for_detection(step)
                 case _:
                     logger.warning("unknown_step_type", step_type=step.type, name=step.name)
         except Exception as exc:
@@ -283,6 +417,142 @@ class WorkflowRunner:
         self._has_recent_screenshot = True
         self._has_recent_analysis = False
 
+    async def _device_ocr_has_text(
+        self,
+        texts: list[str],
+        *,
+        threshold: float = 0.65,
+    ) -> tuple[bool, str]:
+        """Return whether any label is visible via on-device OCR."""
+        ctrl = self._device_manager.controller
+        for text in texts:
+            query = str(text).strip()
+            if not query:
+                continue
+            queries = [query]
+            if query != query.upper():
+                queries.append(query.upper())
+            if query != query.lower():
+                queries.append(query.lower())
+            for candidate in queries:
+                matches = await ctrl.find_text_on_device(
+                    self._device_id,
+                    [candidate],
+                    threshold=threshold,
+                    contain=True,
+                )
+                if matches:
+                    hit = max(matches, key=lambda m: float(m.get("confidence", 0)))
+                    return True, str(hit.get("text") or candidate)
+        return False, ""
+
+    async def _step_check_ocr_state(self, step: WorkflowStepConfig) -> None:
+        """Set device state from on-device OCR, with optional template fallback."""
+        action = self._resolve_variables(step.action)
+        texts = [str(t) for t in (action.get("texts") or ["Not Connected"]) if str(t).strip()]
+        threshold = float(action.get("threshold", 0.65))
+        retry_delay = float(action.get("retry_delay", 1.5))
+        timeout = float(action.get("duration_seconds", 12))
+        state_if_found = DeviceState(action.get("state_if_found", "WAITING"))
+        state_if_missing = DeviceState(action.get("state_if_missing", "ACTIVE"))
+        fallback_template = str(action.get("fallback_template") or "").strip() or None
+        state_if_fallback = DeviceState(action.get("state_if_fallback", "WAITING"))
+        require_state = action.get("require_state")
+        required = DeviceState(require_state) if require_state else None
+
+        deadline = time.monotonic() + timeout
+        matched_text = ""
+        found = False
+        while self._running:
+            found, matched_text = await self._device_ocr_has_text(
+                texts, threshold=threshold
+            )
+            if found or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(retry_delay)
+
+        if found:
+            state = state_if_found
+            reason = f"found '{matched_text}'"
+        else:
+            state = state_if_missing
+            reason = f"'{texts[0]}' not found"
+            if fallback_template and state == state_if_missing:
+                capture = WorkflowStepConfig(
+                    type="screenshot",
+                    name=f"{step.name}_fallback_capture",
+                    templates=[fallback_template],
+                )
+                analyze = WorkflowStepConfig(
+                    type="analyze_screen",
+                    name=f"{step.name}_fallback_analyze",
+                    templates=[fallback_template],
+                )
+                await self._step_capture(capture)
+                await self._step_analyze(analyze)
+                if self._has_detection(fallback_template):
+                    state = state_if_fallback
+                    hit = self._actions._last_detections.get(self._device_id, {}).get(
+                        fallback_template, {}
+                    )
+                    conf = float(hit.get("confidence", 0)) if hit else 0.0
+                    reason = f"OCR missed but {fallback_template} visible (conf={conf:.2f})"
+
+        await self._state_machine.transition(
+            self._device_id, state, reason=f"workflow:{step.name}", force=True
+        )
+        await self._log_activity(
+            "info",
+            "workflow",
+            f"VPN status → {state.value} ({reason})",
+            step=step.name,
+            matched_text=matched_text or None,
+            texts=texts,
+        )
+        if required and state != required:
+            raise RuntimeError(
+                f"VPN check expected state {required.value}, got {state.value} ({reason})"
+            )
+
+    async def _merge_device_ocr_keywords(self, keywords: list[str]) -> None:
+        """Supplement local OCR with on-device text search (better for Shadowrocket)."""
+        if not self._last_analysis:
+            return
+        ctrl = self._device_manager.controller
+        extras: list[str] = []
+        for keyword in keywords:
+            kw = str(keyword).strip()
+            if not kw:
+                continue
+            queries = [kw]
+            if kw != kw.upper():
+                queries.append(kw.upper())
+            if kw != kw.lower():
+                queries.append(kw.lower())
+            for query in queries:
+                matches = await ctrl.find_text_on_device(
+                    self._device_id,
+                    [query],
+                    threshold=0.72,
+                    contain=True,
+                )
+                if matches:
+                    extras.append(kw)
+                    for match in matches:
+                        text = str(match.get("text", "")).strip()
+                        if text:
+                            extras.append(text)
+                    break
+        if extras:
+            merged = f"{self._last_analysis.ocr_text} {' '.join(extras)}".strip()
+            self._last_analysis.ocr_text = merged
+            logger.info(
+                "device_ocr_keywords_merged",
+                device_id=self._device_id,
+                keywords=keywords,
+                matched=extras,
+            )
+
     async def _step_analyze(self, step: WorkflowStepConfig) -> None:
         if not self._last_screenshot:
             path = await self._screenshots.get_latest_path(self._device_id)
@@ -292,13 +562,16 @@ class WorkflowRunner:
         else:
             screenshot_path = self._last_screenshot["file_path"]
 
+        template_names = expand_template_names(step.templates or None)
         self._last_analysis = self._vision.analyze(
             self._device_id,
             screenshot_path,
-            template_names=step.templates or None,
+            template_names=template_names or None,
             ocr_regions=step.ocr_regions or None,
             ocr_keywords=step.ocr_keywords or None,
         )
+        if step.ocr_keywords:
+            await self._merge_device_ocr_keywords(step.ocr_keywords)
         self._has_recent_analysis = True
 
         detections = {
@@ -306,8 +579,13 @@ class WorkflowRunner:
             for d in self._last_analysis.detections
         }
         detections = await self._merge_device_template_detections(
-            step.templates or [], detections
+            template_names, detections
         )
+        detections = apply_detection_fallbacks(detections)
+        detections = apply_exclusive_detections(detections)
+        detections = self._filter_min_confidence(detections)
+        if hasattr(self._vision, "tap_offset_for"):
+            detections = apply_tap_offsets(detections, self._vision.tap_offset_for)
         self._actions.set_detections(self._device_id, detections)
         self._last_analysis.detections = [
             DetectionResult(
@@ -328,7 +606,14 @@ class WorkflowRunner:
             provider=self._last_analysis.provider,
         )
         if step.name and not step.name.startswith("_"):
-            det_list = ", ".join(detections.keys()) if detections else "none"
+            det_list = (
+                ", ".join(
+                    f"{k} ({detections[k]['confidence']:.2f})"
+                    for k in sorted(detections)
+                )
+                if detections
+                else "none"
+            )
             await self._log_activity(
                 "info",
                 "vision",
@@ -357,6 +642,8 @@ class WorkflowRunner:
             if not path:
                 continue
             threshold = self._vision.threshold_for(name)
+            if hasattr(self._vision, "device_threshold_for"):
+                threshold = self._vision.device_threshold_for(name)
             rect = (
                 self._vision.search_rect_for(name, width=sw, height=sh)
                 if hasattr(self._vision, "search_rect_for")
@@ -455,13 +742,40 @@ class WorkflowRunner:
             and params.get("detection")
         ):
             detection_name = str(params["detection"])
-            refreshed = await self._merge_device_template_detections(
-                [detection_name], {}
+            refind_templates = expand_template_names([detection_name])
+            await self._step_capture(
+                WorkflowStepConfig(
+                    type="screenshot",
+                    name=f"{step.name}_refind_capture",
+                    templates=refind_templates,
+                )
+            )
+            await self._step_analyze(
+                WorkflowStepConfig(
+                    type="analyze_screen",
+                    name=f"{step.name}_refind_analyze",
+                    templates=refind_templates,
+                )
             )
             current = dict(self._actions._last_detections.get(self._device_id, {}))
-            if detection_name in refreshed:
-                current[detection_name] = refreshed[detection_name]
-            self._actions.set_detections(self._device_id, current)
+            refreshed = await self._merge_device_template_detections(
+                refind_templates, current
+            )
+            refreshed = apply_detection_fallbacks(refreshed)
+            refreshed = self._filter_min_confidence(refreshed)
+            self._actions.set_detections(self._device_id, refreshed)
+            hit = refreshed.get(detection_name)
+            if hit:
+                await self._log_activity(
+                    "info",
+                    "vision",
+                    f"Refind {detection_name} → ({hit['x']}, {hit['y']}) conf={hit.get('confidence')}",
+                    step=step.name,
+                )
+            elif not params.get("optional", False):
+                raise RuntimeError(
+                    f"Refind failed for '{detection_name}' — confidence below minimum"
+                )
 
         if action_type == ActionType.TAP and "x" in params and "y" in params and "detection" not in params:
             logger.warning(
@@ -470,6 +784,19 @@ class WorkflowRunner:
                 step=step.name,
                 message="Coordinate tap without detection — prefer tap_detection",
             )
+
+        if action_type == ActionType.TAP_DETECTION and params.get("detection"):
+            det_name = str(params["detection"])
+            hit = self._actions._last_detections.get(self._device_id, {}).get(det_name)
+            if hit and not step.name.startswith("_"):
+                via = hit.get("matched_via", "")
+                via_note = f" (via {via})" if via else ""
+                await self._log_activity(
+                    "info",
+                    "vision",
+                    f"Tap {det_name}{via_note} at ({hit['x']}, {hit['y']}) conf={hit.get('confidence')}",
+                    step=step.name,
+                )
 
         success = await self._actions.execute_direct(
             self._device_id, action_type, params,
@@ -516,6 +843,120 @@ class WorkflowRunner:
             duration = step.duration_seconds or 1.0
         await asyncio.sleep(duration)
 
+    async def _step_wait_for_detection(self, step: WorkflowStepConfig) -> None:
+        """Poll screenshot + analyze until a template is detected or timeout."""
+        target = step.when_detection or step.template
+        if not target and step.templates:
+            target = step.templates[0]
+        if not target:
+            raise RuntimeError(f"wait_for_detection '{step.name}' needs when_detection or templates")
+
+        action_cfg = self._resolve_variables(step.action or {})
+        ocr_texts = [
+            str(t).strip()
+            for t in (action_cfg.get("ocr_fallback_texts") or [])
+            if str(t).strip()
+        ]
+        ocr_as = str(action_cfg.get("ocr_fallback_as") or "post_ocr").strip() or "post_ocr"
+        ocr_threshold = float(action_cfg.get("ocr_threshold", 0.75))
+        ocr_prefer_bottom = bool(action_cfg.get("ocr_prefer_bottom", False))
+
+        if ocr_texts:
+            cleared = self._current_detections()
+            cleared.pop(ocr_as, None)
+            self._actions.set_detections(self._device_id, cleared)
+
+        templates = expand_template_names(step.templates or [target])
+        timeout = float(step.duration_seconds or 90.0)
+        poll = float(step.min_seconds or 2.0)
+        deadline = time.monotonic() + timeout
+        attempt = 0
+
+        await self._log_activity(
+            "info",
+            "workflow",
+            f"Waiting for {target}"
+            + (f" or OCR {ocr_texts!r}" if ocr_texts else "")
+            + f" (up to {int(timeout)}s)",
+            detection=target,
+        )
+
+        while self._running:
+            if await self._device_manager.is_workflow_paused(self._device_id):
+                await asyncio.sleep(2)
+                continue
+
+            attempt += 1
+            capture_step = WorkflowStepConfig(
+                type="screenshot",
+                name=f"{step.name}_capture",
+                templates=templates,
+            )
+            analyze_step = WorkflowStepConfig(
+                type="analyze_screen",
+                name=f"{step.name}_analyze",
+                templates=templates,
+            )
+            await self._step_capture(capture_step)
+            await self._step_analyze(analyze_step)
+
+            if self._has_detection(target):
+                hit = next(
+                    (d for d in self._last_analysis.detections if d.name == target),
+                    None,
+                ) if self._last_analysis else None
+                if not hit:
+                    for d in self._last_analysis.detections if self._last_analysis else []:
+                        if d.name in (DETECTION_FALLBACKS.get(target) or []):
+                            hit = d
+                            break
+                conf = f"{hit.confidence:.2f}" if hit else "?"
+                await self._log_activity(
+                    "info",
+                    "workflow",
+                    f"Found {target} after {attempt} attempt(s) (conf={conf})",
+                    detection=target,
+                    attempts=attempt,
+                    confidence=float(hit.confidence) if hit else None,
+                )
+                return
+
+            if ocr_texts:
+                ocr_hit = await self._device_ocr_best_hit(
+                    ocr_texts,
+                    threshold=ocr_threshold,
+                    prefer_bottom=ocr_prefer_bottom,
+                )
+                if ocr_hit:
+                    self._set_detection(
+                        ocr_as,
+                        {
+                            **ocr_hit,
+                            "matched_via": "ocr",
+                            "detection_type": "ocr",
+                        },
+                    )
+                    await self._log_activity(
+                        "info",
+                        "workflow",
+                        f"Found {ocr_as} via OCR '{ocr_hit.get('text')}' "
+                        f"after {attempt} attempt(s) at ({ocr_hit['x']}, {ocr_hit['y']})",
+                        detection=ocr_as,
+                        attempts=attempt,
+                    )
+                    return
+
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"Timeout waiting for '{target}'"
+                    + (f" or OCR {ocr_texts!r}" if ocr_texts else "")
+                    + f" after {int(timeout)}s ({attempt} attempts)"
+                )
+
+            await asyncio.sleep(poll)
+
+        raise RuntimeError(f"Stopped while waiting for '{target}'")
+
     async def _handle_failure(self, step: WorkflowStepConfig, exc: Exception) -> None:
         on_failure = step.on_failure
         if on_failure == "retry":
@@ -545,9 +986,9 @@ class WorkflowRunner:
     def _substitute(self, text: str) -> Any:
         def replacer(match: re.Match[str]) -> str:
             key = match.group(1)
-            if key == "post_caption":
-                return get_post_caption()
-            return str(self._variables.get(key, match.group(0)))
+            if key in self._variables:
+                return str(self._variables[key])
+            return match.group(0)
         result = re.sub(r"\$\{(\w+)\}", replacer, text)
         try:
             return int(result)
@@ -572,6 +1013,7 @@ class WorkflowEngine:
         state_machine: StateMachine,
         action_engine: ActionEngine,
         db: DatabaseRepository,
+        permission_watchers: PermissionWatcherManager | None = None,
     ) -> None:
         self._config = config
         self._workflows = workflows
@@ -582,6 +1024,7 @@ class WorkflowEngine:
         self._state_machine = state_machine
         self._actions = action_engine
         self._db = db
+        self._permission_watchers = permission_watchers
         self._runners: dict[str, WorkflowRunner] = {}
         self._event_callbacks: list[EventCallback] = []
 
@@ -603,6 +1046,13 @@ class WorkflowEngine:
         if key in self._runners and self._runners[key].is_running:
             return False
 
+        if self._permission_watchers:
+            await self._permission_watchers.acquire(device_id)
+
+        async def _on_runner_finished(dev_id: str) -> None:
+            if self._permission_watchers:
+                await self._permission_watchers.release(dev_id)
+
         runner = WorkflowRunner(
             workflow=workflow,
             device_id=device_id,
@@ -615,6 +1065,7 @@ class WorkflowEngine:
             action_engine=self._actions,
             db=self._db,
             on_event=self._emit,
+            on_finished=_on_runner_finished,
         )
         self._runners[key] = runner
         await runner.start()
@@ -640,10 +1091,17 @@ class WorkflowEngine:
         for key in keys_to_remove:
             self._runners.pop(key, None)
 
+        if stopped and self._permission_watchers:
+            await self._permission_watchers.force_stop(device_id)
+
         device = self._device_manager.get_device(device_id)
         if device:
-            name_match = not workflow_name or device.workflow_name == workflow_name
-            if name_match and (device.workflow_name or device.workflow_paused):
+            should_clear = (
+                not workflow_name
+                or device.workflow_name in ("", workflow_name)
+                or stopped
+            )
+            if should_clear and (device.workflow_name or device.workflow_paused or stopped):
                 await self._device_manager.resume_workflow(device_id)
                 await self._device_manager.set_workflow(device_id, "")
                 if device.current_state == DeviceState.ERROR:
@@ -657,6 +1115,8 @@ class WorkflowEngine:
         for runner in list(self._runners.values()):
             await runner.stop()
         self._runners.clear()
+        if self._permission_watchers:
+            await self._permission_watchers.stop_all()
 
     async def start_for_group(self, group_name: str) -> int:
         group_config = self._config.device_groups.get(group_name)

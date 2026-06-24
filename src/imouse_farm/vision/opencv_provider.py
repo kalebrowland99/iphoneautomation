@@ -18,17 +18,18 @@ logger = get_logger(__name__)
 # Small UI icons; backgrounds often vary (video frame behind button).
 _SMALL_ICON_NAMES = frozenset(
     {
-        "vpn",
         "shadowrocket",
         "vpntoggle",
+        "bluetoggle",
         "tiktok",
         "photos",
-        "plus",
         "gallery",
         "aa",
         "border",
         "border2",
         "editor",
+        "continuearrow",
+        "post",
     }
 )
 
@@ -77,13 +78,11 @@ class OpenCVVisionProvider(VisionProvider):
         templates = self._resolve_templates(template_names)
         requested = set(template_names or [])
         for name, (template, threshold) in templates.items():
-            search_screen, offset_x, offset_y = self._search_region(screen, name)
             element = self._ui_element_for(name)
+            if element.get("detect_method") == "ocr":
+                continue
+            search_screen, offset_x, offset_y = self._search_region(screen, name)
             match_white = bool(element.get("match_white_text", False))
-            if name == "vpn":
-                roi_h = max(int(screen.shape[0] * 0.12), template.shape[0] + 4)
-                search_screen = screen[0:roi_h, :]
-                offset_x, offset_y = 0, 0
             result = match_template(
                 search_screen, template, threshold, name, match_white_text=match_white
             )
@@ -104,6 +103,11 @@ class OpenCVVisionProvider(VisionProvider):
                 ename = element.get("name", "")
                 if ename not in requested:
                     continue
+                if element.get("detect_method") == "ocr":
+                    result = self._ocr_detection(screen, element, ename)
+                    if result and not any(d.name == ename for d in detections):
+                        detections.append(result)
+                    continue
                 path = self._templates_dir / element.get("template", "")
                 if not path.exists():
                     for ext in (".jpg", ".jpeg", ".png"):
@@ -118,10 +122,6 @@ class OpenCVVisionProvider(VisionProvider):
                         if ename in _SMALL_ICON_NAMES:
                             threshold = min(threshold, self._config.small_template_threshold)
                         search_screen, offset_x, offset_y = self._search_region(screen, ename)
-                        if ename == "vpn":
-                            roi_h = max(int(screen.shape[0] * 0.12), tmpl.shape[0] + 4)
-                            search_screen = screen[0:roi_h, :]
-                            offset_x, offset_y = 0, 0
                         match_white = bool(element.get("match_white_text", False))
                         result = match_template(
                             search_screen,
@@ -130,7 +130,7 @@ class OpenCVVisionProvider(VisionProvider):
                             ename,
                             match_white_text=match_white,
                         )
-                        if result:
+                        if result and not any(d.name == ename for d in detections):
                             result = DetectionResult(
                                 name=result.name,
                                 confidence=result.confidence,
@@ -170,12 +170,34 @@ class OpenCVVisionProvider(VisionProvider):
 
     def template_path_for(self, name: str) -> Path | None:
         """Resolve on-disk path for a named template."""
+        element = self._ui_element_for(name)
+        if element.get("detect_method") == "ocr":
+            return None
         threshold, path = self._lookup_template(name)
         return path if path.exists() else None
 
     def threshold_for(self, name: str) -> float:
         threshold, _ = self._lookup_template(name)
         return threshold
+
+    def device_threshold_for(self, name: str) -> float:
+        element = self._ui_element_for(name)
+        if element.get("device_threshold") is not None:
+            return float(element["device_threshold"])
+        return self.threshold_for(name)
+
+    def min_confidence_for(self, name: str) -> float | None:
+        element = self._ui_element_for(name)
+        if element.get("min_confidence") is not None:
+            return float(element["min_confidence"])
+        return None
+
+    def tap_offset_for(self, name: str) -> tuple[int, int]:
+        element = self._ui_element_for(name)
+        offset = element.get("tap_offset")
+        if isinstance(offset, (list, tuple)) and len(offset) == 2:
+            return int(offset[0]), int(offset[1])
+        return 0, 0
 
     def search_rect_for(
         self, name: str, *, width: int | None = None, height: int | None = None
@@ -201,6 +223,32 @@ class OpenCVVisionProvider(VisionProvider):
             if element.get("name") == name:
                 return element
         return {}
+
+    def _ocr_detection(
+        self, screen: Any, element: dict[str, Any], name: str
+    ) -> DetectionResult | None:
+        """Find OCR keyword in a template search region; detection key is ``name``."""
+        keyword = str(element.get("ocr_keyword", "")).strip()
+        if not keyword:
+            return None
+        search_screen, offset_x, offset_y = self._search_region(screen, name)
+        processed = preprocess_for_ocr(search_screen)
+        min_conf = float(element.get("ocr_min_confidence", 60.0))
+        hits = find_keywords(
+            processed, [keyword], self._config.ocr_language, min_confidence=min_conf
+        )
+        if not hits:
+            return None
+        best = max(hits, key=lambda d: d.confidence)
+        return DetectionResult(
+            name=name,
+            confidence=best.confidence,
+            x=best.x + offset_x,
+            y=best.y + offset_y,
+            width=best.width,
+            height=best.height,
+            detection_type="ocr",
+        )
 
     def _search_region(
         self, screen: Any, name: str
@@ -254,6 +302,8 @@ class OpenCVVisionProvider(VisionProvider):
 
         for name in names_to_load:
             if not name:
+                continue
+            if self._ui_element_for(name).get("detect_method") == "ocr":
                 continue
             threshold, path = self._lookup_template(name)
             if path.exists():

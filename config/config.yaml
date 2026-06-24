@@ -20,6 +20,12 @@ screenshots:
   periodic_interval_seconds: 60
   max_per_device: 100
 
+openai:
+  enabled: true
+  api_key: ""  # set OPENAI_API_KEY in .env (see .env.example)
+  model: "gpt-4o-mini"
+  temperature: 0.85
+
 gallery:
   base_directory: "gallery"
   media_extensions:
@@ -79,6 +85,7 @@ notifications:
 dashboard:
   host: "0.0.0.0"
   port: 8080
+  farm_slots: 20
   cors_origins:
     - "*"
 

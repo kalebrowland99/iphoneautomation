@@ -13,6 +13,8 @@ def test_list_debug_tests() -> None:
     assert len(tests) == len(registry)
     ids = {t["id"] for t in tests}
     assert "tap-vpntoggle" in ids
+    assert "detect-vpn-on" in ids
+    assert "detect-vpn-off" in ids
     assert "tap-ocr-allow" in ids
     assert all(t["label"] for t in tests)
 
@@ -43,6 +45,12 @@ def test_debug_tests_have_required_fields() -> None:
             assert spec["hint"]
         elif kind == "open_photos_spotlight":
             assert test_id == "open-photos-spotlight"
+        elif kind == "detect":
+            assert spec["detection"]
+            assert spec["hint"]
+        elif kind == "detect_ocr":
+            assert spec["texts"]
+            assert spec["hint"]
 
 
 def test_upload_gallery_is_first_debug_test() -> None:
