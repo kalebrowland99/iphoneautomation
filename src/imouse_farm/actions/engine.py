@@ -402,7 +402,7 @@ class ActionEngine:
                 )
             case ActionType.ALBUM_UPLOAD:
                 self._block_album_when_vpn_on(device_id, "Album upload")
-                from imouse_farm.utils.gallery import list_media_files
+                from imouse_farm.utils.gallery import list_media_files_for_upload
 
                 folder = Path(str(params.get("folder", ""))).resolve()
                 if not folder.is_dir():
@@ -410,7 +410,7 @@ class ActionEngine:
                 extensions = params.get("extensions") or [
                     ".mp4", ".mov", ".m4v", ".jpg", ".jpeg", ".png", ".heic"
                 ]
-                files = list_media_files(folder, extensions)
+                files = list_media_files_for_upload(folder, extensions)
                 if not files:
                     raise RuntimeError(f"No media files in {folder}")
                 return await ctrl.album_upload(

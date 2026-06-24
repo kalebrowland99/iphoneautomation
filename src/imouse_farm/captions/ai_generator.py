@@ -14,10 +14,31 @@ logger = get_logger(__name__)
 
 
 def stem_to_food_name(stem: str) -> str:
-    """Turn a filename stem like ``chicken_tikka_masala`` into readable text."""
-    text = re.sub(r"[_\-]+", " ", stem.strip())
+    """Food name is the second hyphen-separated segment of the gallery filename stem."""
+    parts = stem.strip().split("-")
+    if len(parts) < 2:
+        return ""
+    text = re.sub(r"[_\-]+", " ", parts[1].strip())
     text = re.sub(r"\s+", " ", text)
     return text.title() if text else ""
+
+
+def food_to_hashtag_slug(food_name: str) -> str:
+    """Lowercase alphanumeric slug for TikTok hashtags."""
+    return re.sub(r"[^a-z0-9]", "", food_name.lower())
+
+
+def resolve_hashtag_template(template: str, food_name: str) -> str:
+    """Fill ``#______`` and ``#toxic_____`` placeholders from a food name."""
+    slug = food_to_hashtag_slug(food_name)
+    text = template.strip()
+    if slug:
+        text = re.sub(r"#toxic_+", f"#toxic{slug}", text, flags=re.IGNORECASE)
+        text = re.sub(r"#_+", f"#{slug}", text)
+    else:
+        text = re.sub(r"#toxic_+\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"#_+\s*", "", text)
+    return normalize_hashtags(text)
 
 
 def normalize_hashtags(raw: str) -> str:
@@ -76,6 +97,8 @@ async def generate_post_captions(
         "with exactly 3 objects. "
         'Each "final" must be 120-280 words, all lowercase, viral hooks, line breaks, '
         "light emoji ok; do NOT include hashtags. "
+        "Sound like a real Gen Z person typing the caption on their phone: casual, punchy, "
+        "internet cadence, imperfect grammar ok, never corporate or essay-like. "
         "Read each post's raw video filename to identify the food. "
         "Write statements and facts only with a personal anecdote tone. "
         "Never ask questions. No question marks. "
@@ -107,10 +130,10 @@ async def generate_post_captions(
     )
     raw = (response.choices[0].message.content or "").strip()
     posts = _parse_posts_json(raw)
-    tag_line = normalize_hashtags(hashtags)
     result: list[dict[str, str]] = []
     for i in range(3):
         item = posts[i] if i < len(posts) else {}
+        tag_line = resolve_hashtag_template(hashtags, labels[i])
         final = append_hashtags(str(item.get("final", "")).strip(), tag_line)
         result.append({"final": final})
     logger.info("ai_captions_generated", posts=len(result), model=config.model)

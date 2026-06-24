@@ -827,17 +827,16 @@ class DeviceController:
             "album_upload",
             device_id=device_id,
             file_count=expected,
-            order=[Path(f).name for f in abs_files],
+            upload_sequence=[Path(f).name for f in abs_files],
         )
         watcher = asyncio.create_task(_watch_and_tap())
         reported = 0
         try:
-            # Upload one file at a time, last file in list last, so post 1's video
-            # lands in the first gallery picker slot (iOS recents are newest-first).
-            for path in reversed(abs_files):
+            # One file at a time, in caller order (engine passes Recents-ready sequence).
+            for i, path in enumerate(abs_files):
                 batch_reported = await self._run_sync(lambda p=path: _upload_batch([p]))
                 reported = max(reported, batch_reported)
-                if path != abs_files[0]:
+                if i + 1 < len(abs_files):
                     await asyncio.sleep(1.5)
             # Permission dialogs can appear just after the API returns too.
             await asyncio.sleep(post_grace_seconds)

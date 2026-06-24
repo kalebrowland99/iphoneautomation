@@ -898,7 +898,9 @@ async def upload_gallery_debug(
         device.user_name,
         device.phone_name,
     )
-    files = list_media_files(folder, gallery.media_extensions)
+    from imouse_farm.utils.gallery import list_media_files_for_upload
+
+    files = list_media_files_for_upload(folder, gallery.media_extensions)
     if not files:
         message = f"No media files in {folder} — add videos/images for slot {device.user_name}"
         await app.db.log_activity(

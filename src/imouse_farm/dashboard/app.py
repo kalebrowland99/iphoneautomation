@@ -24,7 +24,7 @@ from imouse_farm.dashboard.test_actions import (
     run_debug_test,
     tap_vpntoggle,
 )
-from imouse_farm.captions.ai_generator import generate_post_captions
+from imouse_farm.captions.ai_generator import generate_post_captions, stem_to_food_name
 from imouse_farm.captions.prompt_store import (
     get_ai_settings,
     set_ai_hashtags,
@@ -314,6 +314,7 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
                 **row,
                 "media_file": stem,
                 "placeholder": stem,
+                "food_name": stem_to_food_name(stem),
             })
         return {"posts": posts, "media_files": media_stems}
 
@@ -391,11 +392,13 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         posts: list[dict[str, Any]] = []
         for i, cap in enumerate(generated, start=1):
             set_final_caption(device_id, i, cap["final"])
+            stem = media_stems[i - 1] if i <= len(media_stems) else ""
             posts.append({
                 "post": i,
                 "onscreen": get_onscreen_text(device_id, i),
                 "final": cap["final"],
-                "media_file": media_stems[i - 1] if i <= len(media_stems) else "",
+                "media_file": stem,
+                "food_name": stem_to_food_name(stem),
             })
 
         await app_instance.db.log_activity(

@@ -9,5 +9,5 @@ def test_default_prompt_reads_filename_and_mentions_labely() -> None:
     assert "filename" in prompt.lower()
     assert "labely" in prompt.lower()
     assert "lowercase" in prompt.lower()
-    assert "never ask questions" in prompt.lower()
+    assert "gen z" in prompt.lower()
     assert "do not use hyphens" in prompt.lower()

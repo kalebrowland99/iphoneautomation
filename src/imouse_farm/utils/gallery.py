@@ -19,7 +19,7 @@ def natural_sort_key(name: str) -> tuple[str | int, ...]:
 
 
 def list_media_files(folder: Path, extensions: list[str]) -> list[str]:
-    """Return absolute media paths in stable natural-sorted order."""
+    """Return absolute media paths in stable natural-sorted order (post 1 → post N)."""
     folder = folder.resolve()
     allowed = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions}
     paths = [
@@ -29,6 +29,15 @@ def list_media_files(folder: Path, extensions: list[str]) -> list[str]:
     ]
     paths.sort(key=lambda p: natural_sort_key(p.name))
     return [str(p) for p in paths]
+
+
+def list_media_files_for_upload(folder: Path, extensions: list[str]) -> list[str]:
+    """Upload sequence for TikTok/iOS Recents (newest-first in the picker).
+
+    Post 1 uses the first file in natural order; upload it last so it appears in
+  the leftmost Recents slot when the gallery opens.
+    """
+    return list(reversed(list_media_files(folder, extensions)))
 
 
 def media_stem_for_post(files: list[str], post: int) -> str:

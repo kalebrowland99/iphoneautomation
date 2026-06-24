@@ -405,6 +405,28 @@
         }
         .ai-caption-status.error { color: var(--error); }
         .ai-caption-status.success { color: var(--success); }
+        .onscreen-template-section {
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .onscreen-template-section label {
+            display: block;
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            font-weight: 600;
+            margin-bottom: 0.35rem;
+        }
+        .onscreen-template-section select {
+            width: 100%;
+        }
+        .onscreen-template-hint {
+            margin-top: 0.35rem;
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
         .debug-tabs {
             display: flex;
             gap: 0.25rem;
@@ -650,14 +672,23 @@
             <div class="ai-caption-section">
                 <h3>AI captions</h3>
                 <label for="ai-prompt">Caption prompt</label>
-                <textarea id="ai-prompt" rows="8" placeholder="Reads each video filename to find the food, then writes lowercase viral captions…"></textarea>
+                <textarea id="ai-prompt" rows="8" placeholder="Gen Z typing on their phone — lowercase, casual, viral…"></textarea>
                 <label for="ai-hashtags">Hashtags</label>
-                <input type="text" id="ai-hashtags" placeholder="#fyp #food #foodtok #recipe">
+                <input type="text" id="ai-hashtags" placeholder="#______ #toxic_____ #toxinfree #groceryshopping #cleaningredients">
                 <div class="ai-caption-actions">
                     <button type="button" class="btn btn-sm btn-primary" id="btn-ai-generate" onclick="generateAiCaptions()">Generate final captions</button>
                     <span class="ai-caption-status" id="ai-caption-status"></span>
                 </div>
-                <p class="ai-caption-status" style="margin-top:0.35rem">Reads gallery filenames per post (e.g. chicken_tikka_masala.mp4) and fills final captions only.</p>
+                <p class="ai-caption-status" style="margin-top:0.35rem">Reads gallery filenames per post (e.g. 1-chicken_tikka_masala.mp4) and fills final captions only.</p>
+            </div>
+            <div class="onscreen-template-section">
+                <label for="onscreen-template">Onscreen text template</label>
+                <select id="onscreen-template" onchange="applyOnscreenTemplate()">
+                    <option value="">Custom (manual)</option>
+                    <option value="toxic_walmart">The MOST Toxic ___ you should avoid · Walmart Edition</option>
+                    <option value="america_sick">THIS IS WHY AMERICA IS SICK · ___ EDITION</option>
+                </select>
+                <p class="onscreen-template-hint">Uses the second hyphen segment from each gallery filename (e.g. 1-chicken_tikka_masala → Chicken Tikka Masala).</p>
             </div>
             <div id="post-texts">
                 <div class="post-group" data-post="1">
@@ -709,6 +740,24 @@
         let screenshotLoaded = false;
         let debugTab = 'prep';
         let postTextSaveTimers = {};
+        let cachedPostTexts = [];
+
+        const ONSCREEN_TEMPLATES = {
+            toxic_walmart: (food) => `The MOST Toxic ${food} you should avoid\nWalmart Edition`,
+            america_sick: (food) => `THIS IS WHY AMERICA IS SICK\n${food} EDITION`,
+        };
+
+        function stemToFoodName(stem) {
+            if (!stem) return '';
+            const parts = stem.trim().split('-');
+            if (parts.length < 2) return '';
+            const text = parts[1].trim().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
+            return text.replace(/\b\w/g, (c) => c.toUpperCase());
+        }
+
+        function postFoodName(post) {
+            return post.food_name || stemToFoodName(post.media_file || post.placeholder || '');
+        }
 
         function connectWS() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1399,11 +1448,43 @@
             }
         }
 
+        async function applyOnscreenTemplate() {
+            const templateKey = document.getElementById('onscreen-template')?.value || '';
+            localStorage.setItem('onscreenTemplate', templateKey);
+            if (!templateKey || !deviceId) return;
+            const build = ONSCREEN_TEMPLATES[templateKey];
+            if (!build) return;
+
+            let posts = cachedPostTexts;
+            if (!posts.length) {
+                const res = await api(`/devices/${enc(deviceId)}/post-texts`);
+                posts = res.posts || [];
+                cachedPostTexts = posts;
+            }
+
+            let applied = 0;
+            for (const p of posts) {
+                const food = postFoodName(p);
+                if (!food) continue;
+                const on = document.getElementById(`onscreen-${p.post}`);
+                if (!on) continue;
+                on.value = build(food);
+                schedulePostTextSave(p.post, 'onscreen');
+                applied += 1;
+            }
+            if (!applied) {
+                showBanner('No gallery filenames found — add videos to this phone’s gallery folder first.');
+            } else {
+                hideBanner();
+            }
+        }
+
         async function loadPostTexts() {
             if (!deviceId) return;
             try {
                 const res = await api(`/devices/${enc(deviceId)}/post-texts`);
-                for (const p of res.posts || []) {
+                cachedPostTexts = res.posts || [];
+                for (const p of cachedPostTexts) {
                     const on = document.getElementById(`onscreen-${p.post}`);
                     const fin = document.getElementById(`final-${p.post}`);
                     const placeholder = p.placeholder || p.media_file || '';
@@ -1472,6 +1553,11 @@
             connectWS();
             bindPostTextInputs();
             bindCaptionAiInputs();
+            const savedTemplate = localStorage.getItem('onscreenTemplate') || '';
+            const templateEl = document.getElementById('onscreen-template');
+            if (templateEl && savedTemplate && [...templateEl.options].some((o) => o.value === savedTemplate)) {
+                templateEl.value = savedTemplate;
+            }
             try {
                 await loadWorkflows();
                 await loadCaptionAiSettings();
