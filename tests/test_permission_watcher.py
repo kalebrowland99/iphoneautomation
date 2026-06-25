@@ -30,3 +30,18 @@ def test_denies_contacts_location_notifications() -> None:
 def test_button_texts_for_deny_vs_allow() -> None:
     assert "Don't Allow" in button_texts_for_permission(False)
     assert "Allow" in button_texts_for_permission(True)
+
+
+def test_detects_tiktok_email_confirm_dialog() -> None:
+    from imouse_farm.actions.permission_prompts import is_tiktok_email_confirm_dialog
+
+    text = "Confirm use of email\nAdd your email to your account\nNot Now\nConfirm"
+    assert is_tiktok_email_confirm_dialog(text)
+
+
+def test_not_now_label() -> None:
+    from imouse_farm.actions.permission_prompts import is_not_now_label
+
+    assert is_not_now_label("Not Now")
+    assert is_not_now_label("NOT NOW")
+    assert not is_not_now_label("Confirm")

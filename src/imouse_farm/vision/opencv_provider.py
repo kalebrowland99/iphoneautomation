@@ -26,7 +26,6 @@ _SMALL_ICON_NAMES = frozenset(
         "gallery",
         "aa",
         "border",
-        "border2",
         "editor",
         "continuearrow",
         "post",
@@ -359,6 +358,7 @@ class OpenCVVisionProvider(VisionProvider):
                 "update_prompt": DeviceState.WAITING,
                 "login_prompt": DeviceState.WAITING,
                 "confirmation_dialog": DeviceState.WAITING,
+                "tiktok_email_confirm": DeviceState.WAITING,
             }
             return popup_state_map.get(popup_type, DeviceState.UNKNOWN_SCREEN)
 

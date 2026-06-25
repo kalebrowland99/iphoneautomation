@@ -6,12 +6,14 @@ from typing import Any, Awaitable, Callable
 
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
+from imouse_farm.post.post_caption_store import POST_COUNT
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.workflows.engine import WorkflowEngine
 
 logger = get_logger(__name__)
 
 TIKTOK_FULL_PIPELINE = ("tiktok_prep", "tiktok_post", "tiktok_end")
+TIKTOK_POST_END_PIPELINE = ("tiktok_post", "tiktok_end")
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -60,7 +62,7 @@ class WorkflowPipeline:
         pipe = self._pipelines.get(device_id)
         return bool(pipe and pipe["status"] in ("running", "paused"))
 
-    async def start(self, device_id: str) -> bool:
+    async def start(self, device_id: str, *, from_post: int | None = None) -> bool:
         if self.is_active(device_id):
             return False
         if self._engine.list_running():
@@ -68,27 +70,54 @@ class WorkflowPipeline:
                 if entry["device_id"] == device_id:
                     return False
 
+        start_post_index: int | None = None
+        if from_post is not None:
+            if not (2 <= from_post <= POST_COUNT):
+                return False
+            workflows = list(TIKTOK_POST_END_PIPELINE)
+            start_post_index = from_post
+        else:
+            workflows = list(TIKTOK_FULL_PIPELINE)
+
         self._pipelines[device_id] = {
-            "workflows": list(TIKTOK_FULL_PIPELINE),
+            "workflows": workflows,
             "index": 0,
             "status": "running",
+            "from_post": from_post,
         }
-        first = TIKTOK_FULL_PIPELINE[0]
-        started = await self._engine.start_workflow(first, device_id)
+        first = workflows[0]
+        started = await self._engine.start_workflow(
+            first, device_id, start_post_index=start_post_index
+        )
         if not started:
             self._pipelines.pop(device_id, None)
             return False
 
+        if from_post is not None:
+            label = f"Posts {from_post}→{POST_COUNT} + end ({first})"
+            pipe_meta = {
+                "pipeline": workflows,
+                "from_post": from_post,
+                "source": "dashboard",
+            }
+        else:
+            label = f"Full run started ({first})"
+            pipe_meta = {"pipeline": workflows, "source": "dashboard"}
+
         await self._db.log_activity(
             "info",
             "pipeline",
-            f"Full run started ({first})",
+            label,
             device_id,
-            {"pipeline": list(TIKTOK_FULL_PIPELINE), "source": "dashboard"},
+            pipe_meta,
         )
         await self._emit(
             "pipeline_started",
-            {"device_id": device_id, "workflows": list(TIKTOK_FULL_PIPELINE)},
+            {
+                "device_id": device_id,
+                "workflows": workflows,
+                "from_post": from_post,
+            },
         )
         return True
 

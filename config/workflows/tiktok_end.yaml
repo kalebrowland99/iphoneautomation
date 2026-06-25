@@ -73,8 +73,13 @@ steps:
       retry_delay: 1.5
       state_if_found: WAITING
       state_if_missing: ACTIVE
-      fallback_template: vpntoggle
-      state_if_fallback: WAITING
+      fallback_templates:
+        - template: bluetoggle
+          state: ACTIVE
+          min_confidence: 0.45
+        - template: vpntoggle
+          state: WAITING
+          min_confidence: 0.55
 
   # ── 3. VPN on → tap bluetoggle off → verify "Not Connected" ───────
   - type: screenshot

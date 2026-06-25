@@ -46,58 +46,47 @@ steps:
     name: after_plus
     duration_seconds: 1
 
-  # ── 2. Wait for gallery, then tap ───────────────────────────────────
-  - type: wait_for_detection
-    name: wait_for_gallery
-    templates: [gallery]
-    when_detection: gallery
-    duration_seconds: 60
-    min_seconds: 2
-    on_failure: pause
-
-  - type: screenshot
-    name: fresh_gallery_screen
-    templates: [gallery]
-
-  - type: analyze_screen
-    name: fresh_gallery_analyze
-    templates: [gallery]
-
-  - type: verify
-    name: confirm_gallery_before_tap
-    condition: template_match
-    template: gallery
-    on_failure: pause
-
+  # ── 2. Tap gallery (fixed coord) ────────────────────────────────────
   - type: execute_action
     name: tap_gallery
-    requires_analysis: true
     on_failure: pause
     action:
-      type: tap_detection
-      detection: gallery
-      refind_on_device: true
+      type: tap
+      x: 33
+      y: 669
       tap_count: 2
       tap_interval_seconds: 0.5
     skip_post_action: true
 
   - type: execute_action
-    name: wait_for_select_multiple
+    name: wait_for_recents
     on_failure: pause
     action:
       type: tap_ocr
-      texts: ["Select Multiple", "SELECT MULTIPLE", "Select multiple"]
-      wait_timeout_seconds: 30
-      poll_interval_seconds: 2
+      texts: ["Recents", "RECENTS", "Recent", "RECENT"]
+      wait_timeout_seconds: 45
+      poll_interval_seconds: 1.5
       verify_only: true
       optional: false
+      prefer_top: true
+      threshold: 0.55
+      contain: true
+      ocr_ex: true
+      search_rect_pct: [0.0, 0.0, 1.0, 0.32]
+      # Gallery icon may be offset on some phones (e.g. slot 9) — retap then retry Recents.
+      fallback_tap:
+        x: 326
+        y: 609
+      fallback_tap_delay_seconds: 1
+      fallback_after_tap_seconds: 1.5
+      fallback_retry_seconds: 45
     skip_post_action: true
 
   - type: wait
     name: after_gallery_picker
     duration_seconds: 1
 
-  # ── 3. Pick media (coordinate varies per post: 1→82,201 2→191,190 3→321,194)
+  # ── 3. Pick media (Recents: post 1→right 3→left; coords from gallery_x/y)
   - type: execute_action
     name: tap_gallery_item
     on_failure: pause
@@ -212,35 +201,20 @@ steps:
     name: after_caption
     duration_seconds: 1.5
 
-  # ── 10. White background — tap border / border2 once each if visible ─
-  - type: screenshot
-    name: screen_borders
-    templates: [border, border2]
-
-  - type: analyze_screen
-    name: analyze_borders
-    templates: [border, border2]
-
+  # ── 10. White background — fixed coord (201, 38) ×2 ───────────────
   - type: execute_action
-    name: tap_border_if_visible
-    on_failure: continue
+    name: tap_white_background
+    on_failure: pause
     action:
-      type: tap_detection
-      detection: border
-      optional: true
-    skip_post_action: true
-
-  - type: execute_action
-    name: tap_border2_if_visible
-    on_failure: continue
-    action:
-      type: tap_detection
-      detection: border2
-      optional: true
+      type: tap
+      x: 201
+      y: 38
+      tap_count: 2
+      tap_interval_seconds: 0.5
     skip_post_action: true
 
   - type: wait
-    name: after_border
+    name: after_white_background
     duration_seconds: 1.5
 
   # ── 11. Done (top-right) ────────────────────────────────────────────
@@ -258,46 +232,23 @@ steps:
 
   - type: wait
     name: after_done
-    duration_seconds: 2
+    duration_seconds: 3
 
-  # ── 12. Wait for editor, then tap ───────────────────────────────────
-  - type: wait_for_detection
-    name: wait_for_editor
-    templates: [editor]
-    when_detection: editor
-    duration_seconds: 60
-    min_seconds: 2
-    on_failure: pause
-
-  - type: screenshot
-    name: fresh_editor_screen
-    templates: [editor]
-
-  - type: analyze_screen
-    name: fresh_editor_analyze
-    templates: [editor]
-
-  - type: verify
-    name: confirm_editor_before_tap
-    condition: template_match
-    template: editor
-    on_failure: pause
-
+  # ── 12. Editor icon — fixed coord (374, 163) ────────────────────────
   - type: execute_action
     name: tap_editor
-    requires_analysis: true
     on_failure: pause
     action:
-      type: tap_detection
-      detection: editor
-      refind_on_device: true
+      type: tap
+      x: 374
+      y: 163
     skip_post_action: true
 
   - type: wait
     name: after_editor
-    duration_seconds: 1
+    duration_seconds: 1.5
 
-  # ── 13. Swipe left (timeline scrub area) ────────────────────────────
+  # ── 13. Swipe left twice (timeline scrub area) ──────────────────────
   - type: execute_action
     name: swipe_left_1
     action:
@@ -311,6 +262,21 @@ steps:
 
   - type: wait
     name: after_swipe_1
+    duration_seconds: 1.5
+
+  - type: execute_action
+    name: swipe_left_2
+    action:
+      type: swipe
+      direction: left
+      sx: 341
+      sy: 533
+      ex: 40
+      ey: 533
+    skip_post_action: true
+
+  - type: wait
+    name: after_swipe_2
     duration_seconds: 1.5
 
   # ── 14. Text scrub marker ───────────────────────────────────────────
@@ -400,7 +366,7 @@ steps:
     name: after_tap_caption_field
     duration_seconds: 2
 
-  # ── 18. Type final post caption + hashtags ────────────────────────
+  # ── 18. Type final post caption + hashtags (single line, no Enter) ─
   - type: execute_action
     name: type_final_post_caption
     unless_detection: post_ocr
@@ -408,31 +374,22 @@ steps:
     action:
       type: text_input
       text: ${final_post_caption}
+      single_line: true
     skip_post_action: true
 
   - type: wait
     name: after_final_caption
-    duration_seconds: 2
+    duration_seconds: 3
 
-  # ── 19. Wait for post button, then tap — production only ────────────
-  - type: wait_for_detection
-    name: wait_for_post
-    unless_debug_skip_post: true
-    templates: [post]
-    when_detection: post
-    duration_seconds: 60
-    min_seconds: 2
-    on_failure: pause
-
+  # ── 19. Post button — fixed coord (352, 45), production only ────────
   - type: execute_action
     name: tap_post
     unless_debug_skip_post: true
-    requires_analysis: true
     on_failure: pause
     action:
-      type: tap_detection
-      detection: post
-      refind_on_device: true
+      type: tap
+      x: 352
+      y: 45
     skip_post_action: true
 
   - type: wait
@@ -440,9 +397,17 @@ steps:
     unless_debug_skip_post: true
     duration_seconds: 2
 
-  # Leave TikTok UI (keyboard / upload overlay) before tiktok_end force-quit.
+  # Post 3 only: wait for TikTok upload to finish before leaving the app.
+  - type: wait
+    name: wait_for_upload_after_final_post
+    when_post_index: 3
+    unless_debug_skip_post: true
+    duration_seconds: 300
+
+  # Leave TikTok UI (keyboard / upload overlay) before tiktok_end — post 3 only.
   - type: execute_action
     name: leave_tiktok_after_post
+    when_post_index: 3
     unless_debug_skip_post: true
     action:
       type: home
@@ -450,6 +415,7 @@ steps:
 
   - type: wait
     name: after_leave_tiktok
+    when_post_index: 3
     unless_debug_skip_post: true
     duration_seconds: 1.5
 

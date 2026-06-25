@@ -24,7 +24,12 @@ from imouse_farm.dashboard.test_actions import (
     run_debug_test,
     tap_vpntoggle,
 )
-from imouse_farm.captions.ai_generator import generate_post_captions, stem_to_food_name
+from imouse_farm.captions.ai_generator import (
+    extract_food_names_from_stems,
+    generate_post_captions,
+    stem_to_food_name,
+)
+from imouse_farm.captions.onscreen_templates import apply_onscreen_for_stems
 from imouse_farm.captions.prompt_store import (
     get_ai_settings,
     set_ai_hashtags,
@@ -32,9 +37,13 @@ from imouse_farm.captions.prompt_store import (
 )
 from imouse_farm.post.post_caption_store import (
     POST_COUNT,
+    clear_all_post_texts,
+    device_storage_key,
     get_final_caption,
     get_onscreen_text,
     list_post_texts,
+    media_index_for_post,
+    post_media_stem,
     set_final_caption,
     set_onscreen_text,
 )
@@ -49,6 +58,10 @@ from imouse_farm.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _post_text_key(device: Any) -> str:
+    return device_storage_key(device.device_id, device.user_name)
+
+
 class ActionBody(BaseModel):
     action_type: ActionType
     params: dict[str, Any] = Field(default_factory=dict)
@@ -57,6 +70,11 @@ class ActionBody(BaseModel):
 class WorkflowStartBody(BaseModel):
     workflow_name: str
     device_id: str
+    start_post_index: int | None = None
+
+
+class PipelineStartBody(BaseModel):
+    from_post: int | None = None  # 2 = skip post 1, run posts 2–3 then tiktok_end
 
 
 class CaptionAISettingsBody(BaseModel):
@@ -67,6 +85,11 @@ class CaptionAISettingsBody(BaseModel):
 class CaptionAIGenerateBody(BaseModel):
     prompt: str | None = None
     hashtags: str | None = None
+    onscreen_template: str | None = None
+
+
+class OnscreenTemplateApplyBody(BaseModel):
+    template_key: str
 
 
 class PostTextFieldBody(BaseModel):
@@ -267,14 +290,15 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         return {"settings": get_device_settings(device_id)}
 
     @app.post("/api/devices/{device_id:path}/pipeline/start")
-    async def start_pipeline(device_id: str) -> dict[str, Any]:
+    async def start_pipeline(device_id: str, body: PipelineStartBody | None = None) -> dict[str, Any]:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
-        success = await app_instance.workflow_pipeline.start(device_id)
+        from_post = body.from_post if body else None
+        success = await app_instance.workflow_pipeline.start(device_id, from_post=from_post)
         if not success:
             raise HTTPException(400, "Failed to start full run — workflow may already be active")
-        return {"success": True}
+        return {"success": True, "from_post": from_post}
 
     @app.post("/api/devices/{device_id:path}/pipeline/pause")
     async def pause_pipeline(device_id: str) -> dict[str, Any]:
@@ -306,10 +330,11 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             device.phone_name,
         )
         media_stems = list_media_stems_for_posts(folder, gallery.media_extensions, POST_COUNT)
+        text_key = _post_text_key(device)
         posts = []
-        for row in list_post_texts(device_id):
+        for row in list_post_texts(text_key):
             post_num = int(row["post"])
-            stem = media_stems[post_num - 1] if post_num <= len(media_stems) else ""
+            stem = post_media_stem(media_stems, post_num)
             posts.append({
                 **row,
                 "media_file": stem,
@@ -322,19 +347,35 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
     async def set_device_onscreen_text(
         device_id: str, post_num: int, body: PostTextFieldBody
     ) -> dict[str, str]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
         if post_num < 1 or post_num > POST_COUNT:
             raise HTTPException(400, f"post_num must be 1..{POST_COUNT}")
-        set_onscreen_text(device_id, post_num, body.text)
-        return {"text": get_onscreen_text(device_id, post_num)}
+        text_key = _post_text_key(device)
+        set_onscreen_text(text_key, post_num, body.text)
+        return {"text": get_onscreen_text(text_key, post_num)}
 
     @app.put("/api/devices/{device_id:path}/post-texts/{post_num}/final")
     async def set_device_final_caption(
         device_id: str, post_num: int, body: PostTextFieldBody
     ) -> dict[str, str]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
         if post_num < 1 or post_num > POST_COUNT:
             raise HTTPException(400, f"post_num must be 1..{POST_COUNT}")
-        set_final_caption(device_id, post_num, body.text)
-        return {"text": get_final_caption(device_id, post_num)}
+        text_key = _post_text_key(device)
+        set_final_caption(text_key, post_num, body.text)
+        return {"text": get_final_caption(text_key, post_num)}
+
+    @app.post("/api/devices/{device_id:path}/post-texts/clear")
+    async def clear_device_post_texts(device_id: str) -> dict[str, bool]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        clear_all_post_texts(_post_text_key(device))
+        return {"success": True}
 
     @app.get("/api/caption-ai/settings")
     async def get_caption_ai_settings() -> dict[str, str]:
@@ -345,6 +386,69 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         set_ai_prompt(body.prompt)
         set_ai_hashtags(body.hashtags)
         return get_ai_settings()
+
+    @app.post("/api/devices/{device_id:path}/onscreen-template/apply")
+    async def apply_device_onscreen_template(
+        device_id: str, body: OnscreenTemplateApplyBody
+    ) -> dict[str, Any]:
+        from imouse_farm.captions.onscreen_templates import ONSCREEN_TEMPLATES
+
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        openai_cfg = app_instance.config.openai
+        if not openai_cfg.enabled:
+            raise HTTPException(400, "OpenAI caption generation is disabled in config")
+
+        template_key = body.template_key.strip()
+        if template_key not in ONSCREEN_TEMPLATES:
+            raise HTTPException(400, f"Unknown onscreen template: {template_key}")
+
+        gallery = app_instance.config.gallery
+        folder = phone_gallery_folder(
+            gallery.base_directory,
+            device.user_name,
+            device.phone_name,
+        )
+        media_stems = list_media_stems_for_posts(folder, gallery.media_extensions, POST_COUNT)
+        if not any(media_stems):
+            raise HTTPException(
+                400,
+                f"No media files in gallery folder: {folder}",
+            )
+
+        text_key = _post_text_key(device)
+        try:
+            foods = await extract_food_names_from_stems(media_stems, config=openai_cfg)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            logger.error("onscreen_template_apply_failed", device_id=device_id, error=str(exc))
+            raise HTTPException(502, f"OpenAI request failed: {exc}") from exc
+
+        applied = apply_onscreen_for_stems(
+            template_key,
+            media_stems,
+            text_key,
+            set_onscreen_text=set_onscreen_text,
+            food_names=foods,
+        )
+        if not applied:
+            raise HTTPException(400, "Could not build onscreen text from gallery filenames")
+
+        posts: list[dict[str, Any]] = []
+        for row in list_post_texts(text_key):
+            post_num = int(row["post"])
+            stem = post_media_stem(media_stems, post_num)
+            idx = media_index_for_post(post_num)
+            food = foods[idx] if idx < len(foods) else stem_to_food_name(stem)
+            posts.append({
+                **row,
+                "onscreen": get_onscreen_text(text_key, post_num),
+                "media_file": stem,
+                "food_name": food,
+            })
+        return {"posts": posts, "media_files": media_stems, "applied": applied}
 
     @app.post("/api/devices/{device_id:path}/caption-ai/generate")
     async def generate_device_captions(
@@ -376,6 +480,9 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
                 f"No media files in gallery folder: {folder}",
             )
 
+        text_key = _post_text_key(device)
+        template_key = (body.onscreen_template if body else None) or ""
+
         try:
             generated = await generate_post_captions(
                 media_stems,
@@ -389,16 +496,26 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             logger.error("caption_ai_generate_failed", device_id=device_id, error=str(exc))
             raise HTTPException(502, f"OpenAI request failed: {exc}") from exc
 
+        if template_key.strip():
+            apply_onscreen_for_stems(
+                template_key.strip(),
+                media_stems,
+                text_key,
+                set_onscreen_text=set_onscreen_text,
+                food_names=[cap.get("food", "") for cap in generated],
+            )
+
         posts: list[dict[str, Any]] = []
         for i, cap in enumerate(generated, start=1):
-            set_final_caption(device_id, i, cap["final"])
-            stem = media_stems[i - 1] if i <= len(media_stems) else ""
+            post_num = POST_COUNT + 1 - i
+            set_final_caption(text_key, post_num, cap["final"])
+            stem = post_media_stem(media_stems, post_num)
             posts.append({
-                "post": i,
-                "onscreen": get_onscreen_text(device_id, i),
+                "post": post_num,
+                "onscreen": get_onscreen_text(text_key, post_num),
                 "final": cap["final"],
                 "media_file": stem,
-                "food_name": stem_to_food_name(stem),
+                "food_name": cap.get("food") or stem_to_food_name(stem),
             })
 
         await app_instance.db.log_activity(
@@ -451,7 +568,9 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
     @app.post("/api/workflows/start")
     async def start_workflow(body: WorkflowStartBody) -> dict[str, Any]:
         success = await app_instance.workflow_engine.start_workflow(
-            body.workflow_name, body.device_id
+            body.workflow_name,
+            body.device_id,
+            start_post_index=body.start_post_index,
         )
         if not success:
             raise HTTPException(400, "Failed to start workflow")
@@ -460,7 +579,11 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             "workflow",
             f"Start requested: {body.workflow_name}",
             body.device_id,
-            {"workflow_name": body.workflow_name, "source": "dashboard"},
+            {
+                "workflow_name": body.workflow_name,
+                "start_post_index": body.start_post_index,
+                "source": "dashboard",
+            },
         )
         await app_state.broadcast("workflow_started", body.model_dump())
         return {"success": True}

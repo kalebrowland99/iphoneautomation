@@ -31,15 +31,6 @@ def list_media_files(folder: Path, extensions: list[str]) -> list[str]:
     return [str(p) for p in paths]
 
 
-def list_media_files_for_upload(folder: Path, extensions: list[str]) -> list[str]:
-    """Upload sequence for TikTok/iOS Recents (newest-first in the picker).
-
-    Post 1 uses the first file in natural order; upload it last so it appears in
-  the leftmost Recents slot when the gallery opens.
-    """
-    return list(reversed(list_media_files(folder, extensions)))
-
-
 def media_stem_for_post(files: list[str], post: int) -> str:
     """Basename (no extension) for post slot 1..N from an ordered file list."""
     if post < 1 or post > len(files):

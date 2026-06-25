@@ -8,27 +8,6 @@ description: >
 loop: false
 
 steps:
-  # ── 0. Reset iMouse cursor (twice) ─────────────────────────────────
-  - type: execute_action
-    name: mouse_reset_1
-    action:
-      type: mouse_reset
-    skip_post_action: true
-
-  - type: wait
-    name: after_mouse_reset_1
-    duration_seconds: 0.25
-
-  - type: execute_action
-    name: mouse_reset_2
-    action:
-      type: mouse_reset
-    skip_post_action: true
-
-  - type: wait
-    name: after_mouse_reset_2
-    duration_seconds: 0.25
-
   # ── 1. Unlock if locked ─────────────────────────────────────────────
   - type: screenshot
     name: initial_screen
@@ -86,8 +65,7 @@ steps:
       timeout_ms: 120000
     skip_post_action: true
 
-  # album_clear returns as soon as the Delete press settles, so the upload
-  # below fires right off that delete trigger (just a brief settle here).
+  # album_clear loops until Recents is empty (3 or 20+ items), then upload runs.
   - type: wait
     name: after_clear
     duration_seconds: 1
@@ -160,8 +138,13 @@ steps:
       retry_delay: 1.5
       state_if_found: WAITING
       state_if_missing: ACTIVE
-      fallback_template: vpntoggle
-      state_if_fallback: WAITING
+      fallback_templates:
+        - template: bluetoggle
+          state: ACTIVE
+          min_confidence: 0.45
+        - template: vpntoggle
+          state: WAITING
+          min_confidence: 0.55
 
   # ── 7. VPN off → tap vpntoggle → verify "Not Connected" gone ───────
   - type: screenshot
@@ -275,8 +258,13 @@ steps:
       retry_delay: 1.5
       state_if_found: WAITING
       state_if_missing: ACTIVE
-      fallback_template: vpntoggle
-      state_if_fallback: WAITING
+      fallback_templates:
+        - template: bluetoggle
+          state: ACTIVE
+          min_confidence: 0.45
+        - template: vpntoggle
+          state: WAITING
+          min_confidence: 0.55
       require_state: ACTIVE
 
   # ── 10. TikTok (home screen) ────────────────────────────────────────

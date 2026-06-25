@@ -4,7 +4,6 @@ from pathlib import Path
 
 from imouse_farm.utils.gallery import (
     list_media_files,
-    list_media_files_for_upload,
     list_media_stems_for_posts,
     phone_gallery_folder,
 )
@@ -45,14 +44,3 @@ def test_list_media_stems_for_posts(tmp_path: Path) -> None:
     (folder / "clip_b.mp4").write_bytes(b"b")
     stems = list_media_stems_for_posts(folder, [".mp4"], post_count=3)
     assert stems == ["clip_a", "clip_b", ""]
-
-
-def test_list_media_files_for_upload_reverses_post_order(tmp_path: Path) -> None:
-    folder = tmp_path / "slot"
-    folder.mkdir()
-    for name in ("video1.mp4", "video2.mp4", "video3.mp4"):
-        (folder / name).write_bytes(b"x")
-    post_order = [Path(f).name for f in list_media_files(folder, [".mp4"])]
-    upload_order = [Path(f).name for f in list_media_files_for_upload(folder, [".mp4"])]
-    assert post_order == ["video1.mp4", "video2.mp4", "video3.mp4"]
-    assert upload_order == ["video3.mp4", "video2.mp4", "video1.mp4"]

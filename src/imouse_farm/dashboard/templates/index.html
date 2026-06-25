@@ -187,6 +187,14 @@
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: var(--muted);
+            margin-bottom: 0;
+            flex-shrink: 0;
+        }
+        .post-text-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
             margin-bottom: 0.75rem;
             flex-shrink: 0;
         }
@@ -613,6 +621,7 @@
                 </label>
                 <div class="production-actions">
                     <button class="btn btn-sm btn-production" id="btn-pipeline-start" onclick="startPipeline()">Full start</button>
+                    <button class="btn btn-sm btn-ghost" id="btn-pipeline-posts-2" onclick="startPipelineFromPost(2)">Posts 2→3 + End</button>
                     <button class="btn btn-sm btn-ghost" id="btn-pipeline-pause" onclick="pausePipeline()">Pause</button>
                     <button class="btn btn-sm btn-ghost" id="btn-pipeline-resume" onclick="resumePipeline()">Resume</button>
                     <button class="btn btn-sm btn-ghost" id="btn-pipeline-stop" onclick="stopPipeline()">Stop all</button>
@@ -668,7 +677,10 @@
             </div>
         </div>
         <div class="captions-panel">
-            <h2>Post text</h2>
+            <div class="post-text-header">
+                <h2>Post text</h2>
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-clear-post-texts" onclick="clearAllPostTexts()">Clear all</button>
+            </div>
             <div class="ai-caption-section">
                 <h3>AI captions</h3>
                 <label for="ai-prompt">Caption prompt</label>
@@ -686,9 +698,9 @@
                 <select id="onscreen-template" onchange="applyOnscreenTemplate()">
                     <option value="">Custom (manual)</option>
                     <option value="toxic_walmart">The MOST Toxic ___ you should avoid · Walmart Edition</option>
-                    <option value="america_sick">THIS IS WHY AMERICA IS SICK · ___ EDITION</option>
+                    <option value="america_sick">This Is Why AMERICA IS SICK · ___ Edition</option>
                 </select>
-                <p class="onscreen-template-hint">Uses the second hyphen segment from each gallery filename (e.g. 1-chicken_tikka_masala → Chicken Tikka Masala).</p>
+                <p class="onscreen-template-hint">Post 1 → rightmost video (file 3). Post 2 → middle. Post 3 → leftmost (file 1).</p>
             </div>
             <div id="post-texts">
                 <div class="post-group" data-post="1">
@@ -744,7 +756,11 @@
 
         const ONSCREEN_TEMPLATES = {
             toxic_walmart: (food) => `The MOST Toxic ${food} you should avoid\nWalmart Edition`,
-            america_sick: (food) => `THIS IS WHY AMERICA IS SICK\n${food} EDITION`,
+            america_sick: (food) => {
+                const name = (food || '').trim();
+                const titled = name ? name.charAt(0).toUpperCase() + name.slice(1) : '';
+                return `This Is Why AMERICA IS SICK\n${titled} Edition`;
+            },
         };
 
         function stemToFoodName(stem) {
@@ -1157,6 +1173,22 @@
             }
         }
 
+        async function startPipelineFromPost(fromPost) {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/pipeline/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ from_post: fromPost }),
+                });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) {
+                alert(`Posts ${fromPost}→3 start failed: ${err.message}`);
+            }
+        }
+
         async function pausePipeline() {
             if (!deviceId) return;
             try {
@@ -1422,6 +1454,7 @@
             const btn = document.getElementById('btn-ai-generate');
             const prompt = document.getElementById('ai-prompt')?.value || '';
             const hashtags = document.getElementById('ai-hashtags')?.value || '';
+            const onscreenTemplate = document.getElementById('onscreen-template')?.value || '';
             if (statusEl) {
                 statusEl.textContent = 'Generating…';
                 statusEl.className = 'ai-caption-status';
@@ -1431,7 +1464,11 @@
                 const res = await api(`/devices/${enc(deviceId)}/caption-ai/generate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt, hashtags })
+                    body: JSON.stringify({
+                        prompt,
+                        hashtags,
+                        onscreen_template: onscreenTemplate || null,
+                    })
                 });
                 await loadPostTexts();
                 if (statusEl) {
@@ -1452,30 +1489,42 @@
             const templateKey = document.getElementById('onscreen-template')?.value || '';
             localStorage.setItem('onscreenTemplate', templateKey);
             if (!templateKey || !deviceId) return;
-            const build = ONSCREEN_TEMPLATES[templateKey];
-            if (!build) return;
 
-            let posts = cachedPostTexts;
-            if (!posts.length) {
-                const res = await api(`/devices/${enc(deviceId)}/post-texts`);
-                posts = res.posts || [];
-                cachedPostTexts = posts;
-            }
-
-            let applied = 0;
-            for (const p of posts) {
-                const food = postFoodName(p);
-                if (!food) continue;
-                const on = document.getElementById(`onscreen-${p.post}`);
-                if (!on) continue;
-                on.value = build(food);
-                schedulePostTextSave(p.post, 'onscreen');
-                applied += 1;
-            }
-            if (!applied) {
-                showBanner('No gallery filenames found — add videos to this phone’s gallery folder first.');
-            } else {
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/onscreen-template/apply`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ template_key: templateKey }),
+                });
+                cachedPostTexts = res.posts || [];
+                for (const p of cachedPostTexts) {
+                    const on = document.getElementById(`onscreen-${p.post}`);
+                    if (on) on.value = p.onscreen || '';
+                }
                 hideBanner();
+            } catch (err) {
+                showBanner(`Onscreen template failed: ${err.message}`);
+            }
+        }
+
+        async function clearAllPostTexts() {
+            if (!deviceId) {
+                showBanner('Select a phone first');
+                return;
+            }
+            if (!confirm('Clear all onscreen text and final captions for this phone?')) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/post-texts/clear`, { method: 'POST' });
+                for (let i = 1; i <= 3; i++) {
+                    const on = document.getElementById(`onscreen-${i}`);
+                    const fin = document.getElementById(`final-${i}`);
+                    if (on) on.value = '';
+                    if (fin) fin.value = '';
+                }
+                cachedPostTexts = [];
+                hideBanner();
+            } catch (err) {
+                showBanner(`Clear failed: ${err.message}`);
             }
         }
 
@@ -1488,6 +1537,15 @@
                     const on = document.getElementById(`onscreen-${p.post}`);
                     const fin = document.getElementById(`final-${p.post}`);
                     const placeholder = p.placeholder || p.media_file || '';
+                    const title = document.querySelector(
+                        `.post-group[data-post="${p.post}"] .post-group-title`
+                    );
+                    if (title) {
+                        const file = p.media_file || p.placeholder || '';
+                        title.textContent = file
+                            ? `Post ${p.post} — ${file}`
+                            : `Post ${p.post}`;
+                    }
                     if (on) {
                         on.value = p.onscreen || '';
                         on.placeholder = placeholder || `Text overlay for post ${p.post}…`;

@@ -77,24 +77,23 @@ async def generate_post_captions(
     hashtags: str,
     config: OpenAICaptionConfig,
 ) -> list[dict[str, str]]:
-    """Return ``[{final}, ...]`` for each post slot (onscreen text is manual)."""
+    """Return ``[{food, final}, ...]`` for each post slot."""
     api_key = _resolve_api_key(config)
     if not api_key:
         raise ValueError("OpenAI API key not configured (set openai.api_key or OPENAI_API_KEY)")
 
     from openai import AsyncOpenAI
 
-    labels = [stem_to_food_name(n) or f"Post {i + 1}" for i, n in enumerate(food_names)]
     raw_stems = list(food_names)
-    while len(labels) < 3:
-        labels.append(f"Post {len(labels) + 1}")
+    while len(raw_stems) < 3:
         raw_stems.append("")
 
     client = AsyncOpenAI(api_key=api_key)
     system = (
         "You write TikTok post descriptions for health conscious food content. "
-        "Respond with valid JSON only: {\"posts\": [{\"final\": \"...\"}, ...]} "
+        "Respond with valid JSON only: {\"posts\": [{\"food\": \"...\", \"final\": \"...\"}, ...]} "
         "with exactly 3 objects. "
+        "For each post, \"food\" is the Title Case food name extracted from that post's video filename. "
         'Each "final" must be 120-280 words, all lowercase, viral hooks, line breaks, '
         "light emoji ok; do NOT include hashtags. "
         "Sound like a real Gen Z person typing the caption on their phone: casual, punchy, "
@@ -108,11 +107,11 @@ async def generate_post_captions(
     )
     user = (
         f"Caption style instructions:\n{user_prompt.strip()}\n\n"
-        "Video filenames and parsed food names (one row per post — use the filename "
-        "as the source of truth for which food this post is about):\n"
-        f"- Post 1 — filename: {raw_stems[0] or '(missing)'} → food: {labels[0]}\n"
-        f"- Post 2 — filename: {raw_stems[1] or '(missing)'} → food: {labels[1]}\n"
-        f"- Post 3 — filename: {raw_stems[2] or '(missing)'} → food: {labels[2]}\n\n"
+        "Video filenames (one row per post — use each filename as the source of truth "
+        "for which food that post is about; put the parsed food in the \"food\" field):\n"
+        f"- Post 1 — filename: {raw_stems[0] or '(missing)'}\n"
+        f"- Post 2 — filename: {raw_stems[1] or '(missing)'}\n"
+        f"- Post 3 — filename: {raw_stems[2] or '(missing)'}\n\n"
         "Make each caption unique. Base every caption on that post's filename/food."
     )
 
@@ -124,7 +123,8 @@ async def generate_post_captions(
             {"role": "system", "content": system},
             {
                 "role": "user",
-                "content": user + '\n\nReturn JSON: {"posts": [{"final": "..."}, ...]}',
+                "content": user
+                + '\n\nReturn JSON: {"posts": [{"food": "...", "final": "..."}, ...]}',
             },
         ],
     )
@@ -133,9 +133,11 @@ async def generate_post_captions(
     result: list[dict[str, str]] = []
     for i in range(3):
         item = posts[i] if i < len(posts) else {}
-        tag_line = resolve_hashtag_template(hashtags, labels[i])
+        post_num = i + 1
+        food = _food_label_from_response(item, raw_stems[i], post_num)
+        tag_line = resolve_hashtag_template(hashtags, food)
         final = append_hashtags(str(item.get("final", "")).strip(), tag_line)
-        result.append({"final": final})
+        result.append({"food": food, "final": final})
     logger.info("ai_captions_generated", posts=len(result), model=config.model)
     return result
 
@@ -149,3 +151,76 @@ def _parse_posts_json(raw: str) -> list[dict[str, Any]]:
             if isinstance(data.get(key), list):
                 return data[key]
     raise ValueError("OpenAI response missing posts array")
+
+
+def _parse_foods_json(raw: str) -> list[str]:
+    data = json.loads(raw)
+    foods_raw: list[Any]
+    if isinstance(data, dict) and isinstance(data.get("foods"), list):
+        foods_raw = data["foods"]
+    elif isinstance(data, list):
+        foods_raw = data
+    else:
+        raise ValueError("OpenAI response missing foods array")
+    foods = [str(item).strip() for item in foods_raw[:3]]
+    while len(foods) < 3:
+        foods.append("")
+    return foods
+
+
+def _food_label_from_response(item: dict[str, Any], stem: str, post_index: int) -> str:
+    food = str(item.get("food", "")).strip()
+    if not food:
+        food = stem_to_food_name(stem)
+    if not food:
+        food = f"Post {post_index}"
+    return food
+
+
+async def extract_food_names_from_stems(
+    stems: list[str],
+    *,
+    config: OpenAICaptionConfig,
+) -> list[str]:
+    """Use OpenAI to read each gallery filename and return Title Case food names."""
+    api_key = _resolve_api_key(config)
+    if not api_key:
+        raise ValueError("OpenAI API key not configured (set openai.api_key or OPENAI_API_KEY)")
+
+    from openai import AsyncOpenAI
+
+    padded = list(stems)
+    while len(padded) < 3:
+        padded.append("")
+
+    client = AsyncOpenAI(api_key=api_key)
+    system = (
+        "You extract food names from TikTok video filenames for health content. "
+        "Respond with valid JSON only: {\"foods\": [\"...\", \"...\", \"...\"]} "
+        "with exactly 3 strings in post order. "
+        "Each string is the human readable food name in Title Case "
+        "(e.g. 'Chicken Tikka Masala') parsed from that post's filename. "
+        "Filenames often look like '1-chicken_tikka_masala' or 'post-mac_and_cheese' "
+        "where the food is after the first hyphen. Use the filename as source of truth. "
+        "If a filename is missing or has no food, return an empty string for that slot."
+    )
+    user = (
+        "Extract the food name from each filename:\n"
+        f"- Post 1 filename: {padded[0] or '(missing)'}\n"
+        f"- Post 2 filename: {padded[1] or '(missing)'}\n"
+        f"- Post 3 filename: {padded[2] or '(missing)'}\n"
+    )
+
+    response = await client.chat.completions.create(
+        model=config.model,
+        temperature=0.2,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user + '\nReturn JSON: {"foods": ["...", "...", "..."]}'},
+        ],
+    )
+    raw = (response.choices[0].message.content or "").strip()
+    foods = _parse_foods_json(raw)
+    logger.info("ai_food_names_extracted", stems=padded[:3], foods=foods, model=config.model)
+    return foods

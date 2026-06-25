@@ -2,55 +2,144 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+import json
+from pathlib import Path
 
 POST_COUNT = 3
+POST_TEXTS_PATH = Path("data/post_texts.json")
 
 GALLERY_ITEM_COORDS: dict[int, tuple[int, int]] = {
-    1: (82, 201),
-    2: (191, 190),
-    3: (321, 194),
+    1: (82, 201),   # left / newest in Recents
+    2: (191, 190),  # middle
+    3: (321, 194),  # right / oldest
 }
 
-_store: dict[str, dict[int, dict[str, str]]] = defaultdict(
-    lambda: {i: {"onscreen": "", "final": ""} for i in range(1, POST_COUNT + 1)}
-)
+_store: dict[str, dict[int, dict[str, str]]] = {}
 
 
-def _slot(device_id: str, post: int) -> dict[str, str]:
+def device_storage_key(device_id: str, user_name: str = "") -> str:
+    """Stable key for post text (farm slot survives browser refresh / server restart)."""
+    slot = str(user_name or "").strip().lower()
+    return f"slot:{slot}" if slot else device_id
+
+
+def _default_posts() -> dict[int, dict[str, str]]:
+    return {i: {"onscreen": "", "final": ""} for i in range(1, POST_COUNT + 1)}
+
+
+def _load_store() -> None:
+    global _store
+    if not POST_TEXTS_PATH.exists():
+        _store = {}
+        return
+    try:
+        raw = json.loads(POST_TEXTS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        _store = {}
+        return
+    loaded: dict[str, dict[int, dict[str, str]]] = {}
+    for device_key, posts in raw.items():
+        if not isinstance(posts, dict):
+            continue
+        slot: dict[int, dict[str, str]] = _default_posts()
+        for post_key, fields in posts.items():
+            try:
+                post_num = int(post_key)
+            except (TypeError, ValueError):
+                continue
+            if post_num < 1 or post_num > POST_COUNT or not isinstance(fields, dict):
+                continue
+            slot[post_num] = {
+                "onscreen": str(fields.get("onscreen", "")),
+                "final": str(fields.get("final", "")),
+            }
+        loaded[str(device_key)] = slot
+    _store = loaded
+
+
+def _save_store() -> None:
+    serializable: dict[str, dict[str, dict[str, str]]] = {}
+    for device_key, posts in _store.items():
+        serializable[device_key] = {
+            str(post): {"onscreen": data["onscreen"], "final": data["final"]}
+            for post, data in posts.items()
+        }
+    POST_TEXTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    POST_TEXTS_PATH.write_text(
+        json.dumps(serializable, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _slot(device_key: str, post: int) -> dict[str, str]:
     if post < 1 or post > POST_COUNT:
         raise ValueError(f"post must be 1..{POST_COUNT}, got {post}")
-    return _store[device_id][post]
+    if device_key not in _store:
+        _store[device_key] = _default_posts()
+    return _store[device_key][post]
 
 
-def get_final_caption(device_id: str, post: int) -> str:
-    return _slot(device_id, post)["final"]
+def get_final_caption(device_key: str, post: int) -> str:
+    return _slot(device_key, post)["final"]
 
 
-def get_onscreen_text(device_id: str, post: int) -> str:
-    return _slot(device_id, post)["onscreen"]
+def get_onscreen_text(device_key: str, post: int) -> str:
+    return _slot(device_key, post)["onscreen"]
 
 
-def set_onscreen_text(device_id: str, post: int, text: str) -> None:
-    _slot(device_id, post)["onscreen"] = text or ""
+def set_onscreen_text(device_key: str, post: int, text: str) -> None:
+    _slot(device_key, post)["onscreen"] = text or ""
+    _save_store()
 
 
-def set_final_caption(device_id: str, post: int, text: str) -> None:
-    _slot(device_id, post)["final"] = text or ""
+def set_final_caption(device_key: str, post: int, text: str) -> None:
+    _slot(device_key, post)["final"] = text or ""
+    _save_store()
+
+
+def clear_all_post_texts(device_key: str) -> None:
+    _store[device_key] = _default_posts()
+    _save_store()
+
+
+def gallery_slot_for_post(post: int) -> int:
+    """Map workflow post 1..N to Recents picker slot (post 1 → rightmost / media 3)."""
+    if post < 1 or post > POST_COUNT:
+        raise ValueError(f"post must be 1..{POST_COUNT}, got {post}")
+    return POST_COUNT + 1 - post
+
+
+def media_index_for_post(post: int) -> int:
+    """0-based gallery file index for workflow post N (post 1 → third file)."""
+    if post < 1 or post > POST_COUNT:
+        raise ValueError(f"post must be 1..{POST_COUNT}, got {post}")
+    return POST_COUNT - post
+
+
+def post_media_stem(stems: list[str], post: int) -> str:
+    """Gallery filename stem bound to workflow post N."""
+    idx = media_index_for_post(post)
+    if idx < 0 or idx >= len(stems):
+        return ""
+    return stems[idx]
 
 
 def get_gallery_coords(post: int) -> tuple[int, int]:
-    if post not in GALLERY_ITEM_COORDS:
-        raise ValueError(f"no gallery coords for post {post}")
-    return GALLERY_ITEM_COORDS[post]
+    slot = gallery_slot_for_post(post)
+    if slot not in GALLERY_ITEM_COORDS:
+        raise ValueError(f"no gallery coords for slot {slot}")
+    return GALLERY_ITEM_COORDS[slot]
 
 
-def list_post_texts(device_id: str) -> list[dict[str, str | int]]:
+def list_post_texts(device_key: str) -> list[dict[str, str | int]]:
     return [
         {
             "post": post,
-            "onscreen": get_onscreen_text(device_id, post),
-            "final": get_final_caption(device_id, post),
+            "onscreen": get_onscreen_text(device_key, post),
+            "final": get_final_caption(device_key, post),
         }
         for post in range(1, POST_COUNT + 1)
     ]
+
+
+_load_store()

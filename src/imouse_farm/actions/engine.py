@@ -7,6 +7,10 @@ import time
 from asyncio import QueueEmpty
 from typing import Any, Callable, Awaitable
 
+from imouse_farm.actions.pre_touch_reset import (
+    pre_touch_mouse_reset,
+    request_needs_pre_touch_reset,
+)
 from imouse_farm.actions.queue import ActionQueue, QueuedAction
 from pathlib import Path
 
@@ -25,6 +29,26 @@ def _coerce_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
     return int(value)
+
+
+def _ocr_search_rect(
+    device_manager: DeviceManager, device_id: str, params: dict[str, Any]
+) -> list[int] | None:
+    pct = params.get("search_rect_pct")
+    if isinstance(pct, list) and len(pct) == 4:
+        device = device_manager.get_device(device_id)
+        sw = int(device.screen_width) if device and device.screen_width else 406
+        sh = int(device.screen_height) if device and device.screen_height else 720
+        return [
+            int(sw * float(pct[0])),
+            int(sh * float(pct[1])),
+            int(sw * float(pct[2])),
+            int(sh * float(pct[3])),
+        ]
+    rect = params.get("rect")
+    if isinstance(rect, list) and len(rect) == 4:
+        return [int(v) for v in rect]
+    return None
 
 
 class ActionEngine:
@@ -151,6 +175,12 @@ class ActionEngine:
                 request.step_name,
             )
             try:
+                if request_needs_pre_touch_reset(self._device_manager, request):
+                    await pre_touch_mouse_reset(
+                        self._controller,
+                        request.device_id,
+                        step_name=request.step_name,
+                    )
                 success = await self._run_action(request)
                 duration_ms = int((time.monotonic() - start) * 1000)
                 if success:
@@ -214,7 +244,15 @@ class ActionEngine:
                     return await ctrl.tap(device_id, int(det["x"]), int(det["y"]))
                 if params.get("require_detection") and ("x" not in params or "y" not in params):
                     raise RuntimeError("Blind tap blocked: require_detection is set")
-                return await ctrl.tap(device_id, int(params["x"]), int(params["y"]))
+                x, y = int(params["x"]), int(params["y"])
+                tap_count = max(1, int(params.get("tap_count", 1)))
+                interval = float(params.get("tap_interval_seconds", 0.4))
+                for tap_idx in range(tap_count):
+                    if not await ctrl.tap(device_id, x, y):
+                        return False
+                    if tap_idx < tap_count - 1:
+                        await asyncio.sleep(interval)
+                return True
             case ActionType.TAP_DETECTION:
                 name = params.get("detection", "")
                 optional = bool(params.get("optional", False))
@@ -248,6 +286,8 @@ class ActionEngine:
                 contain = bool(params.get("contain", True))
                 wait_timeout = float(params.get("wait_timeout_seconds", 0))
                 poll_interval = float(params.get("poll_interval_seconds", 2))
+                ocr_rect = _ocr_search_rect(self._device_manager, device_id, params)
+                ocr_ex = bool(params.get("ocr_ex", False))
 
                 def _pick_best_match(matches: list[dict[str, Any]]) -> dict[str, Any]:
                     if prefer_top:
@@ -264,16 +304,54 @@ class ActionEngine:
                         ),
                     )
 
+                async def _find_ocr_matches(queries: list[str]) -> list[dict[str, Any]]:
+                    return await ctrl.find_text_on_device(
+                        device_id,
+                        queries,
+                        threshold=threshold,
+                        contain=contain,
+                        rect=ocr_rect,
+                        is_ex=ocr_ex,
+                    )
+
+                async def _handle_matches(
+                    matches: list[dict[str, Any]], query_hint: str = ""
+                ) -> bool:
+                    if not matches:
+                        return False
+                    annotated = [
+                        {**m, "text": m.get("text") or query_hint or m.get("text", "")}
+                        for m in matches
+                    ]
+                    best = _pick_best_match(annotated)
+                    if params.get("verify_only"):
+                        logger.info(
+                            "ocr_verified",
+                            device_id=device_id,
+                            text=best.get("text"),
+                            query=query_hint or best.get("text"),
+                            x=best.get("x"),
+                            y=best.get("y"),
+                            confidence=best.get("confidence"),
+                        )
+                        return True
+                    logger.info(
+                        "tap_ocr",
+                        device_id=device_id,
+                        text=best.get("text"),
+                        x=best["x"],
+                        y=best["y"],
+                        prefer_top=prefer_top,
+                        query=query_hint or best.get("text"),
+                    )
+                    await ctrl.tap(device_id, int(best["x"]), int(best["y"]))
+                    return True
+
                 async def _try_tap_once() -> bool:
                     expect_missing = bool(params.get("expect_missing"))
                     if expect_missing:
                         for text in candidates:
-                            matches = await ctrl.find_text_on_device(
-                                device_id,
-                                [text],
-                                threshold=threshold,
-                                contain=contain,
-                            )
+                            matches = await _find_ocr_matches([text])
                             if matches:
                                 return False
                         logger.info(
@@ -282,52 +360,58 @@ class ActionEngine:
                             texts=candidates,
                         )
                         return True
-                    # Try each candidate in order so specific labels (e.g. full song
-                    # title) win over shorter partial OCR hits elsewhere on screen.
-                    for text in candidates:
-                        matches = await ctrl.find_text_on_device(
-                            device_id,
-                            [text],
-                            threshold=threshold,
-                            contain=contain,
-                        )
-                        if not matches:
-                            continue
-                        annotated = [{**m, "text": m.get("text") or text} for m in matches]
-                        best = _pick_best_match(annotated)
-                        if params.get("verify_only"):
-                            logger.info(
-                                "ocr_verified",
-                                device_id=device_id,
-                                text=best.get("text"),
-                                query=text,
-                            )
-                            return True
-                        logger.info(
-                            "tap_ocr",
-                            device_id=device_id,
-                            text=best.get("text"),
-                            x=best["x"],
-                            y=best["y"],
-                            prefer_top=prefer_top,
-                            query=text,
-                        )
-                        await ctrl.tap(device_id, int(best["x"]), int(best["y"]))
+                    batch = await _find_ocr_matches(candidates)
+                    if await _handle_matches(batch):
                         return True
+                    for text in candidates:
+                        matches = await _find_ocr_matches([text])
+                        if await _handle_matches(matches, query_hint=text):
+                            return True
+                    return False
+
+                async def _wait_for_ocr(deadline: float) -> bool:
+                    while True:
+                        if await _try_tap_once():
+                            return True
+                        if wait_timeout <= 0 or time.monotonic() >= deadline:
+                            break
+                        await asyncio.sleep(poll_interval)
                     return False
 
                 deadline = time.monotonic() + wait_timeout if wait_timeout > 0 else time.monotonic()
-                while True:
-                    if await _try_tap_once():
-                        return True
-                    if wait_timeout <= 0 or time.monotonic() >= deadline:
-                        break
-                    await asyncio.sleep(poll_interval)
+                if await _wait_for_ocr(deadline):
+                    return True
                 if optional:
                     logger.info("tap_ocr_skipped", device_id=device_id, texts=candidates)
                     return True
                 if params.get("expect_missing"):
                     raise RuntimeError(f"Expected text absent but found {candidates!r} on screen")
+
+                fallback_tap = params.get("fallback_tap")
+                if isinstance(fallback_tap, dict) and "x" in fallback_tap and "y" in fallback_tap:
+                    fx = int(fallback_tap["x"])
+                    fy = int(fallback_tap["y"])
+                    logger.info(
+                        "tap_ocr_fallback_tap",
+                        device_id=device_id,
+                        texts=candidates,
+                        x=fx,
+                        y=fy,
+                        reason="ocr_miss_retry",
+                    )
+                    await asyncio.sleep(float(params.get("fallback_tap_delay_seconds", 1.0)))
+                    if not await ctrl.tap(device_id, fx, fy):
+                        raise RuntimeError(
+                            f"Fallback tap at ({fx}, {fy}) failed after OCR miss {candidates!r}"
+                        )
+                    await asyncio.sleep(float(params.get("fallback_after_tap_seconds", 1.0)))
+                    retry_timeout = float(
+                        params.get("fallback_retry_seconds", wait_timeout or 45)
+                    )
+                    retry_deadline = time.monotonic() + retry_timeout
+                    if await _wait_for_ocr(retry_deadline):
+                        return True
+
                 raise RuntimeError(f"None of {candidates!r} found on screen")
             case ActionType.SWIPE:
                 return await ctrl.swipe(
@@ -358,7 +442,11 @@ class ActionEngine:
                     hold_ms=int(params.get("hold_ms", 0)),
                 )
             case ActionType.TEXT_INPUT:
-                return await ctrl.send_text(device_id, str(params.get("text", "")))
+                return await ctrl.send_text(
+                    device_id,
+                    str(params.get("text", "")),
+                    single_line=bool(params.get("single_line", False)),
+                )
             case ActionType.CLEAR_TEXT:
                 return await ctrl.clear_text_field(device_id)
             case ActionType.KEY:
@@ -402,7 +490,7 @@ class ActionEngine:
                 )
             case ActionType.ALBUM_UPLOAD:
                 self._block_album_when_vpn_on(device_id, "Album upload")
-                from imouse_farm.utils.gallery import list_media_files_for_upload
+                from imouse_farm.utils.gallery import list_media_files
 
                 folder = Path(str(params.get("folder", ""))).resolve()
                 if not folder.is_dir():
@@ -410,7 +498,7 @@ class ActionEngine:
                 extensions = params.get("extensions") or [
                     ".mp4", ".mov", ".m4v", ".jpg", ".jpeg", ".png", ".heic"
                 ]
-                files = list_media_files_for_upload(folder, extensions)
+                files = list_media_files(folder, extensions)
                 if not files:
                     raise RuntimeError(f"No media files in {folder}")
                 return await ctrl.album_upload(

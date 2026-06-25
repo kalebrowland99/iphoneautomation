@@ -31,7 +31,12 @@ from imouse_farm.vision.fallbacks import (
     expand_template_names,
 )
 
-from imouse_farm.post.post_caption_store import get_final_caption, get_onscreen_text
+from imouse_farm.post.post_caption_store import (
+    device_storage_key,
+    get_final_caption,
+    get_onscreen_text,
+)
+from imouse_farm.utils.gallery import list_media_files, phone_gallery_folder
 from imouse_farm.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -55,26 +60,23 @@ DebugKind = Literal[
     "drag",
     "type_caption",
     "type_final_caption",
+    "final_caption_production",
     "close_app",
     "kill_app",
 ]
 
-_POST_TEMPLATE_NAMES = frozenset({"plus", "gallery", "aa", "border", "border2", "editor", "continuearrow", "post"})
+_POST_TEMPLATE_NAMES = frozenset({"plus", "aa", "continuearrow"})
 
 _POST_TEMPLATE_LABELS: dict[str, str] = {
     "plus": "Post: Tap plus (+ button)",
-    "gallery": "Post: Tap gallery — after tapping plus (edge crop)",
     "aa": "Post: Tap aa (add text) — after dismissing music",
-    "border": "Post: Tap border — after typing caption",
-    "border2": "Post: Tap border2 — after typing caption",
-    "editor": "Post: Tap editor — after Done",
     "continuearrow": "Post: Tap continue arrow — after drag trim",
-    "post": "Post: Tap post (red arrow) — after typing final caption",
 }
 
 _POST_DEBUG_LIST_PRIORITY = (
     "tap-plus",
     "tap-gallery",
+    "post-wait-recents",
     "post-tap-gallery-item",
     "post-tap-gallery-item-2",
     "post-tap-gallery-item-3",
@@ -84,8 +86,7 @@ _POST_DEBUG_LIST_PRIORITY = (
     "post-dismiss-music",
     "tap-aa",
     "post-type-caption",
-    "tap-border",
-    "tap-border2",
+    "post-tap-border2-coord",
     "post-tap-done",
     "tap-editor",
     "post-swipe-left",
@@ -94,6 +95,9 @@ _POST_DEBUG_LIST_PRIORITY = (
     "tap-continuearrow",
     "post-tap-final-caption-field",
     "post-type-final-caption",
+    "post-final-caption-prod-1",
+    "post-final-caption-prod-2",
+    "post-final-caption-prod-3",
     "tap-post",
 )
 
@@ -210,16 +214,26 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
 }
 
 TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
-    "post-tap-gallery-item": {
-        "label": "Post 1: Tap gallery item (82, 201) — after tapping gallery",
+    "tap-gallery": {
+        "label": "Post: Tap gallery (33, 669) ×2 — after tapping plus",
         "kind": "tap_xy",
         "group": "post",
-        "x": 82,
-        "y": 201,
+        "x": 33,
+        "y": 669,
+        "tap_count": 2,
+        "tap_interval_seconds": 0.5,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-tap-gallery-item": {
+        "label": "Post 1: Tap gallery item (321, 194) — rightmost / post 1 file",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 321,
+        "y": 194,
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-gallery-item-2": {
-        "label": "Post 2: Tap gallery item (191, 190) — after tapping gallery",
+        "label": "Post 2: Tap gallery item (191, 190) — middle",
         "kind": "tap_xy",
         "group": "post",
         "x": 191,
@@ -227,11 +241,31 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-gallery-item-3": {
-        "label": "Post 3: Tap gallery item (321, 194) — after tapping gallery",
+        "label": "Post 3: Tap gallery item (82, 201) — leftmost / post 3 file",
         "kind": "tap_xy",
         "group": "post",
-        "x": 321,
-        "y": 194,
+        "x": 82,
+        "y": 201,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-wait-recents": {
+        "label": "Post: Wait for Recents (OCR) — after gallery picker opens",
+        "kind": "tap_ocr",
+        "group": "post",
+        "texts": ["Recents", "RECENTS", "Recent", "RECENT"],
+        "wait_timeout_seconds": 45,
+        "poll_interval_seconds": 1.5,
+        "verify_only": True,
+        "prefer_top": True,
+        "threshold": 0.55,
+        "contain": True,
+        "ocr_ex": True,
+        "search_rect_pct": [0.0, 0.0, 1.0, 0.32],
+        "fallback_tap": {"x": 326, "y": 609},
+        "fallback_tap_delay_seconds": 1,
+        "fallback_after_tap_seconds": 1.5,
+        "fallback_retry_seconds": 45,
+        "hint": "Open the TikTok gallery picker so Recents is visible at the top.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-music": {
@@ -282,13 +316,32 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "post_num": 1,
         "offline_hint": OFFLINE_HINT,
     },
+    "post-tap-border2-coord": {
+        "label": "Post: Tap white background (201, 38) ×2 — after typing caption",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 201,
+        "y": 38,
+        "tap_count": 2,
+        "tap_interval_seconds": 0.5,
+        "offline_hint": OFFLINE_HINT,
+    },
     "post-tap-done": {
-        "label": "Post: Tap Done — after tapping border",
+        "label": "Post: Tap Done — after tapping white background",
         "kind": "tap_ocr",
         "group": "post",
         "texts": ["Done", "DONE"],
         "prefer_top": True,
         "hint": "Show the text editor with Done in the top-right.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "tap-editor": {
+        "label": "Post: Tap editor (374, 163) — after Done",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 374,
+        "y": 163,
+        "hint": "Show the post editor screen after tapping Done.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-swipe-left": {
@@ -336,6 +389,39 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "kind": "type_final_caption",
         "group": "post",
         "post_num": 1,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-final-caption-prod-1": {
+        "label": "Post 1: Production final caption flow (field → type → wait)",
+        "kind": "final_caption_production",
+        "group": "post",
+        "post_num": 1,
+        "hint": "TikTok post screen with caption field visible (after continue arrow). Uses dashboard Post 1 final text + hashtags, single-line like Full start.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-final-caption-prod-2": {
+        "label": "Post 2: Production final caption flow (field → type → wait)",
+        "kind": "final_caption_production",
+        "group": "post",
+        "post_num": 2,
+        "hint": "Same as production tiktok_post step 17–18 for Post 2 final caption from dashboard.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-final-caption-prod-3": {
+        "label": "Post 3: Production final caption flow (field → type → wait)",
+        "kind": "final_caption_production",
+        "group": "post",
+        "post_num": 3,
+        "hint": "Same as production tiktok_post step 17–18 for Post 3 final caption from dashboard.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "tap-post": {
+        "label": "Post: Tap post (352, 45) — after typing final caption",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 352,
+        "y": 45,
+        "hint": "Caption field filled; keyboard may still be visible.",
         "offline_hint": OFFLINE_HINT,
     },
 }
@@ -554,6 +640,8 @@ async def run_debug_test(app: Any, device_id: str, test_id: str) -> dict[str, An
         return await type_caption_debug(app, device_id, test_id, spec)
     if kind == "type_final_caption":
         return await type_final_caption_debug(app, device_id, test_id, spec)
+    if kind == "final_caption_production":
+        return await final_caption_production_debug(app, device_id, test_id, spec)
     if kind == "close_app":
         return await close_app_debug(app, device_id, test_id, spec)
     if kind == "kill_app":
@@ -716,11 +804,23 @@ async def tap_ocr_debug(
             "texts": texts,
             "optional": False,
             "wait_timeout_seconds": float(wait_timeout),
-            "poll_interval_seconds": 2,
+            "poll_interval_seconds": float(spec.get("poll_interval_seconds", 2)),
             "prefer_top": bool(spec.get("prefer_top", False)),
         }
-        if "threshold" in spec:
-            params["threshold"] = float(spec["threshold"])
+        for key in (
+            "threshold",
+            "contain",
+            "verify_only",
+            "ocr_ex",
+            "search_rect_pct",
+            "expect_missing",
+            "fallback_tap",
+            "fallback_tap_delay_seconds",
+            "fallback_after_tap_seconds",
+            "fallback_retry_seconds",
+        ):
+            if key in spec:
+                params[key] = spec[key]
         ok = await app.action_engine.execute_direct(
             device_id,
             ActionType.TAP_OCR,
@@ -728,7 +828,14 @@ async def tap_ocr_debug(
             step_name=f"debug_{test_id}",
         )
         await app.screenshot_service.capture(device_id)
-        message = f"Tapped {texts[0]}" if ok else f"Text not found — {spec.get('hint', '')}"
+        if spec.get("verify_only"):
+            message = (
+                f"Found {texts[0]}"
+                if ok
+                else f"Text not found — {spec.get('hint', '')}"
+            )
+        else:
+            message = f"Tapped {texts[0]}" if ok else f"Text not found — {spec.get('hint', '')}"
         await app.db.log_activity(
             "info" if ok else "warn",
             "test",
@@ -898,9 +1005,7 @@ async def upload_gallery_debug(
         device.user_name,
         device.phone_name,
     )
-    from imouse_farm.utils.gallery import list_media_files_for_upload
-
-    files = list_media_files_for_upload(folder, gallery.media_extensions)
+    files = list_media_files(folder, gallery.media_extensions)
     if not files:
         message = f"No media files in {folder} — add videos/images for slot {device.user_name}"
         await app.db.log_activity(
@@ -970,11 +1075,18 @@ async def _require_online_device(app: Any, device_id: str, spec: DebugTest) -> A
 async def tap_xy_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
     await _require_online_device(app, device_id, spec)
     x, y = int(spec["x"]), int(spec["y"])
+    params: dict[str, Any] = {"x": x, "y": y}
+    if "tap_count" in spec:
+        params["tap_count"] = int(spec["tap_count"])
+    if "tap_interval_seconds" in spec:
+        params["tap_interval_seconds"] = float(spec["tap_interval_seconds"])
     ok = await app.action_engine.execute_direct(
-        device_id, ActionType.TAP, {"x": x, "y": y}, step_name=f"debug_{test_id}"
+        device_id, ActionType.TAP, params, step_name=f"debug_{test_id}"
     )
     await app.screenshot_service.capture(device_id)
-    return {"success": ok, "message": f"Tapped ({x}, {y})", "x": x, "y": y}
+    count = int(params.get("tap_count", 1))
+    msg = f"Tapped ({x}, {y}) ×{count}" if count > 1 else f"Tapped ({x}, {y})"
+    return {"success": ok, "message": msg, "x": x, "y": y}
 
 
 async def swipe_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
@@ -1017,9 +1129,10 @@ async def drag_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) ->
 
 
 async def type_caption_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
-    await _require_online_device(app, device_id, spec)
+    device = await _require_online_device(app, device_id, spec)
     post_num = int(spec.get("post_num", 1))
-    text = get_onscreen_text(device_id, post_num)
+    text_key = device_storage_key(device.device_id, device.user_name)
+    text = get_onscreen_text(text_key, post_num)
     ok = await app.action_engine.execute_direct(
         device_id, ActionType.TEXT_INPUT, {"text": text}, step_name=f"debug_{test_id}"
     )
@@ -1028,14 +1141,91 @@ async def type_caption_debug(app: Any, device_id: str, test_id: str, spec: Debug
 
 
 async def type_final_caption_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
-    await _require_online_device(app, device_id, spec)
+    device = await _require_online_device(app, device_id, spec)
     post_num = int(spec.get("post_num", 1))
-    text = get_final_caption(device_id, post_num)
+    text_key = device_storage_key(device.device_id, device.user_name)
+    text = get_final_caption(text_key, post_num)
     ok = await app.action_engine.execute_direct(
-        device_id, ActionType.TEXT_INPUT, {"text": text}, step_name=f"debug_{test_id}"
+        device_id,
+        ActionType.TEXT_INPUT,
+        {"text": text, "single_line": True},
+        step_name=f"debug_{test_id}",
     )
     await app.screenshot_service.capture(device_id)
     return {"success": ok, "message": f"Typed final caption ({len(text)} chars)", "text": text}
+
+
+# Mirrors tiktok_post: tap caption field → 2s → single-line type → 3s (no Post tap).
+_CAPTION_FIELD_X = 107
+_CAPTION_FIELD_Y = 130
+_CAPTION_FIELD_SETTLE_SECONDS = 2.0
+_AFTER_CAPTION_TYPE_SECONDS = 3.0
+
+
+async def final_caption_production_debug(
+    app: Any, device_id: str, test_id: str, spec: DebugTest
+) -> dict[str, Any]:
+    """Simulate production final caption + hashtags typing (steps 17–18 in tiktok_post)."""
+    from imouse_farm.utils.text_input import flatten_line_breaks
+
+    device = await _require_online_device(app, device_id, spec)
+    post_num = int(spec.get("post_num", 1))
+    text_key = device_storage_key(device.device_id, device.user_name)
+    text = get_final_caption(text_key, post_num)
+    if not text.strip():
+        raise HTTPException(
+            400,
+            f"Post {post_num} final caption is empty — fill it in the dashboard Post {post_num} box first.",
+        )
+
+    engine = app.action_engine
+    step = f"debug_{test_id}"
+
+    tapped = await engine.execute_direct(
+        device_id,
+        ActionType.TAP,
+        {"x": _CAPTION_FIELD_X, "y": _CAPTION_FIELD_Y},
+        step_name=f"{step}_tap_field",
+    )
+    if not tapped:
+        return {
+            "success": False,
+            "message": f"Failed to tap caption field ({_CAPTION_FIELD_X}, {_CAPTION_FIELD_Y})",
+        }
+
+    await asyncio.sleep(_CAPTION_FIELD_SETTLE_SECONDS)
+
+    typed = await engine.execute_direct(
+        device_id,
+        ActionType.TEXT_INPUT,
+        {"text": text, "single_line": True},
+        step_name=f"{step}_type",
+    )
+    if not typed:
+        return {"success": False, "message": "Caption field tapped but text_input failed"}
+
+    await asyncio.sleep(_AFTER_CAPTION_TYPE_SECONDS)
+    await app.screenshot_service.capture(device_id)
+
+    flat = flatten_line_breaks(text)
+    await app.db.log_activity(
+        "info",
+        "test",
+        f"Production caption flow post {post_num}: {len(flat)} chars typed",
+        device_id,
+        {"test_id": test_id, "post_num": post_num, "char_count": len(flat)},
+    )
+    return {
+        "success": True,
+        "message": (
+            f"Post {post_num} production flow OK — tapped (107,130), typed {len(flat)} chars "
+            f"(caption + hashtags, single line), waited {_AFTER_CAPTION_TYPE_SECONDS:.0f}s. "
+            f"Use Tap post (352, 45) to finish."
+        ),
+        "post_num": post_num,
+        "char_count": len(flat),
+        "text_preview": flat[:120] + ("…" if len(flat) > 120 else ""),
+    }
 
 
 async def kill_app_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:

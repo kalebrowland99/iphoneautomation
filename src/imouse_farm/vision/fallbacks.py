@@ -84,3 +84,24 @@ def detection_satisfied(detections: dict[str, dict[str, Any]], name: str) -> boo
     if name in detections:
         return True
     return any(fb in detections for fb in DETECTION_FALLBACKS.get(name, []))
+
+
+def resolve_template_state_fallback(
+    detections: dict[str, dict[str, Any]],
+    fallback_templates: list[dict[str, Any]],
+) -> tuple[str | None, float]:
+    """Return (template_name, confidence) for the best fallback above min_confidence."""
+    best_name: str | None = None
+    best_conf = -1.0
+    for entry in fallback_templates:
+        template = str(entry.get("template") or "").strip()
+        if not template or template not in detections:
+            continue
+        min_conf = float(entry.get("min_confidence", 0.42))
+        conf = float(detections[template].get("confidence", 0))
+        if conf >= min_conf and conf > best_conf:
+            best_name = template
+            best_conf = conf
+    if best_name is None:
+        return None, 0.0
+    return best_name, best_conf

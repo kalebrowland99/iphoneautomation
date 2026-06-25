@@ -60,3 +60,20 @@ popups:
     dismiss_action:
       type: tap_detection
       detection: ok_button
+
+  tiktok_email_confirm:
+    description: "TikTok confirm use of email — always tap Not Now"
+    pause_workflow: false
+    ocr_keywords:
+      - "confirm use of email"
+      - "Confirm use of email"
+      - "confirm your email"
+      - "use your email"
+      - "link your email"
+      - "verify your email"
+    dismiss_action:
+      type: tap_ocr
+      texts: ["Not Now", "NOT NOW", "Not now"]
+      threshold: 0.65
+      contain: true
+      optional: false

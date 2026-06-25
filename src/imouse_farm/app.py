@@ -41,7 +41,7 @@ class IMouseFarmApp:
         )
         self.vision = create_vision_provider(config)
         self.popup_manager = PopupManager(config.workflows_directory)
-        self.permission_watchers = PermissionWatcherManager(self.controller)
+        self.permission_watchers = PermissionWatcherManager(self.controller, self.device_manager)
         self.state_machine = StateMachine(self.device_manager)
         self.action_engine = ActionEngine(
             config, self.controller, self.device_manager, self.db

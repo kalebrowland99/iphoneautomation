@@ -7,12 +7,21 @@ import contextlib
 from typing import Any
 
 from imouse_farm.actions.permission_prompts import (
-    NEGATIVE_BUTTON_WORDS,
     button_texts_for_permission,
+    is_deny_permission_label,
+    is_not_now_label,
     is_permission_dialog_text,
+    is_photo_delete_sheet_text,
+    is_tiktok_email_confirm_dialog,
     should_allow_permission,
+    tiktok_not_now_button_texts,
+)
+from imouse_farm.actions.pre_touch_reset import (
+    is_tiktok_workflow,
+    pre_touch_mouse_reset,
 )
 from imouse_farm.controller.device_controller import DeviceController
+from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,10 +35,12 @@ class PermissionWatcher:
         controller: DeviceController,
         device_id: str,
         *,
+        device_manager: DeviceManager | None = None,
         poll_interval_seconds: float = 0.75,
     ) -> None:
         self._controller = controller
         self._device_id = device_id
+        self._device_manager = device_manager
         self._poll_interval = poll_interval_seconds
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -63,9 +74,29 @@ class PermissionWatcher:
             await asyncio.sleep(self._poll_interval)
 
     async def _check_once(self) -> bool:
-        """Return True if a permission dialog was handled."""
+        """Return True if a permission or TikTok dismiss dialog was handled."""
         screen = await self._controller.ocr_on_device(self._device_id)
-        if not screen or not is_permission_dialog_text(screen):
+        if not screen:
+            return False
+
+        if is_tiktok_email_confirm_dialog(screen):
+            tapped = await self._tap_not_now()
+            if tapped:
+                logger.info(
+                    "tiktok_popup_dismiss",
+                    device_id=self._device_id,
+                    dialog="email_confirm",
+                    text=tapped.get("text", ""),
+                    x=tapped.get("x"),
+                    y=tapped.get("y"),
+                )
+                await asyncio.sleep(1.2)
+                return True
+
+        if is_photo_delete_sheet_text(screen):
+            return False
+
+        if not is_permission_dialog_text(screen):
             return False
 
         allow = should_allow_permission(screen)
@@ -85,9 +116,20 @@ class PermissionWatcher:
             return True
         return False
 
+    async def _pre_touch_if_tiktok(self) -> None:
+        if not self._device_manager:
+            return
+        device = self._device_manager.get_device(self._device_id)
+        if device and is_tiktok_workflow(device.workflow_name):
+            await pre_touch_mouse_reset(
+                self._controller,
+                self._device_id,
+                step_name="permission_watcher",
+            )
+
     async def _tap_button(self, labels: list[str]) -> dict[str, Any] | None:
         deny_mode = labels and labels[0] in ("Ask App Not to Track", "Don't Allow", "Dont Allow")
-        negative_words = ("don't", "dont", "cancel", "deny", "not now", "don't allow")
+        negative_words = ("don't", "dont", "cancel", "deny", "not now", "don't allow", "delet")
 
         for text in labels:
             matches = await self._controller.find_text_on_device(self._device_id, [text])
@@ -95,7 +137,7 @@ class PermissionWatcher:
                 candidates = [
                     m
                     for m in matches
-                    if any(neg in str(m.get("text", "")).lower() for neg in NEGATIVE_BUTTON_WORDS)
+                    if is_deny_permission_label(str(m.get("text", "")))
                 ]
             else:
                 candidates = [
@@ -106,6 +148,23 @@ class PermissionWatcher:
             if not candidates:
                 continue
             best = max(candidates, key=lambda m: float(m.get("confidence", 0)))
+            await self._pre_touch_if_tiktok()
+            await self._controller.tap(self._device_id, int(best["x"]), int(best["y"]))
+            return best
+        return None
+
+    async def _tap_not_now(self) -> dict[str, Any] | None:
+        for text in tiktok_not_now_button_texts():
+            matches = await self._controller.find_text_on_device(
+                self._device_id, [text], threshold=0.65, contain=True
+            )
+            candidates = [
+                m for m in matches if is_not_now_label(str(m.get("text", "")))
+            ]
+            if not candidates:
+                continue
+            best = max(candidates, key=lambda m: float(m.get("confidence", 0)))
+            await self._pre_touch_if_tiktok()
             await self._controller.tap(self._device_id, int(best["x"]), int(best["y"]))
             return best
         return None
@@ -114,15 +173,24 @@ class PermissionWatcher:
 class PermissionWatcherManager:
     """Start/stop per-device permission watchers during automation."""
 
-    def __init__(self, controller: DeviceController) -> None:
+    def __init__(
+        self,
+        controller: DeviceController,
+        device_manager: DeviceManager | None = None,
+    ) -> None:
         self._controller = controller
+        self._device_manager = device_manager
         self._watchers: dict[str, PermissionWatcher] = {}
         self._ref_counts: dict[str, int] = {}
 
     async def acquire(self, device_id: str) -> None:
         self._ref_counts[device_id] = self._ref_counts.get(device_id, 0) + 1
         if device_id not in self._watchers:
-            watcher = PermissionWatcher(self._controller, device_id)
+            watcher = PermissionWatcher(
+                self._controller,
+                device_id,
+                device_manager=self._device_manager,
+            )
             self._watchers[device_id] = watcher
             await watcher.start()
 

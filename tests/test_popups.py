@@ -41,3 +41,18 @@ def test_no_popup_on_known_screen() -> None:
     )
     result = manager.detect(analysis)
     assert result.detected is False
+
+
+def test_detect_tiktok_email_confirm_popup() -> None:
+    manager = PopupManager("config/workflows")
+    analysis = VisionAnalysis(
+        device_id="test-device",
+        screenshot_path="/tmp/test.bmp",
+        popup_type="tiktok_email_confirm",
+    )
+    result = manager.detect(analysis)
+    assert result.detected is True
+    assert result.popup_type == PopupType.TIKTOK_EMAIL_CONFIRM
+    assert result.should_pause is False
+    assert result.dismiss_action["type"] == "tap_ocr"
+    assert "Not Now" in result.dismiss_action["texts"]

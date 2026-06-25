@@ -6,6 +6,7 @@ from imouse_farm.vision.fallbacks import (
     apply_tap_offsets,
     detection_satisfied,
     expand_template_names,
+    resolve_template_state_fallback,
 )
 
 
@@ -67,6 +68,43 @@ def test_apply_detection_fallbacks_passthrough() -> None:
     assert detections["gallery"]["x"] == 10
 
 
-def test_detection_satisfied_direct_match() -> None:
-    detections = {"gallery": {"x": 1, "y": 2, "confidence": 0.4}}
-    assert detection_satisfied(detections, "gallery")
+def test_resolve_template_state_fallback_ignores_weak_vpntoggle() -> None:
+    state_map = [
+        {"template": "bluetoggle", "state": "ACTIVE", "min_confidence": 0.45},
+        {"template": "vpntoggle", "state": "WAITING", "min_confidence": 0.55},
+    ]
+    winner, conf = resolve_template_state_fallback(
+        {"vpntoggle": {"x": 1, "y": 2, "confidence": 0.48}},
+        state_map,
+    )
+    assert winner is None
+    assert conf == 0.0
+
+
+def test_resolve_template_state_fallback_prefers_bluetoggle() -> None:
+    state_map = [
+        {"template": "bluetoggle", "state": "ACTIVE", "min_confidence": 0.45},
+        {"template": "vpntoggle", "state": "WAITING", "min_confidence": 0.55},
+    ]
+    winner, conf = resolve_template_state_fallback(
+        {
+            "bluetoggle": {"x": 1, "y": 2, "confidence": 0.62},
+            "vpntoggle": {"x": 3, "y": 4, "confidence": 0.58},
+        },
+        state_map,
+    )
+    assert winner == "bluetoggle"
+    assert conf == 0.62
+
+
+def test_resolve_template_state_fallback_vpntoggle_off() -> None:
+    state_map = [
+        {"template": "bluetoggle", "state": "ACTIVE", "min_confidence": 0.45},
+        {"template": "vpntoggle", "state": "WAITING", "min_confidence": 0.55},
+    ]
+    winner, conf = resolve_template_state_fallback(
+        {"vpntoggle": {"x": 3, "y": 4, "confidence": 0.68}},
+        state_map,
+    )
+    assert winner == "vpntoggle"
+    assert conf == 0.68

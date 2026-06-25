@@ -90,9 +90,12 @@ class DeviceController:
             return False
         try:
             from imouse_xp.api import is_success
-            return bool(is_success(response))
+
+            if callable(is_success):
+                return bool(is_success(response))
         except Exception:
-            return getattr(getattr(response, "data", None), "code", -1) == 0
+            pass
+        return getattr(getattr(response, "data", None), "code", -1) == 0
 
     @staticmethod
     def _error_message(response: Any) -> str:
@@ -372,23 +375,27 @@ class DeviceController:
             )
         )
 
-    async def send_text(self, device_id: str, text: str) -> bool:
-        from imouse_farm.utils.text_input import typing_segments
+    async def send_text(self, device_id: str, text: str, *, single_line: bool = False) -> bool:
+        from imouse_farm.utils.text_input import (
+            prepare_single_line_typing_segments,
+            prepare_typing_segments,
+        )
 
-        segments = typing_segments(text)
+        if not self._api:
+            raise RuntimeError("iMouse SDK not connected — cannot type text")
+
+        if single_line:
+            segments: list[str | None] = prepare_single_line_typing_segments(text)
+        else:
+            segments = prepare_typing_segments(text)
         logger.info(
             "action_text_input",
             device_id=device_id,
             length=len(text),
             segments=len(segments),
-            multiline=len(segments) > 1,
+            single_line=single_line,
+            multiline=any(seg is None for seg in segments),
         )
-        if len(segments) == 1 and segments[0] is not None:
-            chunk = segments[0]
-            return await self._run_sync(
-                lambda: self._ok(self._api.key_sendkey(self._ids(device_id), key=chunk))
-            )
-
         for segment in segments:
             if segment is None:
                 if not await self._send_line_break(device_id):
@@ -584,96 +591,99 @@ class DeviceController:
         *,
         post_grace_seconds: float = 45.0,
         settle_after_delete: float = 3.0,
-        no_delete_timeout: float = 10.0,
+        no_delete_timeout: float = 30.0,
+        max_rounds: int = 12,
+        list_check_num: int = 100,
     ) -> bool:
         """Clear the album via shortcut_album_clear, tapping the iOS delete dialog.
 
-        The "Delete N Items" confirmation typically appears AFTER the
-        shortcut_album_clear call returns, so we keep scanning and tapping
-        Delete for a grace window once the API completes (and also during it).
+        iOS may show multiple confirmation sheets in one pass, and the shortcut
+        can leave items behind when Recents holds more than a single batch. We
+        keep tapping while sheets are visible, then repeat clear rounds until
+        ``album_list`` reports zero items (or ``max_rounds``).
 
-        We return as soon as the Delete press settles (no new tap for
-        ``settle_after_delete`` seconds) so the caller can trigger the upload
-        right off the delete press, rather than always waiting the full grace.
-        ``post_grace_seconds`` is the hard cap, and ``no_delete_timeout`` lets
-        us bail early when the dialog never shows (album already empty).
-
-        Note: we deliberately do NOT pre-check with album_get — the shortcut's
-        get can report 0 items even when the library is full, which would skip
-        the clear entirely.
+        Note: we do not pre-check with album_get — the shortcut's get can report
+        0 items even when the library is full, which would skip the clear.
         """
         from imouse_farm.actions.permission_prompts import (
             DELETE_CONFIRM_TEXTS,
+            DELETE_SHEET_DISTRACTOR_TEXTS,
             DELETE_SHEET_MIN_Y,
-            delete_match_is_stable,
-            pick_delete_confirm_match,
+            delete_sheet_is_visible,
+            is_delete_confirm_label,
+            resolve_delete_tap,
         )
 
         loop = asyncio.get_event_loop()
         label = album_name or "recents"
-        error_message = ""
-        stop = asyncio.Event()
-        delete_pressed = asyncio.Event()
-        tap_count = 0
-        last_tap_time = 0.0
-        delete_rect = [0, 320, 406, 720]
-        delete_stable_delay = 0.35
-        delete_settle_after_tap = 2.5
+        delete_rect = [0, 250, 406, 720]
+        delete_settle_after_tap = 2.0
+        total_taps = 0
+        last_error = ""
 
         def _clear() -> bool:
-            nonlocal error_message
+            nonlocal last_error
             response = self._api.shortcut_album_clear(
                 self._ids(device_id), album_name=album_name, outtime=timeout_ms
             )
             if self._ok(response):
                 return True
-            error_message = self._error_message(response)
-            logger.error("album_clear_failed", device_id=device_id, album=label, message=error_message)
+            last_error = self._error_message(response)
+            logger.error("album_clear_failed", device_id=device_id, album=label, message=last_error)
             return False
 
-        async def _scan_delete_button() -> dict | None:
-            """Collect delete OCR hits in the bottom sheet and pick the safest match."""
-            collected: list[dict] = []
-            for query in DELETE_CONFIRM_TEXTS:
-                matches = await self.find_text_on_device(
+        async def _scan_delete_sheet() -> list[dict]:
+            """OCR the bottom sheet for delete labels and distractors like Show All."""
+            specific = [t for t in DELETE_CONFIRM_TEXTS if t != "Delete"]
+            matches = await self.find_text_on_device(
+                device_id,
+                specific + list(DELETE_SHEET_DISTRACTOR_TEXTS),
+                threshold=0.62,
+                contain=True,
+                rect=delete_rect,
+            )
+            if not any(is_delete_confirm_label(str(m.get("text", ""))) for m in matches):
+                bare = await self.find_text_on_device(
                     device_id,
-                    [query],
+                    ["Delete"],
                     threshold=0.72,
-                    contain=True,
+                    contain=False,
                     rect=delete_rect,
                 )
-                collected.extend(matches)
-            picked = pick_delete_confirm_match(collected, min_y=DELETE_SHEET_MIN_Y)
-            if not picked and collected:
-                logger.debug(
-                    "album_clear_delete_scan_miss",
-                    device_id=device_id,
-                    raw_texts=[m.get("text", "") for m in collected[:8]],
-                )
-            return picked
+                matches.extend(bare)
+            return matches
 
-        async def _locate_delete_button_stable() -> dict | None:
-            """Require the same delete button on two scans before tapping."""
-            first = await _scan_delete_button()
-            if not first:
-                return None
-            await asyncio.sleep(delete_stable_delay)
-            second = await _scan_delete_button()
-            if not second or not delete_match_is_stable(first, second):
-                logger.info(
-                    "album_clear_delete_unstable",
-                    device_id=device_id,
-                    first_text=first.get("text", ""),
-                    second_text=(second or {}).get("text", ""),
-                )
-                return None
-            return second
+        async def _tap_delete_once(sheet_visible: list[bool]) -> bool:
+            """Tap delete once (OCR or fallback). Never taps Show All."""
+            from imouse_farm.actions.pre_touch_reset import pre_touch_mouse_reset
 
-        async def _tap_delete_once() -> bool:
-            """Tap delete exactly once after the button is verified stable."""
-            target = await _locate_delete_button_stable()
-            if not target:
+            await pre_touch_mouse_reset(
+                self,
+                device_id,
+                step_name="album_clear_delete",
+            )
+            matches = await _scan_delete_sheet()
+            if delete_sheet_is_visible(matches):
+                sheet_visible[0] = True
+            target = resolve_delete_tap(matches, min_y=DELETE_SHEET_MIN_Y)
+            if target is None:
+                if matches:
+                    logger.debug(
+                        "album_clear_delete_scan_miss",
+                        device_id=device_id,
+                        raw_texts=[m.get("text", "") for m in matches[:8]],
+                    )
                 return False
+            if isinstance(target, tuple) and target[0] == "fallback":
+                x, y = target[1]
+                await self.tap(device_id, x, y)
+                logger.info(
+                    "album_clear_delete_fallback_tap",
+                    device_id=device_id,
+                    x=x,
+                    y=y,
+                )
+                return True
             await self.tap(device_id, int(target["x"]), int(target["y"]))
             logger.info(
                 "album_clear_delete_tap",
@@ -684,58 +694,100 @@ class DeviceController:
             )
             return True
 
-        async def _watch_and_tap() -> None:
-            """Wait for the sheet, verify delete, tap once, then pause before retry."""
-            nonlocal tap_count, last_tap_time
-            await asyncio.sleep(1.0)
-            while not stop.is_set():
-                if await _tap_delete_once():
-                    tap_count += 1
-                    last_tap_time = loop.time()
-                    delete_pressed.set()
-                    await asyncio.sleep(delete_settle_after_tap)
-                else:
-                    await asyncio.sleep(0.4)
+        async def _run_clear_round(round_num: int) -> tuple[bool, int, bool]:
+            """One shortcut_album_clear plus delete-sheet watcher. Returns (api_ok, taps, delete_pressed)."""
+            stop = asyncio.Event()
+            delete_pressed = asyncio.Event()
+            tap_count = 0
+            last_tap_time = 0.0
+            sheet_visible = [False]
+            api_ok = False
+
+            async def _watch_and_tap() -> None:
+                nonlocal tap_count, last_tap_time
+                await asyncio.sleep(0.25)
+                while not stop.is_set():
+                    if await _tap_delete_once(sheet_visible):
+                        tap_count += 1
+                        last_tap_time = loop.time()
+                        delete_pressed.set()
+                        await asyncio.sleep(delete_settle_after_tap)
+                    else:
+                        await asyncio.sleep(0.3)
+
+            logger.info("album_clear_round", device_id=device_id, album=label, round=round_num)
+            watcher = asyncio.create_task(_watch_and_tap())
+            try:
+                api_ok = await self._run_sync(_clear)
+                if not api_ok:
+                    logger.warning(
+                        "album_clear_api_error",
+                        device_id=device_id,
+                        album=label,
+                        round=round_num,
+                        message=last_error,
+                    )
+                clear_done = loop.time()
+                deadline = clear_done + post_grace_seconds
+                while loop.time() < deadline:
+                    if delete_pressed.is_set():
+                        idle = loop.time() - last_tap_time
+                        if idle >= settle_after_delete:
+                            matches = await _scan_delete_sheet()
+                            if not delete_sheet_is_visible(matches):
+                                break
+                    elif (
+                        (loop.time() - clear_done) >= no_delete_timeout
+                        and not sheet_visible[0]
+                        and api_ok
+                    ):
+                        break
+                    await asyncio.sleep(0.2)
+            finally:
+                stop.set()
+                watcher.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher
+
+            return api_ok, tap_count, delete_pressed.is_set()
 
         logger.info("album_clear", device_id=device_id, album=label)
-        watcher = asyncio.create_task(_watch_and_tap())
-        try:
-            ok = await self._run_sync(_clear)
-            if not ok:
-                raise RuntimeError(error_message or "album clear failed")
-            # The "Delete N Items" popup appears AFTER the API returns. Wait for
-            # it to be pressed, then return as soon as the taps go quiet — that
-            # delete press is the trigger for the upload that follows.
-            clear_done = loop.time()
-            deadline = clear_done + post_grace_seconds
-            while loop.time() < deadline:
-                if delete_pressed.is_set():
-                    # Delete tapped (possibly in batches): return once no new
-                    # tap for `settle_after_delete` seconds.
-                    while (
-                        loop.time() < deadline
-                        and (loop.time() - last_tap_time) < settle_after_delete
-                    ):
-                        await asyncio.sleep(0.2)
-                    break
-                # Dialog never showed (album already empty) → don't hang.
-                if (loop.time() - clear_done) >= no_delete_timeout:
-                    break
-                await asyncio.sleep(0.2)
-        finally:
-            stop.set()
-            watcher.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await watcher
+        remaining_count = -1
+        for round_num in range(1, max_rounds + 1):
+            api_ok, round_taps, delete_pressed = await _run_clear_round(round_num)
+            total_taps += round_taps
 
+            if not api_ok and not delete_pressed and round_num == 1:
+                raise RuntimeError(last_error or "album clear failed")
+
+            await asyncio.sleep(1.5)
+            remaining = await self.album_list(
+                device_id, album_name=album_name, num=list_check_num
+            )
+            remaining_count = len(remaining)
+            logger.info(
+                "album_clear_round_done",
+                device_id=device_id,
+                album=label,
+                round=round_num,
+                round_taps=round_taps,
+                remaining=remaining_count,
+            )
+            if remaining_count == 0:
+                break
+            if round_taps == 0:
+                break
+
+        success = remaining_count == 0
         logger.info(
             "album_clear_done",
             device_id=device_id,
             album=label,
-            delete_taps=tap_count,
-            delete_pressed=delete_pressed.is_set(),
+            delete_taps=total_taps,
+            remaining=remaining_count,
+            success=success,
         )
-        return True
+        return success
 
     async def album_upload(
         self,
@@ -936,10 +988,16 @@ class DeviceController:
         threshold: float = 0.75,
         contain: bool = True,
         rect: list[int] | None = None,
+        is_ex: bool = False,
     ) -> list[dict[str, Any]]:
         def _find() -> list[dict[str, Any]]:
             response = self._api.pic_find_text(
-                device_id, texts, similarity=threshold, contain=contain, rect=rect
+                device_id,
+                texts,
+                similarity=threshold,
+                contain=contain,
+                rect=rect,
+                is_ex=is_ex,
             )
             if not response or not self._ok(response):
                 return []

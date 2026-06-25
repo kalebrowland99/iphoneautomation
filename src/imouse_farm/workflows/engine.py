@@ -24,13 +24,17 @@ from imouse_farm.permissions.watcher import PermissionWatcherManager
 from imouse_farm.popups.manager import PopupManager
 from imouse_farm.screenshots.service import ScreenshotService
 from imouse_farm.state.machine import StateMachine
+from imouse_farm.captions.ai_generator import stem_to_food_name
 from imouse_farm.post.post_caption_store import (
+    POST_COUNT,
+    device_storage_key,
     get_final_caption,
     get_gallery_coords,
     get_onscreen_text,
+    post_media_stem,
 )
 from imouse_farm.settings.device_settings import get_debug_skip_post
-from imouse_farm.utils.gallery import phone_gallery_folder
+from imouse_farm.utils.gallery import list_media_stems_for_posts, phone_gallery_folder
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.vision.fallbacks import (
     apply_detection_fallbacks,
@@ -39,6 +43,7 @@ from imouse_farm.vision.fallbacks import (
     detection_satisfied,
     DETECTION_FALLBACKS,
     expand_template_names,
+    resolve_template_state_fallback,
 )
 
 logger = get_logger(__name__)
@@ -67,6 +72,7 @@ class WorkflowRunner:
         db: DatabaseRepository,
         on_event: EventCallback | None = None,
         on_finished: Callable[[str], Awaitable[None]] | None = None,
+        start_post_index: int = 1,
     ) -> None:
         self._workflow = workflow
         self._device_id = device_id
@@ -90,6 +96,11 @@ class WorkflowRunner:
         self._run_id: int | None = None
         self._has_recent_screenshot = False
         self._has_recent_analysis = False
+        self._start_post_index = max(1, int(start_post_index))
+
+    @property
+    def start_post_index(self) -> int:
+        return self._start_post_index
 
     @property
     def is_running(self) -> bool:
@@ -110,12 +121,20 @@ class WorkflowRunner:
         await self._device_manager.set_workflow(self._device_id, self._workflow.name)
         await self._device_manager.resume_workflow(self._device_id)
         self._task = asyncio.create_task(self._run_loop())
+        start_msg = f"Started {self._workflow.name}"
+        if self._start_post_index > 1:
+            start_msg += f" (from post {self._start_post_index})"
         await self._log_activity(
             "info",
             "workflow",
-            f"Started {self._workflow.name}",
+            start_msg,
         )
-        logger.info("workflow_started", workflow=self._workflow.name, device_id=self._device_id)
+        logger.info(
+            "workflow_started",
+            workflow=self._workflow.name,
+            device_id=self._device_id,
+            start_post_index=self._start_post_index,
+        )
 
     async def stop(self) -> None:
         self._running = False
@@ -132,7 +151,11 @@ class WorkflowRunner:
         logger.info("workflow_stopped", workflow=self._workflow.name, device_id=self._device_id)
 
     async def _run_loop(self) -> None:
-        iteration = 0
+        max_iter = self._workflow.max_iterations
+        start_at = self._start_post_index
+        if max_iter > 0:
+            start_at = min(start_at, max_iter)
+        iteration = start_at - 1
         try:
             while self._running:
                 if await self._device_manager.is_workflow_paused(self._device_id):
@@ -140,7 +163,7 @@ class WorkflowRunner:
                     continue
 
                 iteration += 1
-                if self._workflow.max_iterations > 0 and iteration > self._workflow.max_iterations:
+                if max_iter > 0 and iteration > max_iter:
                     break
 
                 self._refresh_post_variables(iteration)
@@ -214,19 +237,49 @@ class WorkflowRunner:
             gallery_folder=str(folder),
         )
 
+    def _post_text_key(self) -> str:
+        device = self._device_manager.get_device(self._device_id)
+        if device:
+            return device_storage_key(device.device_id, device.user_name)
+        return self._device_id
+
     def _refresh_post_variables(self, post_index: int) -> None:
         self._variables["post_index"] = post_index
-        self._variables["post_caption"] = get_onscreen_text(self._device_id, post_index)
-        self._variables["final_post_caption"] = get_final_caption(self._device_id, post_index)
+        text_key = self._post_text_key()
+        device = self._device_manager.get_device(self._device_id)
+        media_stems: list[str] = []
+        if device:
+            folder = phone_gallery_folder(
+                self._config.gallery.base_directory,
+                device.user_name,
+                device.phone_name,
+            )
+            media_stems = list_media_stems_for_posts(
+                folder,
+                self._config.gallery.media_extensions,
+                POST_COUNT,
+            )
+        stem = post_media_stem(media_stems, post_index)
+        food_name = stem_to_food_name(stem) if stem else ""
+        onscreen = get_onscreen_text(text_key, post_index)
+        final_caption = get_final_caption(text_key, post_index)
         gx, gy = get_gallery_coords(post_index)
+        self._variables["post_caption"] = onscreen
+        self._variables["final_post_caption"] = final_caption
+        self._variables["media_stem"] = stem
+        self._variables["food_name"] = food_name
         self._variables["gallery_x"] = gx
         self._variables["gallery_y"] = gy
         logger.info(
             "workflow_post_variables",
             device_id=self._device_id,
             post_index=post_index,
+            media_stem=stem,
+            food_name=food_name,
             gallery_x=gx,
             gallery_y=gy,
+            onscreen_len=len(onscreen),
+            final_len=len(final_caption),
         )
 
     def _filter_min_confidence(self, detections: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -457,6 +510,8 @@ class WorkflowRunner:
         state_if_missing = DeviceState(action.get("state_if_missing", "ACTIVE"))
         fallback_template = str(action.get("fallback_template") or "").strip() or None
         state_if_fallback = DeviceState(action.get("state_if_fallback", "WAITING"))
+        fallback_min_confidence = float(action.get("fallback_min_confidence", 0.42))
+        raw_fallback_templates = action.get("fallback_templates")
         require_state = action.get("require_state")
         required = DeviceState(require_state) if require_state else None
 
@@ -477,26 +532,46 @@ class WorkflowRunner:
         else:
             state = state_if_missing
             reason = f"'{texts[0]}' not found"
-            if fallback_template and state == state_if_missing:
-                capture = WorkflowStepConfig(
-                    type="screenshot",
-                    name=f"{step.name}_fallback_capture",
-                    templates=[fallback_template],
-                )
-                analyze = WorkflowStepConfig(
-                    type="analyze_screen",
-                    name=f"{step.name}_fallback_analyze",
-                    templates=[fallback_template],
-                )
-                await self._step_capture(capture)
-                await self._step_analyze(analyze)
-                if self._has_detection(fallback_template):
-                    state = state_if_fallback
-                    hit = self._actions._last_detections.get(self._device_id, {}).get(
-                        fallback_template, {}
+            fallback_entries: list[dict[str, Any]] = []
+            if isinstance(raw_fallback_templates, list) and raw_fallback_templates:
+                fallback_entries = [
+                    entry for entry in raw_fallback_templates if isinstance(entry, dict)
+                ]
+            elif fallback_template:
+                fallback_entries = [{
+                    "template": fallback_template,
+                    "state": state_if_fallback.value,
+                    "min_confidence": fallback_min_confidence,
+                }]
+            if fallback_entries and state == state_if_missing:
+                template_names = [
+                    str(entry.get("template") or "").strip()
+                    for entry in fallback_entries
+                ]
+                template_names = [name for name in template_names if name]
+                if template_names:
+                    capture = WorkflowStepConfig(
+                        type="screenshot",
+                        name=f"{step.name}_fallback_capture",
+                        templates=template_names,
                     )
-                    conf = float(hit.get("confidence", 0)) if hit else 0.0
-                    reason = f"OCR missed but {fallback_template} visible (conf={conf:.2f})"
+                    analyze = WorkflowStepConfig(
+                        type="analyze_screen",
+                        name=f"{step.name}_fallback_analyze",
+                        templates=template_names,
+                    )
+                    await self._step_capture(capture)
+                    await self._step_analyze(analyze)
+                    detections = self._actions._last_detections.get(self._device_id, {})
+                    winner, conf = resolve_template_state_fallback(
+                        detections, fallback_entries
+                    )
+                    if winner:
+                        for entry in fallback_entries:
+                            if str(entry.get("template") or "").strip() == winner:
+                                state = DeviceState(entry.get("state", state_if_fallback.value))
+                                break
+                        reason = f"OCR missed but {winner} visible (conf={conf:.2f})"
 
         await self._state_machine.transition(
             self._device_id, state, reason=f"workflow:{step.name}", force=True
@@ -726,6 +801,21 @@ class WorkflowRunner:
             await self._step_analyze(WorkflowStepConfig(type="analyze", name="_post_dismiss_analyze"))
 
     async def _step_action(self, step: WorkflowStepConfig) -> None:
+        if step.name in ("tap_gallery_item", "type_onscreen_text", "type_final_post_caption"):
+            post_index = int(self._variables.get("post_index", 0))
+            if post_index >= 1:
+                self._refresh_post_variables(post_index)
+                await self._log_activity(
+                    "info",
+                    "workflow",
+                    (
+                        f"Post {post_index}: {self._variables.get('media_stem') or '(no file)'} "
+                        f"→ gallery ({self._variables.get('gallery_x')}, "
+                        f"{self._variables.get('gallery_y')})"
+                    ),
+                    step=step.name,
+                )
+
         if step.requires_analysis and not self._has_recent_analysis:
             raise RuntimeError(
                 f"Action '{step.name}' blocked: screenshot-driven automation requires "
@@ -1038,13 +1128,37 @@ class WorkflowEngine:
             except Exception as exc:
                 logger.error("workflow_event_failed", error=str(exc))
 
-    async def start_workflow(self, workflow_name: str, device_id: str) -> bool:
+    async def start_workflow(
+        self,
+        workflow_name: str,
+        device_id: str,
+        *,
+        start_post_index: int | None = None,
+    ) -> bool:
         workflow = self._workflows.get(workflow_name)
         if not workflow or not workflow.enabled:
             return False
         key = f"{device_id}:{workflow_name}"
         if key in self._runners and self._runners[key].is_running:
             return False
+
+        post_index = 1
+        if start_post_index is not None:
+            if workflow_name != "tiktok_post":
+                logger.warning(
+                    "start_post_index_ignored",
+                    workflow=workflow_name,
+                    start_post_index=start_post_index,
+                )
+            elif not (1 <= start_post_index <= POST_COUNT):
+                logger.warning(
+                    "start_post_index_out_of_range",
+                    start_post_index=start_post_index,
+                    max_post=POST_COUNT,
+                )
+                return False
+            else:
+                post_index = start_post_index
 
         if self._permission_watchers:
             await self._permission_watchers.acquire(device_id)
@@ -1066,6 +1180,7 @@ class WorkflowEngine:
             db=self._db,
             on_event=self._emit,
             on_finished=_on_runner_finished,
+            start_post_index=post_index,
         )
         self._runners[key] = runner
         await runner.start()

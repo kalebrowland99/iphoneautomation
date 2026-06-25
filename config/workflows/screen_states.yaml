@@ -66,20 +66,17 @@ ui_elements:
   - name: aa
     template: aa.jpg
     threshold: 0.40
-    search_rect_pct: [0.9, 0.0, 1.0, 1.0]
+    search_rect_pct: [0.9, 0.0, 1.0, 0.5]
     match_white_text: true
   - name: border
     template: border.jpg
     threshold: 0.30
-  - name: border2
-    template: border2.jpg
-    threshold: 0.28
+    search_rect_pct: [0.28, 0.0, 0.72, 0.38]
   - name: editor
     template: editor.jpg
-    threshold: 0.40
-    device_threshold: 0.60
-    min_confidence: 0.62
-    search_rect_pct: [0.50, 0.68, 1.0, 0.90]
+    threshold: 0.32
+    # Top-right toolbar only — full-height search was matching the bottom-right Next arrow.
+    search_rect_pct: [0.82, 0.0, 1.0, 0.35]
     match_white_text: true
   - name: continuearrow
     template: continuearrow.jpg

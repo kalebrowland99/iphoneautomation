@@ -45,6 +45,20 @@ def test_parse_posts_json_array() -> None:
     assert posts[0]["onscreen"] == "Hi"
 
 
+def test_parse_foods_json() -> None:
+    from imouse_farm.captions.ai_generator import _parse_foods_json
+
+    foods = _parse_foods_json('{"foods": ["Chicken Tikka Masala", "Mac And Cheese", ""]}')
+    assert foods == ["Chicken Tikka Masala", "Mac And Cheese", ""]
+
+
+def test_food_label_from_response() -> None:
+    from imouse_farm.captions.ai_generator import _food_label_from_response
+
+    assert _food_label_from_response({"food": "Beef Burger"}, "1-beef", 1) == "Beef Burger"
+    assert _food_label_from_response({}, "1-chicken_tikka_masala", 2) == "Chicken Tikka Masala"
+
+
 def test_parse_posts_json_object() -> None:
     posts = _parse_posts_json('{"posts": [{"onscreen": "A", "final": "B"}]}')
     assert len(posts) == 1
