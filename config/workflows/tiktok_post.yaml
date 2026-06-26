@@ -64,7 +64,7 @@ steps:
     action:
       type: tap_ocr
       texts: ["Recents", "RECENTS", "Recent", "RECENT"]
-      wait_timeout_seconds: 45
+      wait_timeout_seconds: 10
       poll_interval_seconds: 1.5
       verify_only: true
       optional: false
@@ -77,9 +77,11 @@ steps:
       fallback_tap:
         x: 326
         y: 609
+        tap_count: 2
+        tap_interval_seconds: 0.5
       fallback_tap_delay_seconds: 1
       fallback_after_tap_seconds: 1.5
-      fallback_retry_seconds: 45
+      fallback_retry_seconds: 10
     skip_post_action: true
 
   - type: wait
@@ -99,6 +101,25 @@ steps:
   - type: wait
     name: after_gallery_item
     duration_seconds: 2
+
+  - type: execute_action
+    name: tap_next_after_media
+    action:
+      type: tap_ocr
+      texts: ["Next", "NEXT"]
+      optional: true
+      require_dark_text: true
+      max_text_luminance: 110
+      wait_timeout_seconds: 30
+      poll_interval_seconds: 1
+      threshold: 0.65
+      contain: true
+      skip_if_texts_present: ["Your Story", "YOUR STORY", "Your story", "Story"]
+      skip_if_all_texts_present: ["Your", "Story"]
+      skip_if_story_button: true
+      skip_if_threshold: 0.45
+      skip_if_ocr_ex: true
+    skip_post_action: true
 
   # ── 4. Music gallery button ─────────────────────────────────────────
   - type: execute_action
@@ -126,11 +147,7 @@ steps:
       optional: false
     skip_post_action: true
 
-  - type: wait
-    name: after_favorites
-    duration_seconds: 1.5
-
-  # ── 6. Wait for Hvitserk's choice, then tap ─────────────────────────
+  # ── 6. Wait for Hvitserk (30s), unstable retry, wait 20s more, tap ─
   - type: execute_action
     name: tap_hvitserk_choice
     on_failure: pause
@@ -142,7 +159,13 @@ steps:
         - "Hvitserks choice"
         - "Hvitserks Choice"
         - "HVITSERK'S CHOICE"
-      wait_timeout_seconds: 60
+      initial_wait_seconds: 30
+      after_retry_wait_seconds: 20
+      unstable_retry_texts:
+        - "Your network is unstable. Tap to retry."
+        - "Your network is unstable"
+        - "network is unstable"
+        - "Tap to retry"
       poll_interval_seconds: 1.5
       threshold: 0.65
       optional: false
@@ -201,9 +224,10 @@ steps:
     name: after_caption
     duration_seconds: 1.5
 
-  # ── 10. White background — fixed coord (201, 38) ×2 ───────────────
+  # ── 10. White background — fixed coord (201, 38) ×2, post 1 only ───
   - type: execute_action
     name: tap_white_background
+    when_post_index: 1
     on_failure: pause
     action:
       type: tap
@@ -215,6 +239,7 @@ steps:
 
   - type: wait
     name: after_white_background
+    when_post_index: 1
     duration_seconds: 1.5
 
   # ── 11. Done (top-right) ────────────────────────────────────────────

@@ -13,8 +13,10 @@ from imouse_farm.actions.permission_prompts import (
     is_permission_dialog_text,
     is_photo_delete_sheet_text,
     is_tiktok_email_confirm_dialog,
+    is_tiktok_post_notify_dialog,
     should_allow_permission,
     tiktok_not_now_button_texts,
+    tiktok_post_notify_dismiss_coords,
 )
 from imouse_farm.actions.pre_touch_reset import (
     is_tiktok_workflow,
@@ -86,6 +88,20 @@ class PermissionWatcher:
                     "tiktok_popup_dismiss",
                     device_id=self._device_id,
                     dialog="email_confirm",
+                    text=tapped.get("text", ""),
+                    x=tapped.get("x"),
+                    y=tapped.get("y"),
+                )
+                await asyncio.sleep(1.2)
+                return True
+
+        if is_tiktok_post_notify_dialog(screen):
+            tapped = await self._dismiss_post_notify()
+            if tapped:
+                logger.info(
+                    "tiktok_popup_dismiss",
+                    device_id=self._device_id,
+                    dialog="post_notify",
                     text=tapped.get("text", ""),
                     x=tapped.get("x"),
                     y=tapped.get("y"),
@@ -168,6 +184,13 @@ class PermissionWatcher:
             await self._controller.tap(self._device_id, int(best["x"]), int(best["y"]))
             return best
         return None
+
+    async def _dismiss_post_notify(self) -> dict[str, Any] | None:
+        x, y = tiktok_post_notify_dismiss_coords()
+        await self._pre_touch_if_tiktok()
+        if not await self._controller.tap(self._device_id, x, y):
+            return None
+        return {"text": "post_notify_dismiss", "x": x, "y": y}
 
 
 class PermissionWatcherManager:

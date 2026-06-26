@@ -46,6 +46,7 @@ from imouse_farm.post.post_caption_store import (
     post_media_stem,
     set_final_caption,
     set_onscreen_text,
+    validate_post_texts,
 )
 from imouse_farm.settings.device_settings import (
     get_debug_skip_post,
@@ -295,6 +296,11 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         if not device:
             raise HTTPException(404, "Device not found")
         from_post = body.from_post if body else None
+        text_key = _post_text_key(device)
+        check_from = from_post if from_post is not None else 1
+        missing = validate_post_texts(text_key, from_post=check_from)
+        if missing:
+            raise HTTPException(400, "; ".join(missing))
         success = await app_instance.workflow_pipeline.start(device_id, from_post=from_post)
         if not success:
             raise HTTPException(400, "Failed to start full run — workflow may already be active")

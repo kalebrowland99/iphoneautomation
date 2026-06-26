@@ -77,3 +77,15 @@ popups:
       threshold: 0.65
       contain: true
       optional: false
+
+  tiktok_post_notify:
+    description: "TikTok post interactions notification — tap dismiss (196, 193)"
+    pause_workflow: false
+    ocr_keywords:
+      - "Get notified of post interactions"
+      - "notified of post interactions"
+      - "post interactions?"
+    dismiss_action:
+      type: tap
+      x: 196
+      y: 193

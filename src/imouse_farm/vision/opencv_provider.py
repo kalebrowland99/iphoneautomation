@@ -359,6 +359,7 @@ class OpenCVVisionProvider(VisionProvider):
                 "login_prompt": DeviceState.WAITING,
                 "confirmation_dialog": DeviceState.WAITING,
                 "tiktok_email_confirm": DeviceState.WAITING,
+                "tiktok_post_notify": DeviceState.WAITING,
             }
             return popup_state_map.get(popup_type, DeviceState.UNKNOWN_SCREEN)
 

@@ -1161,9 +1161,46 @@
             }
         }
 
+        async function flushPostTextSaves() {
+            if (!deviceId) return;
+            const tasks = [];
+            document.querySelectorAll('#post-texts textarea[data-post]').forEach(el => {
+                const key = `${el.dataset.post}-${el.dataset.field}`;
+                if (postTextSaveTimers[key]) {
+                    clearTimeout(postTextSaveTimers[key]);
+                    delete postTextSaveTimers[key];
+                }
+                tasks.push(
+                    api(`/devices/${enc(deviceId)}/post-texts/${el.dataset.post}/${el.dataset.field}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: el.value }),
+                    })
+                );
+            });
+            if (tasks.length) await Promise.all(tasks);
+        }
+
+        function validatePostTexts(fromPost = 1) {
+            const missing = [];
+            for (let post = fromPost; post <= 3; post++) {
+                const on = document.getElementById(`onscreen-${post}`);
+                const fin = document.getElementById(`final-${post}`);
+                if (!on?.value.trim()) missing.push(`Post ${post}: onscreen text is empty`);
+                if (!fin?.value.trim()) missing.push(`Post ${post}: final caption is empty`);
+            }
+            return missing;
+        }
+
         async function startPipeline() {
             if (!deviceId) return;
+            const missing = validatePostTexts(1);
+            if (missing.length) {
+                alert(`Fill all caption fields before Full start:\n\n${missing.join('\n')}`);
+                return;
+            }
             try {
+                await flushPostTextSaves();
                 await api(`/devices/${enc(deviceId)}/pipeline/start`, { method: 'POST' });
                 await refreshFarmDevices({ quiet: true });
                 await updateDeviceMeta();
@@ -1175,7 +1212,13 @@
 
         async function startPipelineFromPost(fromPost) {
             if (!deviceId) return;
+            const missing = validatePostTexts(fromPost);
+            if (missing.length) {
+                alert(`Fill caption fields for posts ${fromPost}–3 before starting:\n\n${missing.join('\n')}`);
+                return;
+            }
             try {
+                await flushPostTextSaves();
                 await api(`/devices/${enc(deviceId)}/pipeline/start`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

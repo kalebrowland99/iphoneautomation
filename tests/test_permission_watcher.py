@@ -45,3 +45,16 @@ def test_not_now_label() -> None:
     assert is_not_now_label("Not Now")
     assert is_not_now_label("NOT NOW")
     assert not is_not_now_label("Confirm")
+
+
+def test_detects_tiktok_post_notify_dialog() -> None:
+    from imouse_farm.actions.permission_prompts import is_tiktok_post_notify_dialog
+
+    text = "Get notified of post interactions?\nGet notified\nNot now"
+    assert is_tiktok_post_notify_dialog(text)
+
+
+def test_post_notify_dismiss_coords() -> None:
+    from imouse_farm.actions.permission_prompts import tiktok_post_notify_dismiss_coords
+
+    assert tiktok_post_notify_dismiss_coords() == (196, 193)

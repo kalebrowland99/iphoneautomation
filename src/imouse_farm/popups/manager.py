@@ -24,6 +24,7 @@ class PopupType(str, Enum):
     LOGIN = "login_prompt"
     CONFIRMATION = "confirmation_dialog"
     TIKTOK_EMAIL_CONFIRM = "tiktok_email_confirm"
+    TIKTOK_POST_NOTIFY = "tiktok_post_notify"
     UNKNOWN = "unknown_screen"
 
 

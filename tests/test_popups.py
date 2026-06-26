@@ -56,3 +56,19 @@ def test_detect_tiktok_email_confirm_popup() -> None:
     assert result.should_pause is False
     assert result.dismiss_action["type"] == "tap_ocr"
     assert "Not Now" in result.dismiss_action["texts"]
+
+
+def test_detect_tiktok_post_notify_popup() -> None:
+    manager = PopupManager("config/workflows")
+    analysis = VisionAnalysis(
+        device_id="test-device",
+        screenshot_path="/tmp/test.bmp",
+        popup_type="tiktok_post_notify",
+    )
+    result = manager.detect(analysis)
+    assert result.detected is True
+    assert result.popup_type == PopupType.TIKTOK_POST_NOTIFY
+    assert result.should_pause is False
+    assert result.dismiss_action["type"] == "tap"
+    assert result.dismiss_action["x"] == 196
+    assert result.dismiss_action["y"] == 193

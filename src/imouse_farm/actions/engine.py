@@ -19,6 +19,8 @@ from imouse_farm.controller.device_controller import DeviceController
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.utils.logging import get_logger
+from imouse_farm.vision.ocr_skip import should_skip_tap_ocr
+from imouse_farm.vision.text_color import decode_screenshot, is_text_dark_enough
 
 logger = get_logger(__name__)
 
@@ -335,6 +337,51 @@ class ActionEngine:
                             confidence=best.get("confidence"),
                         )
                         return True
+                    device = self._device_manager.get_device(device_id)
+                    sw = int(device.screen_width) if device and device.screen_width else 406
+                    sh = int(device.screen_height) if device and device.screen_height else 720
+                    if await should_skip_tap_ocr(
+                        ctrl,
+                        device_id,
+                        params,
+                        default_threshold=threshold,
+                        default_contain=contain,
+                        skip_rect=ocr_rect,
+                        screen_width=sw,
+                        screen_height=sh,
+                    ):
+                        logger.info(
+                            "tap_ocr_skip_co_present",
+                            device_id=device_id,
+                            texts=candidates,
+                            skip_if=params.get("skip_if_texts_present"),
+                            at="pre_tap",
+                        )
+                        return True
+                    if bool(params.get("require_dark_text")):
+                        max_luminance = float(params.get("max_text_luminance", 110))
+                        shot = await ctrl.capture_screenshot(device_id)
+                        image = decode_screenshot(shot) if shot else None
+                        if image is None:
+                            return False
+                        rect = best.get("rect")
+                        ocr_rect_list = rect if isinstance(rect, list) else None
+                        if not is_text_dark_enough(
+                            image,
+                            int(best["x"]),
+                            int(best["y"]),
+                            rect=ocr_rect_list,
+                            max_luminance=max_luminance,
+                        ):
+                            logger.info(
+                                "tap_ocr_text_too_light",
+                                device_id=device_id,
+                                text=best.get("text"),
+                                x=best.get("x"),
+                                y=best.get("y"),
+                                max_luminance=max_luminance,
+                            )
+                            return False
                     logger.info(
                         "tap_ocr",
                         device_id=device_id,
@@ -347,7 +394,31 @@ class ActionEngine:
                     await ctrl.tap(device_id, int(best["x"]), int(best["y"]))
                     return True
 
+                async def _should_skip_tap() -> bool:
+                    device = self._device_manager.get_device(device_id)
+                    sw = int(device.screen_width) if device and device.screen_width else 406
+                    sh = int(device.screen_height) if device and device.screen_height else 720
+                    return await should_skip_tap_ocr(
+                        ctrl,
+                        device_id,
+                        params,
+                        default_threshold=threshold,
+                        default_contain=contain,
+                        skip_rect=ocr_rect,
+                        screen_width=sw,
+                        screen_height=sh,
+                    )
+
                 async def _try_tap_once() -> bool:
+                    if await _should_skip_tap():
+                        logger.info(
+                            "tap_ocr_skip_co_present",
+                            device_id=device_id,
+                            texts=candidates,
+                            skip_if=params.get("skip_if_texts_present"),
+                            at="poll",
+                        )
+                        return True
                     expect_missing = bool(params.get("expect_missing"))
                     if expect_missing:
                         for text in candidates:
@@ -378,6 +449,83 @@ class ActionEngine:
                         await asyncio.sleep(poll_interval)
                     return False
 
+                async def _poll_primary_until(deadline: float) -> bool:
+                    while True:
+                        if await _try_tap_once():
+                            return True
+                        if time.monotonic() >= deadline:
+                            break
+                        await asyncio.sleep(poll_interval)
+                    return False
+
+                async def _tap_auxiliary_texts(aux_texts: list[str]) -> bool:
+                    batch = await _find_ocr_matches(aux_texts)
+                    if batch:
+                        annotated = [
+                            {**m, "text": m.get("text") or aux_texts[0]}
+                            for m in batch
+                        ]
+                        best = _pick_best_match(annotated)
+                        logger.info(
+                            "tap_ocr_auxiliary",
+                            device_id=device_id,
+                            text=best.get("text"),
+                            x=best["x"],
+                            y=best["y"],
+                        )
+                        await ctrl.tap(device_id, int(best["x"]), int(best["y"]))
+                        return True
+                    for text in aux_texts:
+                        matches = await _find_ocr_matches([text])
+                        if matches:
+                            best = _pick_best_match(
+                                [{**m, "text": m.get("text") or text} for m in matches]
+                            )
+                            logger.info(
+                                "tap_ocr_auxiliary",
+                                device_id=device_id,
+                                text=best.get("text"),
+                                x=best["x"],
+                                y=best["y"],
+                                query=text,
+                            )
+                            await ctrl.tap(device_id, int(best["x"]), int(best["y"]))
+                            return True
+                    return False
+
+                unstable_retry_raw = params.get("unstable_retry_texts")
+                if unstable_retry_raw:
+                    retry_texts = [
+                        str(t).strip() for t in unstable_retry_raw if str(t).strip()
+                    ]
+                    phase1_seconds = float(params.get("initial_wait_seconds", 30))
+                    phase2_seconds = float(params.get("after_retry_wait_seconds", 20))
+                    logger.info(
+                        "tap_ocr_unstable_wait_start",
+                        device_id=device_id,
+                        phase1_seconds=phase1_seconds,
+                        phase2_seconds=phase2_seconds,
+                        texts=candidates,
+                    )
+                    if await _poll_primary_until(time.monotonic() + phase1_seconds):
+                        return True
+                    if retry_texts:
+                        tapped_unstable = await _tap_auxiliary_texts(retry_texts)
+                        logger.info(
+                            "tap_ocr_unstable_retry",
+                            device_id=device_id,
+                            tapped=tapped_unstable,
+                            texts=retry_texts,
+                        )
+                    if await _poll_primary_until(time.monotonic() + phase2_seconds):
+                        return True
+                    if optional:
+                        logger.info("tap_ocr_skipped", device_id=device_id, texts=candidates)
+                        return True
+                    raise RuntimeError(
+                        f"None of {candidates!r} found on screen after unstable-network retry"
+                    )
+
                 deadline = time.monotonic() + wait_timeout if wait_timeout > 0 else time.monotonic()
                 if await _wait_for_ocr(deadline):
                     return True
@@ -391,19 +539,37 @@ class ActionEngine:
                 if isinstance(fallback_tap, dict) and "x" in fallback_tap and "y" in fallback_tap:
                     fx = int(fallback_tap["x"])
                     fy = int(fallback_tap["y"])
+                    fb_count = max(
+                        1,
+                        int(
+                            fallback_tap.get(
+                                "tap_count", params.get("fallback_tap_count", 1)
+                            )
+                        ),
+                    )
+                    fb_interval = float(
+                        fallback_tap.get(
+                            "tap_interval_seconds",
+                            params.get("fallback_tap_interval_seconds", 0.5),
+                        )
+                    )
                     logger.info(
                         "tap_ocr_fallback_tap",
                         device_id=device_id,
                         texts=candidates,
                         x=fx,
                         y=fy,
+                        tap_count=fb_count,
                         reason="ocr_miss_retry",
                     )
                     await asyncio.sleep(float(params.get("fallback_tap_delay_seconds", 1.0)))
-                    if not await ctrl.tap(device_id, fx, fy):
-                        raise RuntimeError(
-                            f"Fallback tap at ({fx}, {fy}) failed after OCR miss {candidates!r}"
-                        )
+                    for tap_idx in range(fb_count):
+                        if not await ctrl.tap(device_id, fx, fy):
+                            raise RuntimeError(
+                                f"Fallback tap at ({fx}, {fy}) failed after OCR miss {candidates!r}"
+                            )
+                        if tap_idx < fb_count - 1:
+                            await asyncio.sleep(fb_interval)
                     await asyncio.sleep(float(params.get("fallback_after_tap_seconds", 1.0)))
                     retry_timeout = float(
                         params.get("fallback_retry_seconds", wait_timeout or 45)

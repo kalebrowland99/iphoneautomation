@@ -89,3 +89,35 @@ def test_post_texts_persist_to_disk(tmp_path: Path, monkeypatch) -> None:
     store._load_store()
     assert store.get_onscreen_text(device_key, 1) == "saved overlay"
     assert store.get_final_caption(device_key, 1) == "saved caption"
+
+
+def test_validate_post_texts_requires_all_fields() -> None:
+    from imouse_farm.post.post_caption_store import validate_post_texts
+
+    device_key = "test-validate-post-texts"
+    clear_all_post_texts(device_key)
+    errors = validate_post_texts(device_key, from_post=1)
+    assert len(errors) == 6
+
+    set_onscreen_text(device_key, 1, "overlay")
+    set_final_caption(device_key, 1, "caption")
+    set_onscreen_text(device_key, 2, "overlay 2")
+    set_final_caption(device_key, 2, "caption 2")
+    set_onscreen_text(device_key, 3, "overlay 3")
+    set_final_caption(device_key, 3, "caption 3")
+    assert validate_post_texts(device_key, from_post=1) == []
+
+
+def test_validate_post_texts_from_post_two() -> None:
+    from imouse_farm.post.post_caption_store import validate_post_texts
+
+    device_key = "test-validate-from-post-2"
+    clear_all_post_texts(device_key)
+    set_onscreen_text(device_key, 1, "only post 1")
+    set_final_caption(device_key, 1, "only post 1")
+    assert validate_post_texts(device_key, from_post=2) != []
+    set_onscreen_text(device_key, 2, "p2")
+    set_final_caption(device_key, 2, "p2")
+    set_onscreen_text(device_key, 3, "p3")
+    set_final_caption(device_key, 3, "p3")
+    assert validate_post_texts(device_key, from_post=2) == []

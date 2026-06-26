@@ -35,7 +35,7 @@ def test_flatten_line_breaks() -> None:
 def test_prepare_single_line_no_break_markers() -> None:
     segments = prepare_single_line_typing_segments("caption line\n\n#tag1 #tag2")
     assert None not in segments
-    assert "".join(segments).replace(" ", "") == "captionline#tag1#tag2"
+    assert "".join(segments) == "caption line #tag1 #tag2"
 
 
 def test_prepare_single_line_chunks_long_text() -> None:
@@ -43,7 +43,16 @@ def test_prepare_single_line_chunks_long_text() -> None:
     segments = prepare_single_line_typing_segments(text.strip())
     assert None not in segments
     assert all(len(seg) <= 80 for seg in segments)
-    assert " ".join(segments) == text.strip()
+    assert "".join(segments) == text.strip()
+
+
+def test_prepare_single_line_preserves_hashtag_spaces() -> None:
+    text = (
+        "This is why america is sick #chicken #toxicchicken "
+        "#toxinfree #groceryshopping #cleaningredients"
+    )
+    segments = prepare_single_line_typing_segments(text)
+    assert "".join(segments) == text
 
 
 def test_prepare_typing_segments_chunks_long_line() -> None:

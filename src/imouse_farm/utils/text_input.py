@@ -49,13 +49,12 @@ def _split_text_chunks(text: str, max_len: int) -> list[str]:
             break
         cut = rest.rfind(" ", 0, max_len + 1)
         if cut <= 0:
-            cut = max_len
-        chunk = rest[:cut].rstrip()
-        if not chunk:
-            chunk = rest[:max_len]
-            cut = max_len
-        chunks.append(chunk)
-        rest = rest[cut:].lstrip()
+            chunks.append(rest[:max_len])
+            rest = rest[max_len:]
+            continue
+        # Keep the space on this chunk so typed segments don't merge words/hashtags.
+        chunks.append(rest[: cut + 1])
+        rest = rest[cut + 1 :]
     return chunks
 
 

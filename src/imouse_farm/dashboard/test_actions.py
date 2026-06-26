@@ -16,6 +16,7 @@ Add a new debug test
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
@@ -61,6 +62,9 @@ DebugKind = Literal[
     "type_caption",
     "type_final_caption",
     "final_caption_production",
+    "media_then_next",
+    "gallery_then_recents",
+    "hvitserk_after_favorites",
     "close_app",
     "kill_app",
 ]
@@ -75,11 +79,12 @@ _POST_TEMPLATE_LABELS: dict[str, str] = {
 
 _POST_DEBUG_LIST_PRIORITY = (
     "tap-plus",
-    "tap-gallery",
+    "post-tap-gallery-recents",
     "post-wait-recents",
     "post-tap-gallery-item",
     "post-tap-gallery-item-2",
     "post-tap-gallery-item-3",
+    "post-tap-next-after-media",
     "post-tap-music",
     "post-tap-favorites",
     "post-tap-hvitserk",
@@ -108,6 +113,21 @@ _END_DEBUG_LIST_PRIORITY = (
 )
 
 OFFLINE_HINT = "Device offline — click Connect AirPlay first"
+
+HVITSERK_CHOICE_TEXTS = [
+    "Hvitserk's choice",
+    "Hvitserk's Choice",
+    "Hvitserks choice",
+    "Hvitserks Choice",
+    "HVITSERK'S CHOICE",
+]
+
+UNSTABLE_NETWORK_TEXTS = [
+    "Your network is unstable. Tap to retry.",
+    "Your network is unstable",
+    "network is unstable",
+    "Tap to retry",
+]
 
 # Mirror resolution ~406x720 — swipe down from center to open Spotlight (not top edge).
 SPOTLIGHT_SWIPE: dict[str, int | str] = {
@@ -142,6 +162,10 @@ class DebugTest(TypedDict, total=False):
     move_ms: int
     hold_ms: int
     wait_timeout_seconds: float
+    initial_wait_seconds: float
+    retry_wait_seconds: float
+    poll_interval_seconds: float
+    unstable_texts: list[str]
     threshold: float
     prefer_top: bool
     hint: str
@@ -214,14 +238,28 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
 }
 
 TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
-    "tap-gallery": {
-        "label": "Post: Tap gallery (33, 669) ×2 — after tapping plus",
-        "kind": "tap_xy",
+    "post-tap-gallery-recents": {
+        "label": "Post: Tap gallery (33,669)×2 + Recents (fallback 326,609)×2",
+        "kind": "gallery_then_recents",
         "group": "post",
         "x": 33,
         "y": 669,
         "tap_count": 2,
         "tap_interval_seconds": 0.5,
+        "texts": ["Recents", "RECENTS", "Recent", "RECENT"],
+        "wait_timeout_seconds": 10,
+        "poll_interval_seconds": 1.5,
+        "verify_only": True,
+        "prefer_top": True,
+        "threshold": 0.55,
+        "contain": True,
+        "ocr_ex": True,
+        "search_rect_pct": [0.0, 0.0, 1.0, 0.32],
+        "fallback_tap": {"x": 326, "y": 609, "tap_count": 2, "tap_interval_seconds": 0.5},
+        "fallback_tap_delay_seconds": 1,
+        "fallback_after_tap_seconds": 1.5,
+        "fallback_retry_seconds": 10,
+        "hint": "Run after plus: gallery 2× then OCR Recents; fallback gallery 2× at (326,609) if picker did not open.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-gallery-item": {
@@ -248,12 +286,33 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "y": 201,
         "offline_hint": OFFLINE_HINT,
     },
+    "post-tap-next-after-media": {
+        "label": "Post: Tap gallery item (321, 194) then black Next (OCR, optional)",
+        "kind": "media_then_next",
+        "group": "post",
+        "x": 321,
+        "y": 194,
+        "texts": ["Next", "NEXT"],
+        "after_tap_seconds": 2,
+        "require_dark_text": True,
+        "max_text_luminance": 110,
+        "wait_timeout_seconds": 30,
+        "poll_interval_seconds": 1,
+        "threshold": 0.65,
+        "skip_if_texts_present": ["Your Story", "YOUR STORY", "Your story", "Story"],
+        "skip_if_all_texts_present": ["Your", "Story"],
+        "skip_if_story_button": True,
+        "skip_if_threshold": 0.45,
+        "skip_if_ocr_ex": True,
+        "hint": "Open TikTok post editor with gallery visible; skips Next when Your Story is on screen.",
+        "offline_hint": OFFLINE_HINT,
+    },
     "post-wait-recents": {
         "label": "Post: Wait for Recents (OCR) — after gallery picker opens",
         "kind": "tap_ocr",
         "group": "post",
         "texts": ["Recents", "RECENTS", "Recent", "RECENT"],
-        "wait_timeout_seconds": 45,
+        "wait_timeout_seconds": 10,
         "poll_interval_seconds": 1.5,
         "verify_only": True,
         "prefer_top": True,
@@ -261,11 +320,11 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "contain": True,
         "ocr_ex": True,
         "search_rect_pct": [0.0, 0.0, 1.0, 0.32],
-        "fallback_tap": {"x": 326, "y": 609},
+        "fallback_tap": {"x": 326, "y": 609, "tap_count": 2, "tap_interval_seconds": 0.5},
         "fallback_tap_delay_seconds": 1,
         "fallback_after_tap_seconds": 1.5,
-        "fallback_retry_seconds": 45,
-        "hint": "Open the TikTok gallery picker so Recents is visible at the top.",
+        "fallback_retry_seconds": 10,
+        "hint": "Gallery picker already open — waits for Recents; fallback gallery 2× at (326,609) if needed.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-music": {
@@ -286,19 +345,16 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-hvitserk": {
-        "label": "Post: Wait + tap text \"Hvitserk's choice\" (OCR) — after Favorites",
-        "kind": "tap_ocr",
+        "label": "Post: Wait for Hvitserk — 30s, unstable retry, +20s (after Favorites)",
+        "kind": "hvitserk_after_favorites",
         "group": "post",
-        "texts": [
-            "Hvitserk's choice",
-            "Hvitserk's Choice",
-            "Hvitserks choice",
-            "Hvitserks Choice",
-            "HVITSERK'S CHOICE",
-        ],
-        "wait_timeout_seconds": 60,
+        "texts": list(HVITSERK_CHOICE_TEXTS),
+        "unstable_texts": list(UNSTABLE_NETWORK_TEXTS),
+        "initial_wait_seconds": 30,
+        "retry_wait_seconds": 20,
+        "poll_interval_seconds": 1.5,
         "threshold": 0.65,
-        "hint": "Wait for the track row, then tap the Hvitserk's choice text.",
+        "hint": "Run after Favorites: wait up to 30s for Hvitserk; tap unstable-network retry if needed; wait up to 20s more.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-dismiss-music": {
@@ -317,7 +373,7 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-border2-coord": {
-        "label": "Post: Tap white background (201, 38) ×2 — after typing caption",
+        "label": "Post 1: Tap white background (201, 38) ×2 — after typing caption (post 1 only)",
         "kind": "tap_xy",
         "group": "post",
         "x": 201,
@@ -642,6 +698,12 @@ async def run_debug_test(app: Any, device_id: str, test_id: str) -> dict[str, An
         return await type_final_caption_debug(app, device_id, test_id, spec)
     if kind == "final_caption_production":
         return await final_caption_production_debug(app, device_id, test_id, spec)
+    if kind == "media_then_next":
+        return await media_then_next_debug(app, device_id, test_id, spec)
+    if kind == "gallery_then_recents":
+        return await gallery_then_recents_debug(app, device_id, test_id, spec)
+    if kind == "hvitserk_after_favorites":
+        return await hvitserk_after_favorites_debug(app, device_id, test_id, spec)
     if kind == "close_app":
         return await close_app_debug(app, device_id, test_id, spec)
     if kind == "kill_app":
@@ -799,14 +861,18 @@ async def tap_ocr_debug(
         raise HTTPException(500, f"Debug test {test_id} has no texts configured")
 
     wait_timeout = spec.get("wait_timeout_seconds")
-    if wait_timeout:
+    has_unstable_flow = bool(
+        spec.get("unstable_retry_texts") or spec.get("initial_wait_seconds")
+    )
+    if wait_timeout or has_unstable_flow:
         params: dict[str, Any] = {
             "texts": texts,
             "optional": False,
-            "wait_timeout_seconds": float(wait_timeout),
             "poll_interval_seconds": float(spec.get("poll_interval_seconds", 2)),
             "prefer_top": bool(spec.get("prefer_top", False)),
         }
+        if wait_timeout:
+            params["wait_timeout_seconds"] = float(wait_timeout)
         for key in (
             "threshold",
             "contain",
@@ -818,9 +884,20 @@ async def tap_ocr_debug(
             "fallback_tap_delay_seconds",
             "fallback_after_tap_seconds",
             "fallback_retry_seconds",
+            "initial_wait_seconds",
+            "after_retry_wait_seconds",
+            "unstable_retry_texts",
+            "unstable_texts",
         ):
             if key in spec:
-                params[key] = spec[key]
+                if key == "unstable_texts":
+                    params["unstable_retry_texts"] = spec[key]
+                else:
+                    params[key] = spec[key]
+        if spec.get("retry_wait_seconds") is not None and "after_retry_wait_seconds" not in params:
+            params["after_retry_wait_seconds"] = spec["retry_wait_seconds"]
+        if has_unstable_flow and "wait_timeout_seconds" not in spec:
+            params.pop("wait_timeout_seconds", None)
         ok = await app.action_engine.execute_direct(
             device_id,
             ActionType.TAP_OCR,
@@ -867,6 +944,160 @@ async def tap_ocr_debug(
         "message": f"Tapped {tapped[0]}",
         "text": tapped[0],
         "texts": texts,
+    }
+
+
+async def _best_ocr_match(
+    ctrl: Any,
+    device_id: str,
+    texts: list[str],
+    *,
+    threshold: float,
+    contain: bool = True,
+) -> dict[str, Any] | None:
+    """Return the best on-device OCR match for any of ``texts``, or None."""
+    batch = await ctrl.find_text_on_device(
+        device_id, texts, threshold=threshold, contain=contain
+    )
+    if batch:
+        return max(batch, key=lambda m: float(m.get("confidence", 0)))
+    for text in texts:
+        matches = await ctrl.find_text_on_device(
+            device_id, [text], threshold=threshold, contain=contain
+        )
+        if matches:
+            return max(matches, key=lambda m: float(m.get("confidence", 0)))
+    return None
+
+
+async def _poll_for_text(
+    ctrl: Any,
+    device_id: str,
+    texts: list[str],
+    *,
+    timeout_seconds: float,
+    poll_interval_seconds: float,
+    threshold: float,
+    contain: bool = True,
+) -> dict[str, Any] | None:
+    """Poll until ``texts`` appear or ``timeout_seconds`` elapses."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        match = await _best_ocr_match(
+            ctrl, device_id, texts, threshold=threshold, contain=contain
+        )
+        if match:
+            return match
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(poll_interval_seconds)
+
+
+async def _tap_ocr_match(ctrl: Any, device_id: str, match: dict[str, Any]) -> bool:
+    return await ctrl.tap(device_id, int(match["x"]), int(match["y"]))
+
+
+async def hvitserk_after_favorites_debug(
+    app: Any,
+    device_id: str,
+    test_id: str,
+    spec: DebugTest,
+) -> dict[str, Any]:
+    """Wait for Hvitserk after Favorites; tap unstable-network retry if needed."""
+    await _require_online_device(app, device_id, spec)
+    ctrl = app.device_manager.controller
+
+    hvitserk_texts = list(spec.get("texts") or HVITSERK_CHOICE_TEXTS)
+    unstable_texts = list(spec.get("unstable_texts") or UNSTABLE_NETWORK_TEXTS)
+    initial_wait = float(spec.get("initial_wait_seconds", 30))
+    retry_wait = float(spec.get("retry_wait_seconds", 20))
+    poll_interval = float(spec.get("poll_interval_seconds", 1.5))
+    threshold = float(spec.get("threshold", 0.65))
+
+    steps: list[str] = []
+
+    hvitserk = await _poll_for_text(
+        ctrl,
+        device_id,
+        hvitserk_texts,
+        timeout_seconds=initial_wait,
+        poll_interval_seconds=poll_interval,
+        threshold=threshold,
+    )
+    if hvitserk:
+        tapped = await _tap_ocr_match(ctrl, device_id, hvitserk)
+        await app.screenshot_service.capture(device_id)
+        message = (
+            f"Found Hvitserk within {initial_wait:.0f}s and tapped"
+            if tapped
+            else f"Found Hvitserk within {initial_wait:.0f}s but tap failed"
+        )
+        await app.db.log_activity(
+            "info" if tapped else "warn",
+            "test",
+            f"Debug Hvitserk after Favorites: {message}",
+            device_id,
+            {"test_id": test_id, "phase": "initial", "text": hvitserk.get("text")},
+        )
+        return {"success": tapped, "message": message, "phase": "initial"}
+
+    steps.append(f"no Hvitserk after {initial_wait:.0f}s")
+
+    unstable = await _best_ocr_match(
+        ctrl, device_id, unstable_texts, threshold=threshold, contain=True
+    )
+    if unstable:
+        tapped_unstable = await _tap_ocr_match(ctrl, device_id, unstable)
+        steps.append(
+            f"tapped unstable-network retry ({unstable.get('text', '')!r})"
+            if tapped_unstable
+            else "found unstable-network prompt but tap failed"
+        )
+        await asyncio.sleep(1.5)
+    else:
+        steps.append("unstable-network prompt not found")
+
+    hvitserk = await _poll_for_text(
+        ctrl,
+        device_id,
+        hvitserk_texts,
+        timeout_seconds=retry_wait,
+        poll_interval_seconds=poll_interval,
+        threshold=threshold,
+    )
+
+    if hvitserk:
+        tapped = await _tap_ocr_match(ctrl, device_id, hvitserk)
+        await app.screenshot_service.capture(device_id)
+        message = (
+            f"{' → '.join(steps)}; found Hvitserk within +{retry_wait:.0f}s and tapped"
+            if tapped
+            else f"{' → '.join(steps)}; found Hvitserk but tap failed"
+        )
+        await app.db.log_activity(
+            "info" if tapped else "warn",
+            "test",
+            f"Debug Hvitserk after Favorites: {message}",
+            device_id,
+            {"test_id": test_id, "phase": "retry", "text": hvitserk.get("text")},
+        )
+        return {"success": tapped, "message": message, "phase": "retry", "steps": steps}
+
+    await app.screenshot_service.capture(device_id)
+    message = f"{' → '.join(steps)}; Hvitserk not found after +{retry_wait:.0f}s"
+    await app.db.log_activity(
+        "warn",
+        "test",
+        f"Debug Hvitserk after Favorites: {message}",
+        device_id,
+        {"test_id": test_id, "phase": "failed", "steps": steps},
+    )
+    return {
+        "success": False,
+        "message": message,
+        "phase": "failed",
+        "steps": steps,
+        "hint": spec.get("hint", ""),
     }
 
 
@@ -1160,6 +1391,182 @@ _CAPTION_FIELD_X = 107
 _CAPTION_FIELD_Y = 130
 _CAPTION_FIELD_SETTLE_SECONDS = 2.0
 _AFTER_CAPTION_TYPE_SECONDS = 3.0
+
+
+async def gallery_then_recents_debug(
+    app: Any, device_id: str, test_id: str, spec: DebugTest
+) -> dict[str, Any]:
+    """Tap gallery 2× then wait for Recents OCR with fallback (matches tiktok_post steps 2–3)."""
+    await _require_online_device(app, device_id, spec)
+    x, y = int(spec["x"]), int(spec["y"])
+    step = f"debug_{test_id}"
+    engine = app.action_engine
+
+    tap_params: dict[str, Any] = {"x": x, "y": y}
+    if "tap_count" in spec:
+        tap_params["tap_count"] = int(spec["tap_count"])
+    if "tap_interval_seconds" in spec:
+        tap_params["tap_interval_seconds"] = float(spec["tap_interval_seconds"])
+
+    tapped = await engine.execute_direct(
+        device_id,
+        ActionType.TAP,
+        tap_params,
+        step_name=f"{step}_gallery",
+    )
+    if not tapped:
+        return {"success": False, "message": f"Failed to tap gallery at ({x}, {y})"}
+
+    texts = list(spec.get("texts") or ["Recents", "RECENTS", "Recent", "RECENT"])
+    ocr_params: dict[str, Any] = {
+        "texts": texts,
+        "optional": False,
+        "wait_timeout_seconds": float(spec.get("wait_timeout_seconds", 10)),
+        "poll_interval_seconds": float(spec.get("poll_interval_seconds", 1.5)),
+        "verify_only": bool(spec.get("verify_only", True)),
+        "prefer_top": bool(spec.get("prefer_top", True)),
+        "threshold": float(spec.get("threshold", 0.55)),
+        "contain": bool(spec.get("contain", True)),
+        "ocr_ex": bool(spec.get("ocr_ex", True)),
+    }
+    for key in (
+        "search_rect_pct",
+        "fallback_tap",
+        "fallback_tap_delay_seconds",
+        "fallback_after_tap_seconds",
+        "fallback_retry_seconds",
+    ):
+        if key in spec:
+            ocr_params[key] = spec[key]
+
+    ok = await engine.execute_direct(
+        device_id,
+        ActionType.TAP_OCR,
+        ocr_params,
+        step_name=f"{step}_recents",
+    )
+    await app.screenshot_service.capture(device_id)
+
+    count = int(tap_params.get("tap_count", 1))
+    tap_msg = f"({x}, {y}) ×{count}" if count > 1 else f"({x}, {y})"
+    fallback = spec.get("fallback_tap") or {}
+    fb_x, fb_y = fallback.get("x"), fallback.get("y")
+    fb_count = int(fallback.get("tap_count", 1))
+    if ok:
+        message = f"Tapped gallery {tap_msg}; Recents visible"
+    elif fb_x is not None and fb_y is not None:
+        fb_msg = f"({fb_x}, {fb_y}) ×{fb_count}" if fb_count > 1 else f"({fb_x}, {fb_y})"
+        message = (
+            f"Tapped gallery {tap_msg}; Recents not found — "
+            f"fallback {fb_msg} did not open picker"
+        )
+    else:
+        message = f"Tapped gallery {tap_msg}; Recents not found"
+
+    await app.db.log_activity(
+        "info" if ok else "warn",
+        "test",
+        message,
+        device_id,
+        {"test_id": test_id, "texts": texts},
+    )
+    return {"success": ok, "message": message, "x": x, "y": y, "texts": texts}
+
+
+async def media_then_next_debug(
+    app: Any, device_id: str, test_id: str, spec: DebugTest
+) -> dict[str, Any]:
+    """Tap gallery media coord, then optionally tap Next via OCR (matches tiktok_post step)."""
+    await _require_online_device(app, device_id, spec)
+    x, y = int(spec["x"]), int(spec["y"])
+    step = f"debug_{test_id}"
+    engine = app.action_engine
+    ctrl = app.device_manager.controller
+
+    tapped_media = await engine.execute_direct(
+        device_id,
+        ActionType.TAP,
+        {"x": x, "y": y},
+        step_name=f"{step}_media",
+    )
+    if not tapped_media:
+        return {"success": False, "message": f"Failed to tap media at ({x}, {y})"}
+
+    await asyncio.sleep(float(spec.get("after_tap_seconds", 2)))
+
+    texts = list(spec.get("texts") or ["Next", "NEXT"])
+    threshold = float(spec.get("threshold", 0.65))
+    ocr_params: dict[str, Any] = {
+        "texts": texts,
+        "optional": True,
+        "wait_timeout_seconds": float(spec.get("wait_timeout_seconds", 30)),
+        "poll_interval_seconds": float(spec.get("poll_interval_seconds", 1)),
+        "threshold": threshold,
+        "contain": True,
+    }
+    if spec.get("require_dark_text"):
+        ocr_params["require_dark_text"] = True
+        ocr_params["max_text_luminance"] = float(spec.get("max_text_luminance", 110))
+    for key in (
+        "skip_if_texts_present",
+        "skip_if_all_texts_present",
+        "skip_if_story_button",
+        "skip_if_threshold",
+        "skip_if_ocr_ex",
+    ):
+        if key in spec:
+            ocr_params[key] = spec[key]
+
+    from imouse_farm.vision.ocr_skip import should_skip_tap_ocr
+
+    device = app.device_manager.get_device(device_id)
+    sw = int(device.screen_width) if device and device.screen_width else 406
+    sh = int(device.screen_height) if device and device.screen_height else 720
+
+    async def _story_on_screen() -> bool:
+        return await should_skip_tap_ocr(
+            ctrl,
+            device_id,
+            ocr_params,
+            default_threshold=threshold,
+            default_contain=True,
+            skip_rect=None,
+            screen_width=sw,
+            screen_height=sh,
+        )
+
+    async def _find_next() -> list[dict[str, Any]]:
+        return await ctrl.find_text_on_device(
+            device_id, texts, threshold=threshold, contain=True
+        )
+
+    before = await _find_next()
+    await engine.execute_direct(
+        device_id,
+        ActionType.TAP_OCR,
+        ocr_params,
+        step_name=f"{step}_next",
+    )
+    await app.screenshot_service.capture(device_id)
+    after = await _find_next()
+
+    if await _story_on_screen():
+        message = (
+            f"Tapped media ({x}, {y}); Your Story on screen — skipped Next (go to music)"
+        )
+    elif before and not after:
+        message = f"Tapped media ({x}, {y}), then tapped Next"
+    elif before and after:
+        message = f"Tapped media ({x}, {y}); Next found but still on screen"
+        await app.db.log_activity(
+            "warn", "test", message, device_id, {"test_id": test_id, "texts": texts}
+        )
+        return {"success": False, "message": message, "x": x, "y": y, "texts": texts}
+    else:
+        message = f"Tapped media ({x}, {y}); Next not on screen — skipped"
+
+    await app.db.log_activity("info", "test", message, device_id, {"test_id": test_id})
+    return {"success": True, "message": message, "x": x, "y": y, "texts": texts}
 
 
 async def final_caption_production_debug(

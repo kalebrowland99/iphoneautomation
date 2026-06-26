@@ -13,6 +13,7 @@ from imouse_farm.actions.permission_prompts import (
 
 def test_delete_label_accepts_real_delete_buttons() -> None:
     assert is_delete_confirm_label("Delete 12 Items")
+    assert is_delete_confirm_label("Delete All (20)")
     assert is_delete_confirm_label("Delete Photos")
     assert is_delete_confirm_label("Delete Always")
     assert is_delete_confirm_label("Delete All Photos")
@@ -82,6 +83,38 @@ def test_pick_delete_everything_over_bare_delete() -> None:
     picked = pick_delete_confirm_match(matches)
     assert picked is not None
     assert picked["text"] == "Delete Everything"
+
+
+def test_pick_delete_all_count_over_bare_delete() -> None:
+    matches = [
+        {"text": "Delete", "x": 200, "y": 690, "confidence": 0.98},
+        {"text": "Delete All (20)", "x": 200, "y": 650, "confidence": 0.82},
+    ]
+    picked = pick_delete_confirm_match(matches)
+    assert picked is not None
+    assert picked["text"] == "Delete All (20)"
+
+
+def test_enrich_merge_delete_all_and_count() -> None:
+    from imouse_farm.actions.permission_prompts import enrich_delete_sheet_matches
+
+    matches = [
+        {"text": "Delete All", "x": 200, "y": 660, "confidence": 0.9},
+        {"text": "(20)", "x": 280, "y": 662, "confidence": 0.88},
+        {"text": "Delete", "x": 200, "y": 690, "confidence": 0.98},
+    ]
+    enriched = enrich_delete_sheet_matches(matches)
+    picked = pick_delete_confirm_match(enriched)
+    assert picked is not None
+    assert picked["text"] == "Delete All (20)"
+
+
+def test_is_final_bulk_delete_label() -> None:
+    from imouse_farm.actions.permission_prompts import is_final_bulk_delete_label
+
+    assert is_final_bulk_delete_label("Delete All (20)")
+    assert is_final_bulk_delete_label("Delete Everything")
+    assert not is_final_bulk_delete_label("Delete")
 
 
 def test_pick_delete_all_over_bare_delete() -> None:

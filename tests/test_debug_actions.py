@@ -51,6 +51,17 @@ def test_debug_tests_have_required_fields() -> None:
         elif kind == "detect_ocr":
             assert spec["texts"]
             assert spec["hint"]
+        elif kind == "final_caption_production":
+            assert spec.get("post_num")
+        elif kind == "media_then_next":
+            assert "x" in spec and "y" in spec
+            assert spec.get("texts")
+            assert spec["hint"]
+        elif kind == "gallery_then_recents":
+            assert "x" in spec and "y" in spec
+            assert spec.get("texts")
+            assert spec.get("fallback_tap")
+            assert spec["hint"]
 
 
 def test_upload_gallery_is_first_debug_test() -> None:

@@ -610,14 +610,19 @@ class DeviceController:
             DELETE_SHEET_DISTRACTOR_TEXTS,
             DELETE_SHEET_MIN_Y,
             delete_sheet_is_visible,
+            enrich_delete_sheet_matches,
             is_delete_confirm_label,
+            is_final_bulk_delete_label,
             resolve_delete_tap,
+            sheet_text_has_bulk_delete_option,
         )
 
         loop = asyncio.get_event_loop()
         label = album_name or "recents"
         delete_rect = [0, 250, 406, 720]
         delete_settle_after_tap = 2.0
+        bulk_delete_settle = 0.5
+        bulk_settle_after_delete = 0.75
         total_taps = 0
         last_error = ""
 
@@ -642,19 +647,21 @@ class DeviceController:
                 contain=True,
                 rect=delete_rect,
             )
+            matches = enrich_delete_sheet_matches(matches)
             if not any(is_delete_confirm_label(str(m.get("text", ""))) for m in matches):
-                bare = await self.find_text_on_device(
-                    device_id,
-                    ["Delete"],
-                    threshold=0.72,
-                    contain=False,
-                    rect=delete_rect,
-                )
-                matches.extend(bare)
+                if not sheet_text_has_bulk_delete_option(matches):
+                    bare = await self.find_text_on_device(
+                        device_id,
+                        ["Delete"],
+                        threshold=0.72,
+                        contain=False,
+                        rect=delete_rect,
+                    )
+                    matches.extend(bare)
             return matches
 
-        async def _tap_delete_once(sheet_visible: list[bool]) -> bool:
-            """Tap delete once (OCR or fallback). Never taps Show All."""
+        async def _tap_delete_once(sheet_visible: list[bool]) -> tuple[bool, bool]:
+            """Tap delete once. Returns (tapped, bulk_delete_confirmed)."""
             from imouse_farm.actions.pre_touch_reset import pre_touch_mouse_reset
 
             await pre_touch_mouse_reset(
@@ -673,7 +680,8 @@ class DeviceController:
                         device_id=device_id,
                         raw_texts=[m.get("text", "") for m in matches[:8]],
                     )
-                return False
+                return False, False
+            tapped_text = ""
             if isinstance(target, tuple) and target[0] == "fallback":
                 x, y = target[1]
                 await self.tap(device_id, x, y)
@@ -683,16 +691,18 @@ class DeviceController:
                     x=x,
                     y=y,
                 )
-                return True
-            await self.tap(device_id, int(target["x"]), int(target["y"]))
-            logger.info(
-                "album_clear_delete_tap",
-                device_id=device_id,
-                text=target.get("text", ""),
-                x=int(target["x"]),
-                y=int(target["y"]),
-            )
-            return True
+            else:
+                tapped_text = str(target.get("text", ""))
+                await self.tap(device_id, int(target["x"]), int(target["y"]))
+                logger.info(
+                    "album_clear_delete_tap",
+                    device_id=device_id,
+                    text=tapped_text,
+                    x=int(target["x"]),
+                    y=int(target["y"]),
+                )
+            bulk = is_final_bulk_delete_label(tapped_text)
+            return True, bulk
 
         async def _run_clear_round(round_num: int) -> tuple[bool, int, bool]:
             """One shortcut_album_clear plus delete-sheet watcher. Returns (api_ok, taps, delete_pressed)."""
@@ -701,16 +711,22 @@ class DeviceController:
             tap_count = 0
             last_tap_time = 0.0
             sheet_visible = [False]
+            bulk_confirmed = [False]
             api_ok = False
 
             async def _watch_and_tap() -> None:
                 nonlocal tap_count, last_tap_time
                 await asyncio.sleep(0.25)
                 while not stop.is_set():
-                    if await _tap_delete_once(sheet_visible):
+                    tapped, bulk = await _tap_delete_once(sheet_visible)
+                    if tapped:
                         tap_count += 1
                         last_tap_time = loop.time()
                         delete_pressed.set()
+                        if bulk:
+                            bulk_confirmed[0] = True
+                            stop.set()
+                            return
                         await asyncio.sleep(delete_settle_after_tap)
                     else:
                         await asyncio.sleep(0.3)
@@ -729,10 +745,14 @@ class DeviceController:
                     )
                 clear_done = loop.time()
                 deadline = clear_done + post_grace_seconds
+                round_settle = bulk_settle_after_delete if bulk_confirmed[0] else settle_after_delete
                 while loop.time() < deadline:
+                    if bulk_confirmed[0]:
+                        await asyncio.sleep(round_settle)
+                        break
                     if delete_pressed.is_set():
                         idle = loop.time() - last_tap_time
-                        if idle >= settle_after_delete:
+                        if idle >= round_settle:
                             matches = await _scan_delete_sheet()
                             if not delete_sheet_is_visible(matches):
                                 break
@@ -1004,15 +1024,47 @@ class DeviceController:
             matches: list[dict[str, Any]] = []
             for item in getattr(response.data, "list", []) or []:
                 centre = getattr(item, "centre", [0, 0])
-                matches.append({
+                item_rect = getattr(item, "rect", None)
+                match: dict[str, Any] = {
                     "text": getattr(item, "text", ""),
                     "x": centre[0] if len(centre) > 0 else 0,
                     "y": centre[1] if len(centre) > 1 else 0,
                     "confidence": float(getattr(item, "similarity", threshold)),
-                })
+                }
+                if isinstance(item_rect, list) and len(item_rect) == 4:
+                    match["rect"] = [int(v) for v in item_rect]
+                matches.append(match)
             return matches
 
         return await self._run_sync(_find)
+
+    async def ocr_items_on_device(
+        self,
+        device_id: str,
+        *,
+        is_ex: bool = False,
+        rect: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        def _ocr() -> list[dict[str, Any]]:
+            response = self._api.pic_ocr(device_id, is_ex=is_ex, rect=rect)
+            if not response or not self._ok(response):
+                return []
+            items: list[dict[str, Any]] = []
+            for item in getattr(response.data, "list", []) or []:
+                centre = getattr(item, "centre", [0, 0])
+                item_rect = getattr(item, "rect", None)
+                row: dict[str, Any] = {
+                    "text": getattr(item, "text", ""),
+                    "x": centre[0] if len(centre) > 0 else 0,
+                    "y": centre[1] if len(centre) > 1 else 0,
+                    "confidence": float(getattr(item, "similarity", 0.0)),
+                }
+                if isinstance(item_rect, list) and len(item_rect) == 4:
+                    row["rect"] = [int(v) for v in item_rect]
+                items.append(row)
+            return items
+
+        return await self._run_sync(_ocr)
 
     async def ocr_on_device(self, device_id: str) -> str:
         def _ocr() -> str:

@@ -142,4 +142,17 @@ def list_post_texts(device_key: str) -> list[dict[str, str | int]]:
     ]
 
 
+def validate_post_texts(device_key: str, *, from_post: int = 1) -> list[str]:
+    """Return errors for empty onscreen/final fields required before a pipeline run."""
+    if from_post < 1 or from_post > POST_COUNT:
+        raise ValueError(f"from_post must be 1..{POST_COUNT}, got {from_post}")
+    errors: list[str] = []
+    for post in range(from_post, POST_COUNT + 1):
+        if not get_onscreen_text(device_key, post).strip():
+            errors.append(f"Post {post}: onscreen text is empty")
+        if not get_final_caption(device_key, post).strip():
+            errors.append(f"Post {post}: final caption is empty")
+    return errors
+
+
 _load_store()

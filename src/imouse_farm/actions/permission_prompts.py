@@ -13,11 +13,15 @@ UPLOAD_PERMISSION_TEXTS = [
     "Allow",
 ]
 
+DELETE_ALL_COUNT_RE = re.compile(r"delete\s+all\s*[\(\[]?\s*\d+", re.IGNORECASE)
+DELETE_EVERYTHING_RE = re.compile(r"delete\s+everything", re.IGNORECASE)
+
 DELETE_CONFIRM_TEXTS = [
     "Delete Everything",
     "DELETE EVERYTHING",
     "Delete Always",
     "Delete All Photos",
+    "Delete All (",
     "Delete All",
     "Delete Items",
     "Delete Photos",
@@ -27,10 +31,11 @@ DELETE_CONFIRM_TEXTS = [
 
 # Longer / more specific labels win when multiple delete buttons match.
 DELETE_LABEL_PRIORITY: tuple[tuple[str, int], ...] = (
-    ("delete everything", 7),
+    ("delete everything", 9),
+    ("delete all (", 8),
+    ("delete all", 7),
     ("delete always", 6),
     ("delete all photos", 5),
-    ("delete all", 4),
     ("delete items", 3),
     ("delete photos", 3),
     ("delete photo", 2),
@@ -95,6 +100,16 @@ TIKTOK_NOT_NOW_BUTTON_TEXTS = [
     "NOT NOW",
     "Not now",
 ]
+
+# TikTok in-app prompt: "Get notified of post interactions?" → tap dismiss coord.
+TIKTOK_POST_NOTIFY_DISMISS_X = 196
+TIKTOK_POST_NOTIFY_DISMISS_Y = 193
+
+TIKTOK_POST_NOTIFY_KEYWORDS = (
+    "get notified of post interactions",
+    "notified of post interactions",
+    "post interactions?",
+)
 
 # iOS permission dialogs we should auto-allow (camera, mic, photos).
 ALLOW_RESOURCE_KEYWORDS = (
@@ -184,6 +199,10 @@ def is_delete_confirm_label(text: str) -> bool:
 
 def delete_label_priority(text: str) -> int:
     """Higher rank = more specific destructive delete label."""
+    if is_delete_all_with_count(text):
+        return 10
+    if is_delete_everything_label(text):
+        return 9
     label = str(text or "").strip().lower()
     if not is_delete_confirm_label(text):
         return 0
@@ -194,15 +213,85 @@ def delete_label_priority(text: str) -> int:
     return best
 
 
+def is_delete_all_with_count(text: str) -> bool:
+    return bool(DELETE_ALL_COUNT_RE.search(str(text or "")))
+
+
+def is_delete_everything_label(text: str) -> bool:
+    return bool(DELETE_EVERYTHING_RE.search(str(text or "")))
+
+
+def is_final_bulk_delete_label(text: str) -> bool:
+    """True for one-shot bulk delete buttons — no second confirm expected."""
+    if not is_delete_confirm_label(text):
+        return False
+    label = str(text or "").strip().lower()
+    return (
+        is_delete_everything_label(text)
+        or is_delete_all_with_count(text)
+        or label == "delete all"
+        or label.startswith("delete all photos")
+        or label == "delete always"
+    )
+
+
+def sheet_text_has_bulk_delete_option(matches: list[dict]) -> bool:
+    joined = _joined_match_text(matches)
+    return bool(
+        DELETE_EVERYTHING_RE.search(joined)
+        or DELETE_ALL_COUNT_RE.search(joined)
+        or re.search(r"delete\s+all(?:\s+photos)?(?:\s|$)", joined)
+    )
+
+
 def is_bare_delete_label(text: str) -> bool:
     label = str(text or "").strip().lower()
     return label == "delete"
+
+
+def enrich_delete_sheet_matches(matches: list[dict]) -> list[dict]:
+    """Merge split OCR (e.g. ``Delete All`` + ``(20)``) into one bulk button."""
+    enriched = list(matches)
+    delete_all_rows = [
+        m
+        for m in matches
+        if re.search(r"delete\s+all", str(m.get("text", "")), re.IGNORECASE)
+        and not is_delete_all_with_count(str(m.get("text", "")))
+    ]
+    count_rows = [
+        m
+        for m in matches
+        if re.search(r"[\(\[]?\s*\d+\s*[\)\]]?", str(m.get("text", "")))
+    ]
+    for row in delete_all_rows:
+        row_y = int(row.get("y", 0))
+        for count_row in count_rows:
+            if abs(row_y - int(count_row.get("y", 0))) > 45:
+                continue
+            count = re.search(r"\d+", str(count_row.get("text", "")))
+            if not count:
+                continue
+            enriched.append(
+                {
+                    **row,
+                    "text": f"Delete All ({count.group()})",
+                    "confidence": max(
+                        float(row.get("confidence", 0)),
+                        float(count_row.get("confidence", 0)),
+                    )
+                    + 0.05,
+                }
+            )
+            break
+    return enriched
 
 
 def is_bulk_delete_label(text: str) -> bool:
     label = str(text or "").strip().lower()
     if not is_delete_confirm_label(text):
         return False
+    if is_delete_all_with_count(text) or is_delete_everything_label(text):
+        return True
     return any(phrase in label for phrase in BULK_DELETE_PHRASES)
 
 
@@ -276,15 +365,27 @@ def pick_delete_confirm_match(
     min_y: int = DELETE_SHEET_MIN_Y,
 ) -> dict | None:
     """Pick the best delete button from OCR matches, or None if unsafe."""
+    matches = enrich_delete_sheet_matches(matches)
     candidates = filter_delete_confirm_matches(matches, min_y=min_y)
     if not candidates:
         return None
-    if any(is_bulk_delete_label(str(m.get("text", ""))) for m in candidates):
-        without_bare = [
-            m for m in candidates if not is_bare_delete_label(str(m.get("text", "")))
+    if sheet_text_has_bulk_delete_option(matches) or any(
+        is_bulk_delete_label(str(m.get("text", ""))) for m in candidates
+    ):
+        bulk_only = [
+            m
+            for m in candidates
+            if is_bulk_delete_label(str(m.get("text", "")))
+            and not is_bare_delete_label(str(m.get("text", "")))
         ]
-        if without_bare:
-            candidates = without_bare
+        if bulk_only:
+            candidates = bulk_only
+        else:
+            without_bare = [
+                m for m in candidates if not is_bare_delete_label(str(m.get("text", "")))
+            ]
+            if without_bare:
+                candidates = without_bare
     return max(
         candidates,
         key=lambda m: (
@@ -317,6 +418,7 @@ def resolve_delete_tap(
     relaxed_min_y: int = DELETE_SHEET_RELAXED_MIN_Y,
 ) -> dict | None | tuple[str, tuple[int, int]]:
     """Return an OCR delete match, a smart fallback coordinate, or None."""
+    matches = enrich_delete_sheet_matches(matches)
     if not delete_sheet_is_visible(matches):
         return None
     picked = pick_delete_confirm_match(matches, min_y=min_y)
@@ -325,6 +427,8 @@ def resolve_delete_tap(
     picked = pick_delete_confirm_match(matches, min_y=relaxed_min_y)
     if picked:
         return picked
+    if sheet_text_has_bulk_delete_option(matches):
+        return None
     inferred = infer_delete_button_from_sheet(matches)
     if inferred is not None:
         return ("fallback", inferred)
@@ -364,6 +468,16 @@ def is_tiktok_email_confirm_dialog(ocr_text: str) -> bool:
     """True when on-screen OCR looks like TikTok's confirm-use-of-email sheet."""
     text = ocr_text.lower()
     return any(kw in text for kw in TIKTOK_EMAIL_CONFIRM_KEYWORDS)
+
+
+def is_tiktok_post_notify_dialog(ocr_text: str) -> bool:
+    """True when TikTok asks to get notified of post interactions."""
+    text = ocr_text.lower()
+    return any(kw in text for kw in TIKTOK_POST_NOTIFY_KEYWORDS)
+
+
+def tiktok_post_notify_dismiss_coords() -> tuple[int, int]:
+    return TIKTOK_POST_NOTIFY_DISMISS_X, TIKTOK_POST_NOTIFY_DISMISS_Y
 
 
 def tiktok_not_now_button_texts() -> list[str]:
