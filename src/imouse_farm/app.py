@@ -21,6 +21,15 @@ from imouse_farm.state.machine import StateMachine
 from imouse_farm.utils.logging import get_logger, setup_logging
 from imouse_farm.vision.factory import create_vision_provider
 from imouse_farm.workflows.engine import WorkflowEngine
+from imouse_farm.workflows.farm_batch import FarmBatchRunner
+from imouse_farm.post.account_profile_store import (
+    brand_profile_key,
+    get_profile,
+    mark_run_failed,
+    mark_run_started,
+    mark_run_success,
+)
+from imouse_farm.post.post_caption_store import device_storage_key
 from imouse_farm.workflows.pipeline import WorkflowPipeline
 
 logger = get_logger(__name__)
@@ -41,7 +50,11 @@ class IMouseFarmApp:
         )
         self.vision = create_vision_provider(config)
         self.popup_manager = PopupManager(config.workflows_directory)
-        self.permission_watchers = PermissionWatcherManager(self.controller, self.device_manager)
+        self.permission_watchers = PermissionWatcherManager(
+            self.controller,
+            self.device_manager,
+            poll_interval_seconds=config.timing.permission_watcher_poll_seconds,
+        )
         self.state_machine = StateMachine(self.device_manager)
         self.action_engine = ActionEngine(
             config, self.controller, self.device_manager, self.db
@@ -64,6 +77,13 @@ class IMouseFarmApp:
             self.device_manager,
             self.db,
         )
+        self.farm_batch = FarmBatchRunner(
+            config.batch,
+            self.device_manager,
+            self.workflow_pipeline,
+            self.db,
+            imouse_connect_delay=config.imouse.airplay_connect_delay_seconds,
+        )
         self._frozen_check_task: asyncio.Task[None] | None = None
         self._running = False
 
@@ -79,6 +99,43 @@ class IMouseFarmApp:
                     mapped.get("details"),
                 )
         await self.notification_service.handle_event(event, data)
+        device_id = data.get("device_id") if isinstance(data, dict) else None
+        if device_id:
+            device = self.device_manager.get_device(device_id)
+            base_key = (
+                device_storage_key(device_id, device.user_name)
+                if device
+                else device_id
+            )
+            run_brand = "labely"
+            if isinstance(data, dict):
+                run_brand = str(data.get("brand") or "labely").strip().lower()
+                if not run_brand:
+                    pipe = self.workflow_pipeline.get_status(device_id)
+                    if pipe and pipe.get("brand"):
+                        run_brand = str(pipe["brand"])
+            profile_key = brand_profile_key(base_key, run_brand)
+            if event == "device_connected":
+                await self.permission_watchers.ensure_watching(device_id)
+            elif event == "device_disconnected":
+                await self.permission_watchers.force_stop(device_id)
+            elif event == "pipeline_started":
+                mark_run_started(profile_key, brand=run_brand)
+            elif event == "pipeline_completed":
+                profile = get_profile(profile_key, brand=run_brand)
+                mark_run_success(
+                    profile_key,
+                    posts_completed=int(profile.get("posts_completed", 0) or 0),
+                    brand=run_brand,
+                )
+            elif event in ("pipeline_failed", "workflow_failed"):
+                profile = get_profile(profile_key, brand=run_brand)
+                mark_run_failed(
+                    profile_key,
+                    str(data.get("message", event)),
+                    posts_completed=int(profile.get("posts_completed", 0) or 0),
+                    brand=run_brand,
+                )
         if event != "activity":
             await app_state.broadcast(event, data)
 
@@ -103,6 +160,7 @@ class IMouseFarmApp:
         self.action_engine.on_event(self._on_event)
         self.workflow_engine.on_event(self._on_event)
         self.workflow_pipeline.on_event(self._on_event)
+        self.farm_batch.on_event(self._on_event)
         self.popup_manager.on_event(self._on_event)
 
         await self.device_manager.start()
@@ -117,6 +175,7 @@ class IMouseFarmApp:
         self._running = False
         await self.workflow_engine.stop_all()
         await self.workflow_pipeline.stop_all()
+        await self.farm_batch.stop()
         await self.permission_watchers.stop_all()
         await self.screenshot_service.stop()
         await self.action_engine.stop()

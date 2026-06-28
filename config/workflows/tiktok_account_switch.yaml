@@ -1,0 +1,11 @@
+name: tiktok_account_switch
+description: >
+  Verify TikTok is on the configured @ account. Tap profile, switch via dropdown
+  if needed, then tap home before the post flow looks for +.
+
+loop: false
+
+steps:
+  - type: ensure_tiktok_account
+    name: ensure_tiktok_account
+    on_failure: pause

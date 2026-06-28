@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from imouse_farm.config.models import ActionType, AppConfig
-from imouse_farm.dashboard.activity import enrich_activity
+from imouse_farm.dashboard.brands import get_brand, load_brands, render_dashboard_html
 from imouse_farm.dashboard.stop import stop_device_automation
 from imouse_farm.dashboard.test_actions import (
     list_debug_tests,
@@ -26,7 +26,6 @@ from imouse_farm.dashboard.test_actions import (
 )
 from imouse_farm.captions.ai_generator import (
     extract_food_names_from_stems,
-    generate_post_captions,
     stem_to_food_name,
 )
 from imouse_farm.captions.onscreen_templates import apply_onscreen_for_stems
@@ -34,6 +33,18 @@ from imouse_farm.captions.prompt_store import (
     get_ai_settings,
     set_ai_hashtags,
     set_ai_prompt,
+)
+from imouse_farm.captions.service import farm_devices_sorted, generate_captions_for_device
+from imouse_farm.post.account_profile_store import (
+    brand_profile_key,
+    get_brand_profile,
+    get_profile,
+    get_profile_for_device,
+    list_profiles,
+    mark_run_failed,
+    mark_run_started,
+    mark_run_success,
+    set_profile,
 )
 from imouse_farm.post.post_caption_store import (
     POST_COUNT,
@@ -63,6 +74,10 @@ def _post_text_key(device: Any) -> str:
     return device_storage_key(device.device_id, device.user_name)
 
 
+def _slot_profile_key(slot: int) -> str:
+    return f"slot:{int(slot)}"
+
+
 class ActionBody(BaseModel):
     action_type: ActionType
     params: dict[str, Any] = Field(default_factory=dict)
@@ -75,7 +90,14 @@ class WorkflowStartBody(BaseModel):
 
 
 class PipelineStartBody(BaseModel):
-    from_post: int | None = None  # 2 = skip post 1, run posts 2–3 then tiktok_end
+    from_post: int | None = None  # omit / null = full prep→post→end; 1–3 = post N→3 + end only
+    brand: str | None = None
+
+
+class BatchStartBody(BaseModel):
+    slots: list[int] | None = None  # farm slot numbers; default = all registered phones
+    from_post: int | None = None
+    brand: str | None = None
 
 
 class CaptionAISettingsBody(BaseModel):
@@ -87,6 +109,7 @@ class CaptionAIGenerateBody(BaseModel):
     prompt: str | None = None
     hashtags: str | None = None
     onscreen_template: str | None = None
+    all_phones: bool = False
 
 
 class OnscreenTemplateApplyBody(BaseModel):
@@ -99,6 +122,11 @@ class PostTextFieldBody(BaseModel):
 
 class DeviceSettingsBody(BaseModel):
     debug_skip_post: bool = False
+
+
+class AccountProfileBody(BaseModel):
+    tiktok_handle: str = ""
+    brand: str = "labely"
 
 
 class ApplicationState:
@@ -166,6 +194,8 @@ def _schedule_server_restart(app_instance: Any) -> None:
 def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
     """Create and configure the FastAPI dashboard application."""
     app_state.app_instance = app_instance
+    brands = load_brands()
+    farm_slots = int(getattr(config.dashboard, "farm_slots", 20) or 20)
 
     app = FastAPI(
         title="iMouse Farm Dashboard",
@@ -186,11 +216,26 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     @app.get("/", response_class=HTMLResponse)
-    async def index() -> str:
-        template_path = Path(__file__).parent / "templates" / "index.html"
-        html = template_path.read_text(encoding="utf-8")
-        slots = int(getattr(config.dashboard, "farm_slots", 20) or 20)
-        return html.replace("__FARM_SLOTS__", str(slots))
+    async def index_labely() -> str:
+        return render_dashboard_html(
+            Path(__file__).parent / "templates" / "index.html",
+            brand_id="labely",
+            farm_slots=farm_slots,
+            brands=brands,
+        )
+
+    @app.get("/valcoin", response_class=HTMLResponse)
+    async def index_valcoin() -> str:
+        return render_dashboard_html(
+            Path(__file__).parent / "templates" / "index.html",
+            brand_id="valcoin",
+            farm_slots=farm_slots,
+            brands=brands,
+        )
+
+    @app.get("/api/brands")
+    async def list_brand_definitions() -> dict[str, Any]:
+        return {"brands": brands, "default": "labely"}
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
@@ -204,15 +249,75 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         return {"success": True, "message": "Server restarting…"}
 
     @app.get("/api/devices")
-    async def list_devices() -> list[dict[str, Any]]:
+    async def list_devices(brand: str | None = None) -> list[dict[str, Any]]:
         dm = app_instance.device_manager
+        brand_filter = str(brand or "").strip().lower()
         result: list[dict[str, Any]] = []
         for device in dm.devices.values():
+            text_key = _post_text_key(device)
+            profile = (
+                get_brand_profile(text_key, brand_filter)
+                if brand_filter
+                else get_profile(text_key)
+            )
             data = dm.to_dict(device)
             data["debug_skip_post"] = get_debug_skip_post(device.device_id)
             data["pipeline"] = app_instance.workflow_pipeline.get_status(device.device_id)
+            data["account_profile"] = profile
             result.append(data)
         return result
+
+    @app.get("/api/account-profiles")
+    async def get_account_profiles(brand: str | None = None) -> dict[str, Any]:
+        return {"profiles": list_profiles(brand=brand)}
+
+    @app.get("/api/devices/{device_id:path}/account-profile")
+    async def get_device_account_profile(
+        device_id: str,
+        brand: str | None = None,
+    ) -> dict[str, Any]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        b = str(brand or "labely").strip().lower()
+        return {"profile": get_profile_for_device(device_id, device.user_name, brand=b)}
+
+    @app.put("/api/devices/{device_id:path}/account-profile")
+    async def update_device_account_profile(
+        device_id: str,
+        body: AccountProfileBody,
+    ) -> dict[str, Any]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        key = _post_text_key(device)
+        profile = set_profile(
+            key,
+            brand=body.brand,
+            tiktok_handle=body.tiktok_handle,
+        )
+        return {"profile": profile}
+
+    @app.get("/api/slots/{slot}/account-profile")
+    async def get_slot_account_profile(slot: int, brand: str | None = None) -> dict[str, Any]:
+        if slot < 1 or slot > farm_slots:
+            raise HTTPException(400, "Invalid slot")
+        b = str(brand or "labely").strip().lower()
+        return {"profile": get_brand_profile(f"slot:{int(slot)}", b)}
+
+    @app.put("/api/slots/{slot}/account-profile")
+    async def update_slot_account_profile(
+        slot: int,
+        body: AccountProfileBody,
+    ) -> dict[str, Any]:
+        if slot < 1 or slot > farm_slots:
+            raise HTTPException(400, "Invalid slot")
+        profile = set_profile(
+            f"slot:{int(slot)}",
+            brand=body.brand or "labely",
+            tiktok_handle=body.tiktok_handle,
+        )
+        return {"profile": profile}
 
     _IMAGE_MEDIA = {
         ".bmp": "image/bmp",
@@ -269,6 +374,43 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         updated = app_instance.device_manager.get_device(device_id)
         return {"success": success, "connected": bool(updated and updated.is_online)}
 
+    @app.post("/api/devices/{device_id:path}/disconnect")
+    async def disconnect_device_airplay(device_id: str) -> dict[str, Any]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        success = await app_instance.device_manager.disconnect_airplay(device_id)
+        updated = app_instance.device_manager.get_device(device_id)
+        return {"success": success, "connected": bool(updated and updated.is_online)}
+
+    @app.get("/api/batch/status")
+    async def get_batch_status() -> dict[str, Any]:
+        return app_instance.farm_batch.get_status()
+
+    @app.post("/api/batch/start")
+    async def start_farm_batch(body: BatchStartBody | None = None) -> dict[str, Any]:
+        if app_instance.farm_batch.is_running():
+            raise HTTPException(400, "A batch run is already in progress")
+        from_post = body.from_post if body else None
+        brand = str((body.brand if body else None) or "labely").strip().lower()
+        devices = farm_devices_sorted(app_instance.device_manager)
+        if body and body.slots:
+            wanted = {str(s) for s in body.slots}
+            devices = [d for d in devices if str(d.user_name) in wanted]
+        if not devices:
+            raise HTTPException(400, "No farm phones found for batch run")
+        started = await app_instance.farm_batch.start(
+            devices, from_post=from_post, brand=brand
+        )
+        if not started:
+            raise HTTPException(400, "Failed to start batch run")
+        return {"success": True, "device_count": len(devices), "status": app_instance.farm_batch.get_status()}
+
+    @app.post("/api/batch/stop")
+    async def stop_farm_batch() -> dict[str, Any]:
+        await app_instance.farm_batch.stop()
+        return {"success": True, "status": app_instance.farm_batch.get_status()}
+
     @app.get("/api/debug/tests")
     async def get_debug_tests(group: str | None = None) -> list[dict[str, str]]:
         return list_debug_tests(group)
@@ -296,12 +438,15 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         if not device:
             raise HTTPException(404, "Device not found")
         from_post = body.from_post if body else None
+        brand = str((body.brand if body else None) or "labely").strip().lower()
         text_key = _post_text_key(device)
         check_from = from_post if from_post is not None else 1
         missing = validate_post_texts(text_key, from_post=check_from)
         if missing:
             raise HTTPException(400, "; ".join(missing))
-        success = await app_instance.workflow_pipeline.start(device_id, from_post=from_post)
+        success = await app_instance.workflow_pipeline.start(
+            device_id, from_post=from_post, brand=brand
+        )
         if not success:
             raise HTTPException(400, "Failed to start full run — workflow may already be active")
         return {"success": True, "from_post": from_post}
@@ -460,41 +605,19 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
     async def generate_device_captions(
         device_id: str, body: CaptionAIGenerateBody | None = None
     ) -> dict[str, Any]:
+        if body and body.all_phones:
+            return await generate_all_captions(body)
+
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
-        openai_cfg = app_instance.config.openai
-        if not openai_cfg.enabled:
-            raise HTTPException(400, "OpenAI caption generation is disabled in config")
-
-        settings = get_ai_settings()
-        prompt = (body.prompt if body and body.prompt is not None else settings["prompt"]).strip()
-        hashtags = (
-            body.hashtags if body and body.hashtags is not None else settings["hashtags"]
-        ).strip()
-
-        gallery = app_instance.config.gallery
-        folder = phone_gallery_folder(
-            gallery.base_directory,
-            device.user_name,
-            device.phone_name,
-        )
-        media_stems = list_media_stems_for_posts(folder, gallery.media_extensions, POST_COUNT)
-        if not any(media_stems):
-            raise HTTPException(
-                400,
-                f"No media files in gallery folder: {folder}",
-            )
-
-        text_key = _post_text_key(device)
-        template_key = (body.onscreen_template if body else None) or ""
-
         try:
-            generated = await generate_post_captions(
-                media_stems,
-                user_prompt=prompt,
-                hashtags=hashtags,
-                config=openai_cfg,
+            result = await generate_captions_for_device(
+                app_instance.config,
+                device,
+                prompt=body.prompt if body else None,
+                hashtags=body.hashtags if body else None,
+                onscreen_template=body.onscreen_template if body else None,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -502,40 +625,69 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             logger.error("caption_ai_generate_failed", device_id=device_id, error=str(exc))
             raise HTTPException(502, f"OpenAI request failed: {exc}") from exc
 
-        if template_key.strip():
-            apply_onscreen_for_stems(
-                template_key.strip(),
-                media_stems,
-                text_key,
-                set_onscreen_text=set_onscreen_text,
-                food_names=[cap.get("food", "") for cap in generated],
-            )
+        await app_instance.db.log_activity(
+            "info",
+            "caption",
+            f"AI captions generated for {device.display_label}",
+            device_id,
+            {"posts": len(result.get("posts", []))},
+        )
+        return result
 
-        posts: list[dict[str, Any]] = []
-        for i, cap in enumerate(generated, start=1):
-            post_num = POST_COUNT + 1 - i
-            set_final_caption(text_key, post_num, cap["final"])
-            stem = post_media_stem(media_stems, post_num)
-            posts.append({
-                "post": post_num,
-                "onscreen": get_onscreen_text(text_key, post_num),
-                "final": cap["final"],
-                "media_file": stem,
-                "food_name": cap.get("food") or stem_to_food_name(stem),
-            })
+    async def generate_all_captions(body: CaptionAIGenerateBody | None) -> dict[str, Any]:
+        devices = farm_devices_sorted(app_instance.device_manager)
+        if not devices:
+            raise HTTPException(400, "No farm phones registered")
+
+        results: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+
+        for device in devices:
+            try:
+                result = await generate_captions_for_device(
+                    app_instance.config,
+                    device,
+                    prompt=body.prompt if body else None,
+                    hashtags=body.hashtags if body else None,
+                    onscreen_template=body.onscreen_template if body else None,
+                )
+                results.append(result)
+            except Exception as exc:  # noqa: BLE001
+                errors.append({
+                    "slot": str(device.user_name),
+                    "device_id": device.device_id,
+                    "error": str(exc),
+                })
 
         await app_instance.db.log_activity(
             "info",
             "caption",
-            f"AI final captions generated for {device.display_label}",
-            device_id,
-            {"posts": len(posts)},
+            f"AI captions generated for {len(results)} phone(s)",
+            None,
+            {"ok": len(results), "failed": len(errors)},
         )
-        return {"posts": posts, "media_files": media_stems}
+        return {
+            "success": len(results) > 0,
+            "generated": len(results),
+            "failed": len(errors),
+            "results": results,
+            "errors": errors,
+        }
+
+    @app.post("/api/caption-ai/generate-all")
+    async def generate_all_captions_route(
+        body: CaptionAIGenerateBody | None = None,
+    ) -> dict[str, Any]:
+        return await generate_all_captions(body)
 
     @app.post("/api/devices/{device_id:path}/debug/{test_id}")
-    async def run_device_debug_test(device_id: str, test_id: str) -> dict[str, Any]:
-        return await run_debug_test(app_instance, device_id, test_id)
+    async def run_device_debug_test(
+        device_id: str,
+        test_id: str,
+        brand: str | None = None,
+    ) -> dict[str, Any]:
+        b = str(brand or "labely").strip().lower()
+        return await run_debug_test(app_instance, device_id, test_id, brand=b)
 
     @app.post("/api/devices/{device_id:path}/test/tap-vpntoggle")
     async def test_tap_vpntoggle(device_id: str) -> dict[str, Any]:

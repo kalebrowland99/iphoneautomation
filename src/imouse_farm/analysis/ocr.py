@@ -10,6 +10,7 @@ import pytesseract
 
 from imouse_farm.config.models import DetectionResult
 from imouse_farm.utils.logging import get_logger
+from imouse_farm.vision.ocr_match import ocr_text_matches_query
 
 logger = get_logger(__name__)
 
@@ -74,7 +75,7 @@ def find_keywords(
             if conf < min_confidence:
                 continue
             for keyword in keywords:
-                if keyword.lower() in word.lower():
+                if ocr_text_matches_query(word, keyword, contain=True):
                     detections.append(
                         DetectionResult(
                             name=keyword,

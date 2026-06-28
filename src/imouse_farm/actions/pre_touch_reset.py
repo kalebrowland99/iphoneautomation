@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from imouse_farm.actions.cancel import is_cancelled
 from imouse_farm.config.models import ActionRequest, ActionType
 from imouse_farm.utils.logging import get_logger
 
@@ -14,7 +15,12 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-TIKTOK_WORKFLOWS = frozenset({"tiktok_prep", "tiktok_post", "tiktok_end"})
+TIKTOK_WORKFLOWS = frozenset({
+    "tiktok_prep",
+    "tiktok_account_switch",
+    "tiktok_post",
+    "tiktok_end",
+})
 TOUCH_ACTIONS = frozenset({
     ActionType.TAP,
     ActionType.TAP_DETECTION,
@@ -70,7 +76,11 @@ async def pre_touch_mouse_reset(
     step_name: str | None = None,
 ) -> None:
     """Reset the iMouse cursor twice to reduce tap offset drift."""
+    if is_cancelled(device_id):
+        return
     for index in (1, 2):
+        if is_cancelled(device_id):
+            return
         ok = await controller.reset_cursor(device_id)
         if not ok:
             logger.warning(

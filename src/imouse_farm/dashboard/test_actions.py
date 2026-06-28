@@ -23,13 +23,22 @@ from typing import Any, Literal, TypedDict
 import yaml
 from fastapi import HTTPException
 
-from imouse_farm.actions.permission_prompts import UPLOAD_PERMISSION_TEXTS
+from imouse_farm.actions.permission_prompts import (
+    UPLOAD_PERMISSION_TEXTS,
+    analyze_popup_screen,
+    known_popup_watcher_button_labels,
+)
 from imouse_farm.config.models import ActionType
 from imouse_farm.vision.fallbacks import (
     apply_detection_fallbacks,
     apply_exclusive_detections,
     apply_tap_offsets,
     expand_template_names,
+)
+from imouse_farm.vision.template_scan import (
+    ocr_rect_from_pct,
+    pick_detection_hit,
+    stronger_hit,
 )
 
 from imouse_farm.post.post_caption_store import (
@@ -65,20 +74,24 @@ DebugKind = Literal[
     "media_then_next",
     "gallery_then_recents",
     "hvitserk_after_favorites",
+    "tiktok_popup_scan",
     "close_app",
     "kill_app",
+    "account_switch_step",
 ]
 
 _POST_TEMPLATE_NAMES = frozenset({"plus", "aa", "continuearrow"})
 
 _POST_TEMPLATE_LABELS: dict[str, str] = {
-    "plus": "Post: Tap plus (+ button)",
-    "aa": "Post: Tap aa (add text) — after dismissing music",
+    "plus": "Post: Tap plus (+ button) ×2",
+    "aa": "Post: Tap aa (add text) — polls every 2s after dismissing music",
     "continuearrow": "Post: Tap continue arrow — after drag trim",
 }
 
 _POST_DEBUG_LIST_PRIORITY = (
     "tap-plus",
+    "detect-tiktok-popups",
+    "dismiss-tiktok-popup",
     "post-tap-gallery-recents",
     "post-wait-recents",
     "post-tap-gallery-item",
@@ -109,7 +122,18 @@ _POST_DEBUG_LIST_PRIORITY = (
 _END_DEBUG_LIST_PRIORITY = (
     "end-kill-apps",
     "end-tap-shadowrocket",
-    "end-tap-bluetoggle",
+    "end-tap-vpntoggle",
+)
+
+_ACCOUNT_SWITCH_DEBUG_LIST_PRIORITY = (
+    "account-ensure-full",
+    "account-tap-profile-tab",
+    "account-open-switcher",
+    "account-pick-handle",
+    "account-tap-home-tab",
+    "account-swipe-continue-editing",
+    "account-scan-popups",
+    "account-dismiss-popup",
 )
 
 OFFLINE_HINT = "Device offline — click Connect AirPlay first"
@@ -120,6 +144,7 @@ HVITSERK_CHOICE_TEXTS = [
     "Hvitserks choice",
     "Hvitserks Choice",
     "HVITSERK'S CHOICE",
+    "Hvitserk",
 ]
 
 UNSTABLE_NETWORK_TEXTS = [
@@ -142,7 +167,8 @@ SPOTLIGHT_SWIPE: dict[str, int | str] = {
 class DebugTest(TypedDict, total=False):
     label: str
     kind: DebugKind
-    group: str  # prep | post
+    group: str  # prep | post | end | account_switch
+    step: str
     detection: str
     texts: list[str]
     x: int
@@ -172,6 +198,7 @@ class DebugTest(TypedDict, total=False):
     offline_hint: str
     open_shadowrocket: bool
     expect_missing: bool
+    apply_watcher: bool
 
 
 # Manual tests override auto-generated template entries with the same id.
@@ -185,6 +212,12 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
     "clear-album": {
         "label": "Clear photo library",
         "kind": "album_clear",
+        "group": "prep",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-kill-apps": {
+        "label": "Prep: Force-quit apps (App btn, swipe up ×5)",
+        "kind": "kill_app",
         "group": "prep",
         "offline_hint": OFFLINE_HINT,
     },
@@ -238,12 +271,27 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
 }
 
 TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
+    "detect-tiktok-popups": {
+        "label": "Scan TikTok / permission popups (detect only — no tap)",
+        "kind": "tiktok_popup_scan",
+        "group": "post",
+        "hint": "Open TikTok with a popup on screen. Reports what the watcher would do — does not tap.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "dismiss-tiktok-popup": {
+        "label": "Dismiss TikTok / permission popup (watcher apply)",
+        "kind": "tiktok_popup_scan",
+        "group": "post",
+        "apply_watcher": True,
+        "hint": "Same as scan, but runs one permission-watcher cycle and taps if a known popup is found.",
+        "offline_hint": OFFLINE_HINT,
+    },
     "post-tap-gallery-recents": {
-        "label": "Post: Tap gallery (33,669)×2 + Recents (fallback 326,609)×2",
+        "label": "Post: Tap gallery (58,1035)×2 + Recents (fallback 527,940)×2",
         "kind": "gallery_then_recents",
         "group": "post",
-        "x": 33,
-        "y": 669,
+        "x": 58,
+        "y": 1035,
         "tap_count": 2,
         "tap_interval_seconds": 0.5,
         "texts": ["Recents", "RECENTS", "Recent", "RECENT"],
@@ -255,43 +303,43 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "contain": True,
         "ocr_ex": True,
         "search_rect_pct": [0.0, 0.0, 1.0, 0.32],
-        "fallback_tap": {"x": 326, "y": 609, "tap_count": 2, "tap_interval_seconds": 0.5},
+        "fallback_tap": {"x": 527, "y": 940, "tap_count": 2, "tap_interval_seconds": 0.5},
         "fallback_tap_delay_seconds": 1,
         "fallback_after_tap_seconds": 1.5,
         "fallback_retry_seconds": 10,
-        "hint": "Run after plus: gallery 2× then OCR Recents; fallback gallery 2× at (326,609) if picker did not open.",
+        "hint": "Run after plus: gallery 2× then OCR Recents; fallback gallery 2× at (527,940) if picker did not open.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-gallery-item": {
-        "label": "Post 1: Tap gallery item (321, 194) — rightmost / post 1 file",
+        "label": "Post 1: Tap gallery item (513, 267) — rightmost / post 1 file",
         "kind": "tap_xy",
         "group": "post",
-        "x": 321,
-        "y": 194,
+        "x": 513,
+        "y": 267,
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-gallery-item-2": {
-        "label": "Post 2: Tap gallery item (191, 190) — middle",
+        "label": "Post 2: Tap gallery item (305, 291) — middle",
         "kind": "tap_xy",
         "group": "post",
-        "x": 191,
-        "y": 190,
+        "x": 305,
+        "y": 291,
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-gallery-item-3": {
-        "label": "Post 3: Tap gallery item (82, 201) — leftmost / post 3 file",
+        "label": "Post 3: Tap gallery item (95, 295) — leftmost / post 3 file",
         "kind": "tap_xy",
         "group": "post",
-        "x": 82,
-        "y": 201,
+        "x": 95,
+        "y": 295,
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-next-after-media": {
-        "label": "Post: Tap gallery item (321, 194) then black Next (OCR, optional)",
+        "label": "Post: Tap gallery item (513, 267) then black Next (OCR, optional)",
         "kind": "media_then_next",
         "group": "post",
-        "x": 321,
-        "y": 194,
+        "x": 513,
+        "y": 267,
         "texts": ["Next", "NEXT"],
         "after_tap_seconds": 2,
         "require_dark_text": True,
@@ -320,41 +368,44 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "contain": True,
         "ocr_ex": True,
         "search_rect_pct": [0.0, 0.0, 1.0, 0.32],
-        "fallback_tap": {"x": 326, "y": 609, "tap_count": 2, "tap_interval_seconds": 0.5},
+        "fallback_tap": {"x": 527, "y": 940, "tap_count": 2, "tap_interval_seconds": 0.5},
         "fallback_tap_delay_seconds": 1,
         "fallback_after_tap_seconds": 1.5,
         "fallback_retry_seconds": 10,
-        "hint": "Gallery picker already open — waits for Recents; fallback gallery 2× at (326,609) if needed.",
+        "hint": "Gallery picker already open — waits for Recents; fallback gallery 2× at (527,940) if needed.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-music": {
-        "label": "Post: Tap music gallery (194, 39) — after tapping gallery item",
+        "label": "Post: Tap music gallery (310, 62) — after tapping gallery item",
         "kind": "tap_xy",
         "group": "post",
-        "x": 194,
-        "y": 39,
+        "x": 310,
+        "y": 62,
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-favorites": {
-        "label": "Post: Wait + tap Favorites — after tapping music",
+        "label": "Post: Wait + tap Favorites ×2 — after tapping music",
         "kind": "tap_ocr",
         "group": "post",
         "texts": ["Favorites", "FAVORITES"],
         "wait_timeout_seconds": 60,
+        "tap_count": 2,
+        "tap_interval_seconds": 0.5,
         "hint": "Open the music picker and wait for Favorites to appear.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-hvitserk": {
-        "label": "Post: Wait for Hvitserk — 30s, unstable retry, +20s (after Favorites)",
+        "label": "Post: Wait for Hvitserk — poll loading / unstable retry (after Favorites)",
         "kind": "hvitserk_after_favorites",
         "group": "post",
         "texts": list(HVITSERK_CHOICE_TEXTS),
         "unstable_texts": list(UNSTABLE_NETWORK_TEXTS),
-        "initial_wait_seconds": 30,
-        "retry_wait_seconds": 20,
+        "wait_timeout_seconds": 120,
+        "after_retry_wait_seconds": 60,
+        "max_wait_timeout_seconds": 300,
         "poll_interval_seconds": 1.5,
-        "threshold": 0.65,
-        "hint": "Run after Favorites: wait up to 30s for Hvitserk; tap unstable-network retry if needed; wait up to 20s more.",
+        "threshold": 0.6,
+        "hint": "After Favorites: poll until Hvitserk appears (tap it) or unstable-network retry (tap retry, keep waiting up to 5 min).",
         "offline_hint": OFFLINE_HINT,
     },
     "post-dismiss-music": {
@@ -365,6 +416,16 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "y": 334,
         "offline_hint": OFFLINE_HINT,
     },
+    "tap-aa": {
+        "label": "Post: Tap Aa (566, 422) — single tap, after dismissing music",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 566,
+        "y": 422,
+        "tap_count": 1,
+        "hint": "TikTok editor with text overlay controls visible.",
+        "offline_hint": OFFLINE_HINT,
+    },
     "post-type-caption": {
         "label": "Post 1: Type onscreen text — after tapping aa",
         "kind": "type_caption",
@@ -373,11 +434,11 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-border2-coord": {
-        "label": "Post 1: Tap white background (201, 38) ×2 — after typing caption (post 1 only)",
+        "label": "Post 1: Tap white background (303, 63) ×2 — after typing caption (post 1 only)",
         "kind": "tap_xy",
         "group": "post",
-        "x": 201,
-        "y": 38,
+        "x": 303,
+        "y": 63,
         "tap_count": 2,
         "tap_interval_seconds": 0.5,
         "offline_hint": OFFLINE_HINT,
@@ -388,46 +449,49 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "post",
         "texts": ["Done", "DONE"],
         "prefer_top": True,
+        "wait_timeout_seconds": 60,
         "hint": "Show the text editor with Done in the top-right.",
         "offline_hint": OFFLINE_HINT,
     },
     "tap-editor": {
-        "label": "Post: Tap editor (374, 163) — after Done",
+        "label": "Post: Tap editor (566, 247) — after Done",
         "kind": "tap_xy",
         "group": "post",
-        "x": 374,
-        "y": 163,
+        "x": 566,
+        "y": 247,
         "hint": "Show the post editor screen after tapping Done.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-swipe-left": {
-        "label": "Post: Swipe left (341,533)→(40,533) — after tapping editor",
+        "label": "Post: Swipe left (526,922)→(40,922) ×2 — after tapping editor",
         "kind": "swipe",
         "group": "post",
         "direction": "left",
-        "sx": 341,
-        "sy": 533,
+        "sx": 526,
+        "sy": 922,
         "ex": 40,
-        "ey": 533,
+        "ey": 922,
+        "swipe_count": 2,
+        "swipe_interval_seconds": 1.5,
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-text-scrub": {
-        "label": "Post: Tap text scrub (161, 561) — after swiping left",
+        "label": "Post: Tap text scrub (240, 846) — after swiping left",
         "kind": "tap_xy",
         "group": "post",
-        "x": 161,
-        "y": 561,
+        "x": 240,
+        "y": 846,
         "offline_hint": OFFLINE_HINT,
     },
     "post-drag-trim": {
-        "label": "Post: Drag trim (214,508) left fast, release after 1s — after text scrub",
+        "label": "Post: Drag trim (320,771)→(55,765), hold 0.85s — after text scrub",
         "kind": "drag",
         "group": "post",
-        "x1": 214,
-        "y1": 508,
-        "direction": "left",
-        "distance": 172,
-        "duration_ms": 1000,
+        "x1": 320,
+        "y1": 771,
+        "x2": 55,
+        "y2": 765,
+        "duration_ms": 850,
         "move_ms": 10,
         "hold_ms": 0,
         "offline_hint": OFFLINE_HINT,
@@ -472,11 +536,11 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "tap-post": {
-        "label": "Post: Tap post (352, 45) — after typing final caption",
+        "label": "Post: Tap post (544, 68) — after typing final caption",
         "kind": "tap_xy",
         "group": "post",
-        "x": 352,
-        "y": 45,
+        "x": 544,
+        "y": 68,
         "hint": "Caption field filled; keyboard may still be visible.",
         "offline_hint": OFFLINE_HINT,
     },
@@ -494,14 +558,88 @@ TIKTOK_END_DEBUG_TESTS: dict[str, DebugTest] = {
         "kind": "tap",
         "group": "end",
         "detection": "shadowrocket",
+        "hint": "Show the home screen with the Shadowrocket icon visible.",
         "offline_hint": OFFLINE_HINT,
     },
-    "end-tap-bluetoggle": {
-        "label": "End: Tap blue VPN toggle — inside Shadowrocket (VPN on)",
+    "end-tap-vpntoggle": {
+        "label": "End: Tap VPN toggle — inside Shadowrocket (same as prep)",
         "kind": "tap",
         "group": "end",
-        "detection": "bluetoggle",
-        "hint": "Open Shadowrocket first; blue toggle shows when VPN is connected.",
+        "detection": "vpntoggle",
+        "hint": "Open Shadowrocket first; taps the VPN switch (blue or gray template).",
+        "offline_hint": OFFLINE_HINT,
+    },
+}
+
+TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
+    "account-ensure-full": {
+        "label": "Account: Full switch (toggle to other brand @)",
+        "kind": "account_switch_step",
+        "group": "account_switch",
+        "step": "ensure",
+        "toggle_to_opposite": True,
+        "hint": "Labely dashboard → switches to ValCoin @ (and vice versa). Skips only if already on that @.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-tap-profile-tab": {
+        "label": "Account: Tap profile tab (550, 1037)",
+        "kind": "tap_xy",
+        "group": "account_switch",
+        "x": 550,
+        "y": 1037,
+        "hint": "TikTok must be open. Opens the profile tab.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-tap-home-tab": {
+        "label": "Account: Tap home tab (60, 1041)",
+        "kind": "tap_xy",
+        "group": "account_switch",
+        "x": 60,
+        "y": 1041,
+        "hint": "TikTok must be open. Returns to the home feed.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-open-switcher": {
+        "label": "Account: Open switcher (profile + tap 301, 288)",
+        "kind": "account_switch_step",
+        "group": "account_switch",
+        "step": "open_switcher",
+        "hint": "Taps profile tab, then fixed opener coordinates from tiktok_navigation.yaml.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-pick-handle": {
+        "label": "Account: Tap other brand @ in dropdown",
+        "kind": "account_switch_step",
+        "group": "account_switch",
+        "step": "pick_handle",
+        "hint": "Switcher must be open. On Labely taps ValCoin @ for this phone (and vice versa).",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-swipe-continue-editing": {
+        "label": "Account: Swipe up dismiss — Continue editing this post? (65, 151)",
+        "kind": "swipe",
+        "group": "account_switch",
+        "direction": "up",
+        "sx": 65,
+        "sy": 151,
+        "ex": 65,
+        "ey": 0,
+        "hint": "Show the Continue editing this post? sheet first.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-scan-popups": {
+        "label": "Account: Scan TikTok popups (detect only)",
+        "kind": "tiktok_popup_scan",
+        "group": "account_switch",
+        "hint": "Reports what the popup watcher would do — does not tap.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-dismiss-popup": {
+        "label": "Account: Dismiss TikTok popup (watcher apply)",
+        "kind": "tiktok_popup_scan",
+        "group": "account_switch",
+        "apply_watcher": True,
+        "hint": "Runs one watcher cycle; swipes/taps if a known popup is found.",
         "offline_hint": OFFLINE_HINT,
     },
 }
@@ -610,6 +748,22 @@ def _template_debug_tests(workflows_dir: str = "config/workflows") -> dict[str, 
             "hint": f"Show the target on screen. Template: config/templates/{template}",
             "offline_hint": OFFLINE_HINT,
         }
+        if name == "plus":
+            tests[f"tap-{name}"]["tap_count"] = 2
+            tests[f"tap-{name}"]["tap_interval_seconds"] = 0.5
+        elif name == "aa":
+            tests[f"tap-{name}"]["poll_interval_seconds"] = 2
+            tests[f"tap-{name}"]["wait_timeout_seconds"] = 60
+            tests[f"tap-{name}"]["samples_per_poll"] = 4
+            tests[f"tap-{name}"]["sample_interval_seconds"] = 0.45
+            tests[f"tap-{name}"]["ocr_fallback_texts"] = ["Aa", "AA"]
+            tests[f"tap-{name}"]["ocr_threshold"] = 0.48
+            tests[f"tap-{name}"]["ocr_ex"] = True
+            tests[f"tap-{name}"]["prefer_top"] = True
+            tests[f"tap-{name}"]["ocr_search_rect_pct"] = [0.78, 0.0, 1.0, 0.28]
+            tests[f"tap-{name}"]["hint"] = (
+                "After dismissing music — 4 captures every 2s; template + OCR for Aa."
+            )
     return tests
 
 
@@ -618,6 +772,7 @@ def get_debug_registry(workflows_dir: str = "config/workflows") -> dict[str, Deb
     registry.update(MANUAL_DEBUG_TESTS)
     registry.update(TIKTOK_POST_DEBUG_TESTS)
     registry.update(TIKTOK_END_DEBUG_TESTS)
+    registry.update(TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS)
     return registry
 
 
@@ -626,6 +781,7 @@ DEBUG_TESTS = get_debug_registry()
 
 _DEBUG_LIST_PRIORITY = (
     "upload-gallery",
+    "prep-kill-apps",
     "clear-album",
     "list-album",
     "detect-vpn-on",
@@ -650,6 +806,14 @@ def list_debug_tests(group: str | None = None) -> list[dict[str, str]]:
         ordered.extend(
             i for i in registry if registry[i].get("group") == "end" and i not in ordered
         )
+    elif group == "account_switch":
+        priority = _ACCOUNT_SWITCH_DEBUG_LIST_PRIORITY
+        ordered = [i for i in priority if i in registry]
+        ordered.extend(
+            i
+            for i in registry
+            if registry[i].get("group") == "account_switch" and i not in ordered
+        )
     else:
         priority = _DEBUG_LIST_PRIORITY
         ordered = [i for i in priority if i in registry]
@@ -668,13 +832,21 @@ def list_debug_tests(group: str | None = None) -> list[dict[str, str]]:
         items = [item for item in items if item["group"] == "post"]
     elif group == "end":
         items = [item for item in items if item["group"] == "end"]
+    elif group == "account_switch":
+        items = [item for item in items if item["group"] == "account_switch"]
     return items
 
 
-async def run_debug_test(app: Any, device_id: str, test_id: str) -> dict[str, Any]:
-    spec = get_debug_registry().get(test_id)
+async def run_debug_test(
+    app: Any, device_id: str, test_id: str, *, brand: str = "labely"
+) -> dict[str, Any]:
+    from imouse_farm.actions.cancel import clear_cancelled
+
+    clear_cancelled(device_id)
+    spec = dict(get_debug_registry().get(test_id) or {})
     if not spec:
         raise HTTPException(404, f"Unknown debug test: {test_id}")
+    spec["_workflow_id"] = _workflow_id_for_debug(app, device_id, spec)
     kind = spec.get("kind", "tap")
     if kind == "upload_gallery":
         return await upload_gallery_debug(app, device_id, test_id, spec)
@@ -710,6 +882,10 @@ async def run_debug_test(app: Any, device_id: str, test_id: str) -> dict[str, An
         return await kill_app_debug(app, device_id, test_id, spec)
     if kind == "detect_ocr":
         return await detect_ocr_debug(app, device_id, test_id, spec)
+    if kind == "tiktok_popup_scan":
+        return await tiktok_popup_scan_debug(app, device_id, test_id, spec)
+    if kind == "account_switch_step":
+        return await account_switch_step_debug(app, device_id, test_id, spec, brand=brand)
     if kind == "detect":
         if spec.get("open_shadowrocket"):
             open_result = await tap_detection(
@@ -719,6 +895,7 @@ async def run_debug_test(app: Any, device_id: str, test_id: str) -> dict[str, An
                 hint="Shadowrocket icon must be visible on the home screen.",
                 offline_hint=spec.get("offline_hint", OFFLINE_HINT),
                 test_id=f"{test_id}_open_shadowrocket",
+                spec=spec,
             )
             if not open_result.get("success"):
                 return {
@@ -735,6 +912,7 @@ async def run_debug_test(app: Any, device_id: str, test_id: str) -> dict[str, An
             offline_hint=spec.get("offline_hint", OFFLINE_HINT),
             test_id=test_id,
             tap=False,
+            spec=spec,
         )
     return await tap_detection(
         app,
@@ -743,6 +921,7 @@ async def run_debug_test(app: Any, device_id: str, test_id: str) -> dict[str, An
         hint=spec.get("hint", ""),
         offline_hint=spec.get("offline_hint", OFFLINE_HINT),
         test_id=test_id,
+        spec=spec,
     )
 
 
@@ -760,8 +939,9 @@ async def open_photos_spotlight_debug(
     if not device.is_online:
         raise HTTPException(503, spec.get("offline_hint", OFFLINE_HINT))
 
-    engine = app.action_engine
-    await engine.execute_direct(device_id, ActionType.HOME, {}, step_name=f"debug_{test_id}_home")
+    await _debug_execute_direct(
+        app, device_id, spec, test_id, ActionType.HOME, {}, step_name=f"debug_{test_id}_home"
+    )
     await asyncio.sleep(2)
     sequence: list[tuple[ActionType, dict[str, Any]]] = [
         (ActionType.SWIPE, dict(SPOTLIGHT_SWIPE)),
@@ -770,8 +950,14 @@ async def open_photos_spotlight_debug(
         (ActionType.TAP_OCR, {"texts": ["Photos", "photos"], "prefer_top": True, "optional": False}),
     ]
     for action_type, params in sequence:
-        ok = await engine.execute_direct(
-            device_id, action_type, params, step_name=f"debug_{test_id}_{action_type.value}"
+        ok = await _debug_execute_direct(
+            app,
+            device_id,
+            spec,
+            test_id,
+            action_type,
+            params,
+            step_name=f"debug_{test_id}_{action_type.value}",
         )
         if not ok:
             return {"success": False, "message": f"Failed at {action_type.value}"}
@@ -781,6 +967,115 @@ async def open_photos_spotlight_debug(
         "info", "test", "Debug open Photos via Spotlight OK", device_id, {"test_id": test_id}
     )
     return {"success": True, "message": "Opened Photos via Spotlight search"}
+
+
+async def tiktok_popup_scan_debug(
+    app: Any,
+    device_id: str,
+    test_id: str,
+    spec: DebugTest,
+) -> dict[str, Any]:
+    """OCR the screen and report how PermissionWatcher would handle known popups."""
+    await _require_online_device(app, device_id, spec)
+    ctrl = app.device_manager.controller
+    await app.screenshot_service.capture(device_id)
+
+    screen = await ctrl.ocr_on_device(device_id)
+    analysis = analyze_popup_screen(screen or "")
+
+    button_matches: list[dict[str, Any]] = []
+    labels = known_popup_watcher_button_labels()
+    if labels:
+        raw = await ctrl.find_text_on_device(device_id, labels, threshold=0.65)
+        seen: set[tuple[str, int, int]] = set()
+        for match in raw:
+            text = str(match.get("text", "")).strip()
+            x, y = int(match.get("x", 0)), int(match.get("y", 0))
+            key = (text.lower(), x, y)
+            if key in seen:
+                continue
+            seen.add(key)
+            button_matches.append(
+                {
+                    "text": text,
+                    "x": x,
+                    "y": y,
+                    "confidence": float(match.get("confidence", 0)),
+                }
+            )
+        button_matches.sort(key=lambda m: (-m["confidence"], m["text"]))
+
+    dialog = str(analysis.get("dialog", "none"))
+    watcher_detail = str(analysis.get("watcher_detail", ""))
+    if dialog == "none":
+        headline = "No known TikTok / permission popup detected"
+        success = False
+    elif dialog == "photo_delete_sheet":
+        headline = "Photo delete sheet (watcher skips)"
+        success = True
+    else:
+        headline = f"Popup: {dialog.replace('_', ' ')} — {watcher_detail}"
+        success = True
+
+    button_bits = [
+        f"{m['text']} @ ({m['x']}, {m['y']})" for m in button_matches[:8]
+    ]
+    parts = [headline]
+    if button_bits:
+        parts.append("Visible buttons: " + "; ".join(button_bits))
+    elif dialog == "tiktok_post_notify":
+        tx, ty = analysis.get("tap_x"), analysis.get("tap_y")
+        parts.append(f"Watcher would tap coord ({tx}, {ty})")
+    elif dialog == "tiktok_continue_editing":
+        sx, sy = analysis.get("swipe_sx"), analysis.get("swipe_sy")
+        ex, ey = analysis.get("swipe_ex"), analysis.get("swipe_ey")
+        parts.append(f"Watcher would swipe up ({sx}, {sy}) → ({ex}, {ey})")
+    planned = analysis.get("button_labels") or []
+    if planned and dialog not in ("none", "photo_delete_sheet"):
+        parts.append("Watcher search order: " + " → ".join(planned))
+    message = " | ".join(parts)
+
+    if spec.get("apply_watcher") and dialog not in ("none", "photo_delete_sheet"):
+        from imouse_farm.permissions.watcher import PermissionWatcher
+
+        watcher = PermissionWatcher(
+            ctrl, device_id, device_manager=app.device_manager
+        )
+        handled = await watcher._check_once()
+        await app.screenshot_service.capture(device_id)
+        if handled:
+            parts.append("Watcher applied: tapped dismiss button")
+            message = " | ".join(parts)
+            payload = {
+                "success": True,
+                "message": message,
+                "dialog": dialog,
+                "watcher_action": analysis.get("watcher_action"),
+                "watcher_detail": watcher_detail,
+                "visible_buttons": button_matches,
+                "ocr_snippet": analysis.get("ocr_snippet", ""),
+                "applied": True,
+            }
+            await app.db.log_activity(
+                "info", "test", message, device_id, {"test_id": test_id, **payload}
+            )
+            return payload
+        parts.append("Watcher applied: no tap (OCR/button miss)")
+        message = " | ".join(parts)
+        success = False
+
+    payload = {
+        "success": success,
+        "message": message,
+        "dialog": dialog,
+        "watcher_action": analysis.get("watcher_action"),
+        "watcher_detail": watcher_detail,
+        "visible_buttons": button_matches,
+        "ocr_snippet": analysis.get("ocr_snippet", ""),
+    }
+    level = "info" if success else "warn"
+    await app.db.log_activity(level, "test", message, device_id, {"test_id": test_id, **payload})
+    return payload
 
 
 async def detect_ocr_debug(
@@ -819,8 +1114,11 @@ async def detect_ocr_debug(
 
     expect_missing = bool(spec.get("expect_missing"))
     try:
-        ok = await app.action_engine.execute_direct(
+        ok = await _debug_execute_direct(
+            app,
             device_id,
+            spec,
+            test_id,
             ActionType.TAP_OCR,
             {
                 "texts": texts,
@@ -828,7 +1126,6 @@ async def detect_ocr_debug(
                 "optional": False,
                 "expect_missing": expect_missing,
             },
-            step_name=f"debug_{test_id}",
         )
     except Exception as exc:
         label = _VPN_DETECT_LABELS.get(test_id, "Detect OCR")
@@ -888,6 +1185,8 @@ async def tap_ocr_debug(
             "after_retry_wait_seconds",
             "unstable_retry_texts",
             "unstable_texts",
+            "tap_count",
+            "tap_interval_seconds",
         ):
             if key in spec:
                 if key == "unstable_texts":
@@ -898,11 +1197,8 @@ async def tap_ocr_debug(
             params["after_retry_wait_seconds"] = spec["retry_wait_seconds"]
         if has_unstable_flow and "wait_timeout_seconds" not in spec:
             params.pop("wait_timeout_seconds", None)
-        ok = await app.action_engine.execute_direct(
-            device_id,
-            ActionType.TAP_OCR,
-            params,
-            step_name=f"debug_{test_id}",
+        ok = await _debug_execute_direct(
+            app, device_id, spec, test_id, ActionType.TAP_OCR, params
         )
         await app.screenshot_service.capture(device_id)
         if spec.get("verify_only"):
@@ -1003,88 +1299,86 @@ async def hvitserk_after_favorites_debug(
     test_id: str,
     spec: DebugTest,
 ) -> dict[str, Any]:
-    """Wait for Hvitserk after Favorites; tap unstable-network retry if needed."""
+    """Poll after Favorites for Hvitserk or unstable-network retry while music loads."""
     await _require_online_device(app, device_id, spec)
     ctrl = app.device_manager.controller
 
     hvitserk_texts = list(spec.get("texts") or HVITSERK_CHOICE_TEXTS)
     unstable_texts = list(spec.get("unstable_texts") or UNSTABLE_NETWORK_TEXTS)
-    initial_wait = float(spec.get("initial_wait_seconds", 30))
-    retry_wait = float(spec.get("retry_wait_seconds", 20))
+    total_wait = float(spec.get("wait_timeout_seconds", 0))
+    after_retry_seconds = float(spec.get("after_retry_wait_seconds", 60))
+    if total_wait <= 0:
+        total_wait = float(spec.get("initial_wait_seconds", 30)) + after_retry_seconds
+    max_wall = float(spec.get("max_wait_timeout_seconds", 0))
+    if max_wall <= 0:
+        max_wall = max(total_wait + after_retry_seconds * 3, 300.0)
     poll_interval = float(spec.get("poll_interval_seconds", 1.5))
-    threshold = float(spec.get("threshold", 0.65))
+    threshold = float(spec.get("threshold", 0.6))
+    unstable_cooldown = float(spec.get("unstable_retry_cooldown_seconds", 2.0))
 
     steps: list[str] = []
+    started_at = time.monotonic()
+    deadline = started_at + total_wait
+    last_unstable_tap_at = 0.0
 
-    hvitserk = await _poll_for_text(
-        ctrl,
-        device_id,
-        hvitserk_texts,
-        timeout_seconds=initial_wait,
-        poll_interval_seconds=poll_interval,
-        threshold=threshold,
-    )
-    if hvitserk:
-        tapped = await _tap_ocr_match(ctrl, device_id, hvitserk)
-        await app.screenshot_service.capture(device_id)
-        message = (
-            f"Found Hvitserk within {initial_wait:.0f}s and tapped"
-            if tapped
-            else f"Found Hvitserk within {initial_wait:.0f}s but tap failed"
+    while time.monotonic() < deadline:
+        hvitserk = await _best_ocr_match(
+            ctrl, device_id, hvitserk_texts, threshold=threshold, contain=True
         )
-        await app.db.log_activity(
-            "info" if tapped else "warn",
-            "test",
-            f"Debug Hvitserk after Favorites: {message}",
-            device_id,
-            {"test_id": test_id, "phase": "initial", "text": hvitserk.get("text")},
-        )
-        return {"success": tapped, "message": message, "phase": "initial"}
+        if hvitserk:
+            tapped = await _tap_ocr_match(ctrl, device_id, hvitserk)
+            await app.screenshot_service.capture(device_id)
+            message = (
+                f"Found Hvitserk ({hvitserk.get('text', '')!r}) and tapped"
+                if tapped
+                else f"Found Hvitserk ({hvitserk.get('text', '')!r}) but tap failed"
+            )
+            if steps:
+                message = f"{' → '.join(steps)}; {message}"
+            await app.db.log_activity(
+                "info" if tapped else "warn",
+                "test",
+                f"Debug Hvitserk after Favorites: {message}",
+                device_id,
+                {"test_id": test_id, "text": hvitserk.get("text"), "steps": steps},
+            )
+            return {"success": tapped, "message": message, "steps": steps}
 
-    steps.append(f"no Hvitserk after {initial_wait:.0f}s")
+        now = time.monotonic()
+        if now - last_unstable_tap_at >= unstable_cooldown:
+            unstable = await _best_ocr_match(
+                ctrl, device_id, unstable_texts, threshold=threshold, contain=True
+            )
+            if unstable:
+                tapped_unstable = await _tap_ocr_match(ctrl, device_id, unstable)
+                step = (
+                    f"tapped unstable-network retry ({unstable.get('text', '')!r})"
+                    if tapped_unstable
+                    else "found unstable-network prompt but tap failed"
+                )
+                if step not in steps:
+                    steps.append(step)
+                if tapped_unstable:
+                    last_unstable_tap_at = now
+                    old_deadline = deadline
+                    deadline = min(deadline + after_retry_seconds, started_at + max_wall)
+                    if deadline > old_deadline:
+                        steps.append(
+                            f"extended wait +{deadline - old_deadline:.0f}s "
+                            f"(up to {max_wall:.0f}s total)"
+                        )
+                    await asyncio.sleep(unstable_cooldown)
+                    continue
 
-    unstable = await _best_ocr_match(
-        ctrl, device_id, unstable_texts, threshold=threshold, contain=True
-    )
-    if unstable:
-        tapped_unstable = await _tap_ocr_match(ctrl, device_id, unstable)
-        steps.append(
-            f"tapped unstable-network retry ({unstable.get('text', '')!r})"
-            if tapped_unstable
-            else "found unstable-network prompt but tap failed"
-        )
-        await asyncio.sleep(1.5)
-    else:
-        steps.append("unstable-network prompt not found")
-
-    hvitserk = await _poll_for_text(
-        ctrl,
-        device_id,
-        hvitserk_texts,
-        timeout_seconds=retry_wait,
-        poll_interval_seconds=poll_interval,
-        threshold=threshold,
-    )
-
-    if hvitserk:
-        tapped = await _tap_ocr_match(ctrl, device_id, hvitserk)
-        await app.screenshot_service.capture(device_id)
-        message = (
-            f"{' → '.join(steps)}; found Hvitserk within +{retry_wait:.0f}s and tapped"
-            if tapped
-            else f"{' → '.join(steps)}; found Hvitserk but tap failed"
-        )
-        await app.db.log_activity(
-            "info" if tapped else "warn",
-            "test",
-            f"Debug Hvitserk after Favorites: {message}",
-            device_id,
-            {"test_id": test_id, "phase": "retry", "text": hvitserk.get("text")},
-        )
-        return {"success": tapped, "message": message, "phase": "retry", "steps": steps}
+        await asyncio.sleep(poll_interval)
 
     await app.screenshot_service.capture(device_id)
-    message = f"{' → '.join(steps)}; Hvitserk not found after +{retry_wait:.0f}s"
+    elapsed = time.monotonic() - started_at
+    message = (
+        f"{' → '.join(steps)}; Hvitserk not found within {elapsed:.0f}s"
+        if steps
+        else f"Still loading — neither Hvitserk nor unstable retry within {elapsed:.0f}s"
+    )
     await app.db.log_activity(
         "warn",
         "test",
@@ -1192,11 +1486,18 @@ async def clear_album_debug(
     if not device.is_online:
         raise HTTPException(503, spec.get("offline_hint", OFFLINE_HINT))
 
-    success = await app.action_engine.execute_direct(
+    success = await _debug_execute_direct(
+        app,
         device_id,
+        spec,
+        test_id,
         ActionType.ALBUM_CLEAR,
-        {"timeout_ms": 120000},
-        step_name=f"debug_{test_id}",
+        {
+            "timeout_ms": 60000,
+            "sheet_appear_timeout_seconds": 18,
+            "round_active_timeout_seconds": 60,
+            "sheet_poll_interval_seconds": 5,
+        },
     )
 
     if success:
@@ -1253,15 +1554,17 @@ async def upload_gallery_debug(
             "file_count": 0,
         }
 
-    success = await app.action_engine.execute_direct(
+    success = await _debug_execute_direct(
+        app,
         device_id,
+        spec,
+        test_id,
         ActionType.ALBUM_UPLOAD,
         {
             "folder": str(folder),
             "extensions": gallery.media_extensions,
             "timeout_ms": gallery.upload_timeout_ms,
         },
-        step_name=f"debug_{test_id}",
     )
 
     await app.db.log_activity(
@@ -1294,6 +1597,39 @@ async def upload_gallery_debug(
     }
 
 
+def _workflow_id_for_debug(app: Any, device_id: str, spec: DebugTest) -> str | None:
+    """Active workflow name, or infer prep/post/end from debug tab group."""
+    device = app.device_manager.get_device(device_id)
+    if device and device.workflow_name:
+        return device.workflow_name
+    return {
+        "prep": "tiktok_prep",
+        "post": "tiktok_post",
+        "end": "tiktok_end",
+        "account_switch": "tiktok_account_switch",
+    }.get(str(spec.get("group", "")))
+
+
+async def _debug_execute_direct(
+    app: Any,
+    device_id: str,
+    spec: DebugTest,
+    test_id: str,
+    action_type: ActionType,
+    params: dict[str, Any] | None = None,
+    *,
+    step_name: str | None = None,
+) -> bool:
+    workflow_id = spec.get("_workflow_id") or _workflow_id_for_debug(app, device_id, spec)
+    return await app.action_engine.execute_direct(
+        device_id,
+        action_type,
+        params or {},
+        workflow_id=str(workflow_id) if workflow_id else None,
+        step_name=step_name or f"debug_{test_id}",
+    )
+
+
 async def _require_online_device(app: Any, device_id: str, spec: DebugTest) -> Any:
     device = app.device_manager.get_device(device_id)
     if not device:
@@ -1311,8 +1647,8 @@ async def tap_xy_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) 
         params["tap_count"] = int(spec["tap_count"])
     if "tap_interval_seconds" in spec:
         params["tap_interval_seconds"] = float(spec["tap_interval_seconds"])
-    ok = await app.action_engine.execute_direct(
-        device_id, ActionType.TAP, params, step_name=f"debug_{test_id}"
+    ok = await _debug_execute_direct(
+        app, device_id, spec, test_id, ActionType.TAP, params
     )
     await app.screenshot_service.capture(device_id)
     count = int(params.get("tap_count", 1))
@@ -1329,11 +1665,174 @@ async def swipe_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -
         "ex": spec.get("ex"),
         "ey": spec.get("ey"),
     }
-    ok = await app.action_engine.execute_direct(
-        device_id, ActionType.SWIPE, params, step_name=f"debug_{test_id}"
+    if "swipe_count" in spec:
+        params["swipe_count"] = int(spec["swipe_count"])
+    if "swipe_interval_seconds" in spec:
+        params["swipe_interval_seconds"] = float(spec["swipe_interval_seconds"])
+    ok = await _debug_execute_direct(
+        app, device_id, spec, test_id, ActionType.SWIPE, params
     )
     await app.screenshot_service.capture(device_id)
-    return {"success": ok, "message": f"Swipe {params['direction']}"}
+    count = int(params.get("swipe_count", 1))
+    msg = f"Swipe {params['direction']} ×{count}" if count > 1 else f"Swipe {params['direction']}"
+    return {"success": ok, "message": msg}
+
+
+async def account_switch_step_debug(
+    app: Any,
+    device_id: str,
+    test_id: str,
+    spec: DebugTest,
+    *,
+    brand: str = "labely",
+) -> dict[str, Any]:
+    """Isolated account-switch steps for dashboard debug."""
+    from imouse_farm.post.account_profile_store import (
+        get_profile_for_device,
+        handle_match_queries,
+        opposite_brand,
+    )
+    from imouse_farm.workflows.account_switch import (
+        _tap_account_switcher_opener,
+        _tap_handle_in_list,
+        ensure_tiktok_account,
+    )
+
+    device = await _require_online_device(app, device_id, spec)
+    ctrl = app.device_manager.controller
+    nav = app.config.tiktok_navigation
+    step = str(spec.get("step") or "ensure")
+    toggle_to_opposite = bool(spec.get("toggle_to_opposite"))
+    profile = get_profile_for_device(device_id, device.user_name, brand=brand)
+    handle = str(profile.get("tiktok_handle") or "").strip()
+    other_profile = get_profile_for_device(
+        device_id, device.user_name, brand=opposite_brand(brand)
+    )
+    switch_tap_handle = str(other_profile.get("tiktok_handle") or "").strip()
+    dest_handle = switch_tap_handle if toggle_to_opposite else handle
+
+    if step == "ensure":
+        if toggle_to_opposite:
+            if not switch_tap_handle:
+                return {
+                    "success": False,
+                    "message": (
+                        f"No @ handle saved for {opposite_brand(brand)} on this slot — "
+                        "set it on the other dashboard first."
+                    ),
+                }
+        elif not handle:
+            return {
+                "success": False,
+                "message": "No @ handle saved for this slot — set it in Content panel first.",
+            }
+
+        async def _log(level: str, category: str, message: str, **_details: Any) -> None:
+            await app.db.log_activity(level, category, message, device_id, {"test_id": test_id})
+
+        try:
+            await ensure_tiktok_account(
+                controller=ctrl,
+                device_id=device_id,
+                tiktok_handle=handle,
+                navigation=nav,
+                log_activity=_log,
+                device_manager=app.device_manager,
+                templates_dir=app.config.analysis.templates_directory,
+                brand=brand,
+                device_user_name=device.user_name,
+                toggle_to_opposite=toggle_to_opposite,
+            )
+        except RuntimeError as exc:
+            await app.screenshot_service.capture(device_id)
+            return {"success": False, "message": str(exc), "handle": dest_handle}
+        await app.screenshot_service.capture(device_id)
+        await app.db.log_activity(
+            "info",
+            "test",
+            f"Account switch OK for {dest_handle}",
+            device_id,
+            {"test_id": test_id, "handle": dest_handle},
+        )
+        return {
+            "success": True,
+            "message": f"Account switch completed for {dest_handle}",
+            "handle": dest_handle,
+        }
+
+    if step == "open_switcher":
+        ok = await _debug_execute_direct(
+            app,
+            device_id,
+            spec,
+            test_id,
+            ActionType.TAP,
+            {"x": nav.profile_tab_x, "y": nav.profile_tab_y},
+            step_name=f"debug_{test_id}_profile",
+        )
+        if not ok:
+            return {"success": False, "message": "Failed to tap profile tab"}
+        await asyncio.sleep(2.0)
+        opened = await _tap_account_switcher_opener(
+            ctrl, device_id, nav, handle_match_queries(switch_tap_handle)
+        )
+        await app.screenshot_service.capture(device_id)
+        if not opened:
+            return {
+                "success": False,
+                "message": (
+                    f"Failed to tap account switcher opener "
+                    f"({nav.account_switcher_opener_x}, {nav.account_switcher_opener_y})"
+                ),
+            }
+        await app.db.log_activity(
+            "info",
+            "test",
+            f"Opened account switcher ({nav.account_switcher_opener_x}, {nav.account_switcher_opener_y})",
+            device_id,
+            {"test_id": test_id},
+        )
+        return {
+            "success": True,
+            "message": (
+                f"Tapped profile then opener at "
+                f"({nav.account_switcher_opener_x}, {nav.account_switcher_opener_y})"
+            ),
+        }
+
+    if step == "pick_handle":
+        if not switch_tap_handle:
+            return {
+                "success": False,
+                "message": (
+                    f"No @ handle saved for {opposite_brand(brand)} on this slot — "
+                    "set it on the other dashboard first."
+                ),
+            }
+
+        queries = handle_match_queries(switch_tap_handle)
+        picked = await _tap_handle_in_list(ctrl, device_id, queries)
+        await app.screenshot_service.capture(device_id)
+        if not picked:
+            return {
+                "success": False,
+                "message": f"Could not find {switch_tap_handle} on screen via OCR",
+                "handle": switch_tap_handle,
+            }
+        await app.db.log_activity(
+            "info",
+            "test",
+            f"Tapped {switch_tap_handle} in account list",
+            device_id,
+            {"test_id": test_id, "handle": switch_tap_handle, "brand": opposite_brand(brand)},
+        )
+        return {
+            "success": True,
+            "message": f"Tapped {switch_tap_handle} ({opposite_brand(brand)})",
+            "handle": switch_tap_handle,
+        }
+
+    raise HTTPException(400, f"Unknown account_switch step: {step}")
 
 
 async def drag_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
@@ -1352,11 +1851,17 @@ async def drag_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) ->
         params["direction"] = str(spec["direction"])
     if "distance" in spec:
         params["distance"] = int(spec["distance"])
-    ok = await app.action_engine.execute_direct(
-        device_id, ActionType.DRAG, params, step_name=f"debug_{test_id}"
+    ok = await _debug_execute_direct(
+        app, device_id, spec, test_id, ActionType.DRAG, params
     )
     await app.screenshot_service.capture(device_id)
-    return {"success": ok, "message": "Drag complete", **params}
+    if "x2" in params and "y2" in params:
+        msg = f"Drag ({params['x1']},{params['y1']})→({params['x2']},{params['y2']})"
+    else:
+        msg = "Drag complete"
+    if params.get("duration_ms"):
+        msg += f", hold {int(params['duration_ms'])}ms"
+    return {"success": ok, "message": msg, **params}
 
 
 async def type_caption_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
@@ -1364,8 +1869,8 @@ async def type_caption_debug(app: Any, device_id: str, test_id: str, spec: Debug
     post_num = int(spec.get("post_num", 1))
     text_key = device_storage_key(device.device_id, device.user_name)
     text = get_onscreen_text(text_key, post_num)
-    ok = await app.action_engine.execute_direct(
-        device_id, ActionType.TEXT_INPUT, {"text": text}, step_name=f"debug_{test_id}"
+    ok = await _debug_execute_direct(
+        app, device_id, spec, test_id, ActionType.TEXT_INPUT, {"text": text}
     )
     await app.screenshot_service.capture(device_id)
     return {"success": ok, "message": f"Typed onscreen text ({len(text)} chars)", "text": text}
@@ -1376,11 +1881,13 @@ async def type_final_caption_debug(app: Any, device_id: str, test_id: str, spec:
     post_num = int(spec.get("post_num", 1))
     text_key = device_storage_key(device.device_id, device.user_name)
     text = get_final_caption(text_key, post_num)
-    ok = await app.action_engine.execute_direct(
+    ok = await _debug_execute_direct(
+        app,
         device_id,
+        spec,
+        test_id,
         ActionType.TEXT_INPUT,
         {"text": text, "single_line": True},
-        step_name=f"debug_{test_id}",
     )
     await app.screenshot_service.capture(device_id)
     return {"success": ok, "message": f"Typed final caption ({len(text)} chars)", "text": text}
@@ -1400,22 +1907,36 @@ async def gallery_then_recents_debug(
     await _require_online_device(app, device_id, spec)
     x, y = int(spec["x"]), int(spec["y"])
     step = f"debug_{test_id}"
-    engine = app.action_engine
 
-    tap_params: dict[str, Any] = {"x": x, "y": y}
+    tap_params: dict[str, Any] = {"x": x, "y": y, "tap_count": 2, "tap_interval_seconds": 0.5}
     if "tap_count" in spec:
-        tap_params["tap_count"] = int(spec["tap_count"])
+        tap_params["tap_count"] = max(2, int(spec["tap_count"]))
     if "tap_interval_seconds" in spec:
         tap_params["tap_interval_seconds"] = float(spec["tap_interval_seconds"])
 
-    tapped = await engine.execute_direct(
+    tapped = await _debug_execute_direct(
+        app,
         device_id,
+        spec,
+        test_id,
         ActionType.TAP,
         tap_params,
         step_name=f"{step}_gallery",
     )
     if not tapped:
-        return {"success": False, "message": f"Failed to tap gallery at ({x}, {y})"}
+        from imouse_farm.actions.cancel import is_cancelled
+
+        device = app.device_manager.get_device(device_id)
+        if is_cancelled(device_id):
+            reason = "device actions were cancelled (run again after Stop)"
+        elif not device or not device.is_online:
+            reason = "device is offline — reconnect AirPlay first"
+        else:
+            reason = "iMouse tap failed (try Restart server if this persists)"
+        return {
+            "success": False,
+            "message": f"Failed to tap gallery at ({x}, {y}) — {reason}",
+        }
 
     texts = list(spec.get("texts") or ["Recents", "RECENTS", "Recent", "RECENT"])
     ocr_params: dict[str, Any] = {
@@ -1439,8 +1960,11 @@ async def gallery_then_recents_debug(
         if key in spec:
             ocr_params[key] = spec[key]
 
-    ok = await engine.execute_direct(
+    ok = await _debug_execute_direct(
+        app,
         device_id,
+        spec,
+        test_id,
         ActionType.TAP_OCR,
         ocr_params,
         step_name=f"{step}_recents",
@@ -1480,11 +2004,13 @@ async def media_then_next_debug(
     await _require_online_device(app, device_id, spec)
     x, y = int(spec["x"]), int(spec["y"])
     step = f"debug_{test_id}"
-    engine = app.action_engine
     ctrl = app.device_manager.controller
 
-    tapped_media = await engine.execute_direct(
+    tapped_media = await _debug_execute_direct(
+        app,
         device_id,
+        spec,
+        test_id,
         ActionType.TAP,
         {"x": x, "y": y},
         step_name=f"{step}_media",
@@ -1541,8 +2067,11 @@ async def media_then_next_debug(
         )
 
     before = await _find_next()
-    await engine.execute_direct(
+    await _debug_execute_direct(
+        app,
         device_id,
+        spec,
+        test_id,
         ActionType.TAP_OCR,
         ocr_params,
         step_name=f"{step}_next",
@@ -1585,11 +2114,13 @@ async def final_caption_production_debug(
             f"Post {post_num} final caption is empty — fill it in the dashboard Post {post_num} box first.",
         )
 
-    engine = app.action_engine
     step = f"debug_{test_id}"
 
-    tapped = await engine.execute_direct(
+    tapped = await _debug_execute_direct(
+        app,
         device_id,
+        spec,
+        test_id,
         ActionType.TAP,
         {"x": _CAPTION_FIELD_X, "y": _CAPTION_FIELD_Y},
         step_name=f"{step}_tap_field",
@@ -1602,8 +2133,11 @@ async def final_caption_production_debug(
 
     await asyncio.sleep(_CAPTION_FIELD_SETTLE_SECONDS)
 
-    typed = await engine.execute_direct(
+    typed = await _debug_execute_direct(
+        app,
         device_id,
+        spec,
+        test_id,
         ActionType.TEXT_INPUT,
         {"text": text, "single_line": True},
         step_name=f"{step}_type",
@@ -1627,7 +2161,7 @@ async def final_caption_production_debug(
         "message": (
             f"Post {post_num} production flow OK — tapped (107,130), typed {len(flat)} chars "
             f"(caption + hashtags, single line), waited {_AFTER_CAPTION_TYPE_SECONDS:.0f}s. "
-            f"Use Tap post (352, 45) to finish."
+            f"Use Tap post (544, 68) to finish."
         ),
         "post_num": post_num,
         "char_count": len(flat),
@@ -1637,8 +2171,8 @@ async def final_caption_production_debug(
 
 async def kill_app_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
     await _require_online_device(app, device_id, spec)
-    ok = await app.action_engine.execute_direct(
-        device_id, ActionType.KILL_APP, {}, step_name=f"debug_{test_id}"
+    ok = await _debug_execute_direct(
+        app, device_id, spec, test_id, ActionType.KILL_APP, {}
     )
     await app.screenshot_service.capture(device_id)
     return {"success": ok, "message": "Force-quit: App button + 5 swipe ups"}
@@ -1646,11 +2180,137 @@ async def kill_app_debug(app: Any, device_id: str, test_id: str, spec: DebugTest
 
 async def close_app_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
     await _require_online_device(app, device_id, spec)
-    ok = await app.action_engine.execute_direct(
-        device_id, ActionType.CLOSE_APP, {}, step_name=f"debug_{test_id}"
+    ok = await _debug_execute_direct(
+        app, device_id, spec, test_id, ActionType.CLOSE_APP, {}
     )
     await app.screenshot_service.capture(device_id)
     return {"success": ok, "message": "Closed app (pressed home)"}
+
+
+async def _scan_template_detection(
+    app: Any,
+    device_id: str,
+    detection: str,
+    spec: DebugTest | None = None,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Capture one or more frames and return the strongest template/OCR hit."""
+    dm = app.device_manager
+    device = dm.get_device(device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+
+    samples = max(1, int(spec.get("samples_per_poll", 1))) if spec else 1
+    sample_interval = float(spec.get("sample_interval_seconds", 0.45)) if spec else 0.45
+    ocr_texts = [
+        str(t).strip()
+        for t in (spec.get("ocr_fallback_texts") or []) if spec
+        if str(t).strip()
+    ]
+    ocr_threshold = float(spec.get("ocr_threshold", 0.48)) if spec else 0.48
+    ocr_ex = bool(spec.get("ocr_ex", False)) if spec else False
+    prefer_top = bool(spec.get("prefer_top", True)) if spec else True
+    raw_rect = spec.get("ocr_search_rect_pct") if spec else None
+    ocr_rect: list[int] | None = None
+    if isinstance(raw_rect, list) and len(raw_rect) == 4:
+        ocr_rect = ocr_rect_from_pct(device.screen_width, device.screen_height, raw_rect)
+
+    shot: dict[str, Any] | None = None
+    detections: dict[str, dict[str, Any]] = {}
+    best_hit: dict[str, Any] | None = None
+
+    for sample_idx in range(samples):
+        shot = await app.screenshot_service.capture(device_id)
+        if not shot:
+            raise HTTPException(500, "Screenshot failed")
+
+        vision = app.vision
+        template_names = expand_template_names([detection])
+        analysis = vision.analyze(
+            device_id,
+            shot["file_path"],
+            template_names=template_names,
+        )
+        sample_detections: dict[str, dict[str, Any]] = {
+            d.name: {"x": d.x, "y": d.y, "confidence": d.confidence}
+            for d in analysis.detections
+        }
+
+        if hasattr(vision, "template_path_for"):
+            sw = int(device.screen_width) if device.screen_width else 406
+            sh = int(device.screen_height) if device.screen_height else 720
+            for tmpl_name in template_names:
+                path = vision.template_path_for(tmpl_name)
+                if not path:
+                    continue
+                threshold = vision.threshold_for(tmpl_name)
+                if hasattr(vision, "device_threshold_for"):
+                    threshold = vision.device_threshold_for(tmpl_name)
+                rect = (
+                    vision.search_rect_for(tmpl_name, width=sw, height=sh)
+                    if hasattr(vision, "search_rect_for")
+                    else None
+                )
+                hit = await dm.controller.find_template_on_device(
+                    device_id, path, threshold, rect=rect
+                )
+                if not hit:
+                    continue
+                existing = sample_detections.get(tmpl_name)
+                if not existing or hit["confidence"] >= existing.get("confidence", 0):
+                    sample_detections[tmpl_name] = hit
+
+        sample_detections = apply_detection_fallbacks(sample_detections)
+        sample_detections = apply_exclusive_detections(sample_detections)
+        if hasattr(vision, "min_confidence_for"):
+            for name in list(sample_detections):
+                min_conf = vision.min_confidence_for(name)
+                if min_conf is not None and float(sample_detections[name].get("confidence", 0)) < min_conf:
+                    del sample_detections[name]
+        if hasattr(vision, "tap_offset_for"):
+            sample_detections = apply_tap_offsets(sample_detections, vision.tap_offset_for)
+
+        template_hit = pick_detection_hit(sample_detections, detection)
+        if template_hit:
+            template_hit = dict(template_hit)
+            template_hit.setdefault("detection_type", "template")
+            best_hit = stronger_hit(best_hit, template_hit)
+
+        if ocr_texts:
+            for query in ocr_texts:
+                matches = await dm.controller.find_text_on_device(
+                    device_id,
+                    [query],
+                    threshold=ocr_threshold,
+                    contain=True,
+                    rect=ocr_rect,
+                    is_ex=ocr_ex,
+                )
+                if not matches:
+                    continue
+                if prefer_top:
+                    ocr_match = min(matches, key=lambda m: int(m.get("y", 9999)))
+                else:
+                    ocr_match = max(matches, key=lambda m: float(m.get("confidence", 0)))
+                ocr_entry = {
+                    "x": int(ocr_match["x"]),
+                    "y": int(ocr_match["y"]),
+                    "confidence": float(ocr_match.get("confidence", 0.85)),
+                    "matched_via": "ocr",
+                    "detection_type": "ocr",
+                    "text": ocr_match.get("text") or query,
+                }
+                best_hit = stronger_hit(best_hit, ocr_entry)
+                break
+
+        detections = sample_detections
+        if sample_idx < samples - 1:
+            await asyncio.sleep(sample_interval)
+
+    if best_hit:
+        detections[detection] = best_hit
+    if not shot:
+        raise HTTPException(500, "Screenshot failed")
+    return shot, detections
 
 
 async def tap_detection(
@@ -1662,64 +2322,40 @@ async def tap_detection(
     offline_hint: str = OFFLINE_HINT,
     test_id: str | None = None,
     tap: bool = True,
+    spec: DebugTest | None = None,
 ) -> dict[str, Any]:
     """Screenshot → find template → tap (or detect-only when ``tap=False``)."""
-    dm = app.device_manager
-    device = dm.get_device(device_id)
+    device = app.device_manager.get_device(device_id)
     if not device:
         raise HTTPException(404, "Device not found")
     if not device.is_online:
         raise HTTPException(503, offline_hint)
 
-    shot = await app.screenshot_service.capture(device_id)
-    if not shot:
-        raise HTTPException(500, "Screenshot failed")
+    poll_interval = float(spec.get("poll_interval_seconds", 0)) if spec else 0.0
+    wait_timeout = float(spec.get("wait_timeout_seconds", 60)) if spec else 0.0
+    poll = poll_interval > 0 and wait_timeout > 0
+    deadline = time.monotonic() + wait_timeout if poll else None
+    attempt = 0
+    shot: dict[str, Any] | None = None
+    detections: dict[str, dict[str, Any]] = {}
 
-    vision = app.vision
-    template_names = expand_template_names([detection])
-    analysis = vision.analyze(
-        device_id,
-        shot["file_path"],
-        template_names=template_names,
-    )
-    detections: dict[str, dict[str, Any]] = {
-        d.name: {"x": d.x, "y": d.y, "confidence": d.confidence}
-        for d in analysis.detections
-    }
-
-    if hasattr(vision, "template_path_for"):
-        sw = int(device.screen_width) if device.screen_width else 406
-        sh = int(device.screen_height) if device.screen_height else 720
-        for tmpl_name in template_names:
-            path = vision.template_path_for(tmpl_name)
-            if not path:
-                continue
-            threshold = vision.threshold_for(tmpl_name)
-            if hasattr(vision, "device_threshold_for"):
-                threshold = vision.device_threshold_for(tmpl_name)
-            rect = (
-                vision.search_rect_for(tmpl_name, width=sw, height=sh)
-                if hasattr(vision, "search_rect_for")
-                else None
-            )
-            hit = await dm.controller.find_template_on_device(
-                device_id, path, threshold, rect=rect
-            )
-            if not hit:
-                continue
-            existing = detections.get(tmpl_name)
-            if not existing or hit["confidence"] >= existing.get("confidence", 0):
-                detections[tmpl_name] = hit
-
-    detections = apply_detection_fallbacks(detections)
-    detections = apply_exclusive_detections(detections)
-    if hasattr(vision, "min_confidence_for"):
-        for name in list(detections):
-            min_conf = vision.min_confidence_for(name)
-            if min_conf is not None and float(detections[name].get("confidence", 0)) < min_conf:
-                del detections[name]
-    if hasattr(vision, "tap_offset_for"):
-        detections = apply_tap_offsets(detections, vision.tap_offset_for)
+    while True:
+        attempt += 1
+        shot, detections = await _scan_template_detection(
+            app, device_id, detection, spec
+        )
+        if detection in detections:
+            break
+        if not poll or (deadline is not None and time.monotonic() >= deadline):
+            break
+        await app.db.log_activity(
+            "info",
+            "test",
+            f"Waiting for {detection} (attempt {attempt}, retry in {poll_interval:.0f}s)",
+            device_id,
+            {"test_id": test_id, "template": detection, "attempt": attempt},
+        )
+        await asyncio.sleep(poll_interval)
 
     if detection not in detections:
         if not tap:
@@ -1782,12 +2418,29 @@ async def tap_detection(
         }
 
     app.action_engine.set_detections(device_id, detections)
-    success = await app.action_engine.execute_direct(
-        device_id,
-        ActionType.TAP_DETECTION,
-        {"detection": detection},
-        step_name=f"debug_{test_id or detection}",
-    )
+    tap_params: dict[str, Any] = {"detection": detection, "refind_on_device": True}
+    if spec:
+        if "tap_count" in spec:
+            tap_params["tap_count"] = int(spec["tap_count"])
+        if "tap_interval_seconds" in spec:
+            tap_params["tap_interval_seconds"] = float(spec["tap_interval_seconds"])
+    if spec and test_id:
+        success = await _debug_execute_direct(
+            app,
+            device_id,
+            spec,
+            test_id,
+            ActionType.TAP_DETECTION,
+            tap_params,
+            step_name=f"debug_{test_id or detection}",
+        )
+    else:
+        success = await app.action_engine.execute_direct(
+            device_id,
+            ActionType.TAP_DETECTION,
+            tap_params,
+            step_name=f"debug_{test_id or detection}",
+        )
 
     await app.screenshot_service.capture(device_id)
 

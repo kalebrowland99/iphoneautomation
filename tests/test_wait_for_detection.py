@@ -115,3 +115,30 @@ async def test_wait_for_detection_times_out() -> None:
 
     with pytest.raises(RuntimeError, match="Timeout waiting for 'plus'"):
         await runner._step_wait_for_detection(step)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_detection_scans_popups_each_poll() -> None:
+    runner = _make_runner()
+    runner._workflow = WorkflowConfig(name="tiktok_post", steps=[])
+    runner._running = True
+    runner._device_manager.is_workflow_paused = AsyncMock(return_value=False)
+    runner._step_capture = AsyncMock()
+    runner._log_activity = AsyncMock()
+    runner._step_analyze = AsyncMock()
+    runner._has_detection = MagicMock(return_value=False)
+    runner._try_dismiss_popups = AsyncMock(return_value=False)
+
+    step = WorkflowStepConfig(
+        type="wait_for_detection",
+        name="wait_for_plus",
+        templates=["plus"],
+        when_detection="plus",
+        duration_seconds=0.05,
+        min_seconds=0.02,
+    )
+
+    with pytest.raises(RuntimeError, match="Timeout waiting for 'plus'"):
+        await runner._step_wait_for_detection(step)
+
+    assert runner._try_dismiss_popups.await_count >= 1

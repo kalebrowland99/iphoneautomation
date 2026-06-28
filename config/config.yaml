@@ -17,7 +17,7 @@ database:
 screenshots:
   directory: "data/screenshots"
   retention_hours: 24
-  periodic_interval_seconds: 60
+  periodic_interval_seconds: 0  # 0 = off; workflows capture on demand
   max_per_device: 100
 
 openai:
@@ -57,6 +57,8 @@ timing:
   frozen_device_threshold_seconds: 120
   workflow_step_delay_seconds: 0.25
   unknown_screen_escalation_count: 5
+  tiktok_touch_cooldown_seconds: 7  # pause after tap/swipe/drag in tiktok_* workflows (lets AirPlay lag settle)
+  permission_watcher_poll_seconds: 0.25  # background popup scan (runs until kill/disconnect)
 
 device_groups:
   default:
@@ -88,6 +90,14 @@ dashboard:
   farm_slots: 20
   cors_origins:
     - "*"
+
+batch:
+  batch_size: 1
+  cast_connect_max_attempts: 8
+  cast_connect_retry_seconds: 15
+  batch_device_timeout_seconds: 7200
+  disconnect_on_complete: true
+  between_phones_pause_seconds: 2
 
 logging:
   level: "INFO"

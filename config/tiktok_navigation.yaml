@@ -1,0 +1,25 @@
+# TikTok bottom-nav + account switcher coordinates.
+
+profile_tab:
+  x: 550
+  y: 1037
+
+home_tab:
+  x: 60
+  y: 1041
+
+# UI 1: tap display name area on profile to open account switcher.
+account_switcher_opener:
+  x: 301
+  y: 288
+
+# UI 2: if primary hits Total Likes instead, dismiss OK then tap here.
+account_likes_dismiss_ok:
+  x: 308
+  y: 766
+
+account_switcher_opener_fallback:
+  x: 136
+  y: 156
+
+account_name_search_rect_pct: [0.0, 0.0, 1.0, 0.35]

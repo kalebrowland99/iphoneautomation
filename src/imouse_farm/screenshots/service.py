@@ -53,7 +53,12 @@ class ScreenshotService:
     async def start(self) -> None:
         self._screenshot_dir.mkdir(parents=True, exist_ok=True)
         self._running = True
-        self._periodic_task = asyncio.create_task(self._periodic_loop())
+        interval = self._config.screenshots.periodic_interval_seconds
+        if interval > 0:
+            self._periodic_task = asyncio.create_task(self._periodic_loop())
+        else:
+            self._periodic_task = None
+            logger.info("periodic_screenshots_disabled")
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         logger.info("screenshot_service_started", directory=str(self._screenshot_dir))
 

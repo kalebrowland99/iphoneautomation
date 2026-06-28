@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from imouse_farm.config.models import DetectionResult, DeviceState
+from imouse_farm.vision.ocr_match import ocr_contains_phrase
 
 
 class VisionAnalysis(BaseModel):
@@ -50,11 +51,11 @@ class VisionProvider(ABC):
                 if rule.get("template", "") in detection_names:
                     return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
             elif condition == "ocr_contains":
-                if rule.get("text", "").lower() in analysis.ocr_text.lower():
+                if ocr_contains_phrase(analysis.ocr_text, rule.get("text", "")):
                     return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
             elif condition == "ocr_missing":
                 text = rule.get("text", "")
-                if text and text.lower() not in analysis.ocr_text.lower():
+                if text and not ocr_contains_phrase(analysis.ocr_text, text):
                     return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
             elif condition == "default":
                 return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
@@ -68,9 +69,9 @@ class VisionProvider(ABC):
         if condition == "template_missing" and template:
             return not any(d.name == template for d in analysis.detections)
         if condition == "ocr_contains" and template:
-            return template.lower() in analysis.ocr_text.lower()
+            return ocr_contains_phrase(analysis.ocr_text, template)
         if condition == "ocr_missing" and template:
-            return template.lower() not in analysis.ocr_text.lower()
+            return not ocr_contains_phrase(analysis.ocr_text, template)
         return False
 
     def find_detection(self, analysis: VisionAnalysis, name: str) -> DetectionResult | None:

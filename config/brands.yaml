@@ -1,0 +1,13 @@
+labely:
+  name: Labely
+  mark: L
+  tagline: TikTok automation
+  accent: "#6366f1"
+  accent_hover: "#818cf8"
+
+valcoin:
+  name: ValCoin
+  mark: V
+  tagline: TikTok automation
+  accent: "#f59e0b"
+  accent_hover: "#fbbf24"

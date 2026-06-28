@@ -156,6 +156,21 @@ class DeviceManager:
         """Manually reconnect AirPlay for one device (dashboard Connect button)."""
         return await self._try_reconnect_airplay(device_id, force=True, manual=True)
 
+    async def disconnect_airplay(self, device_id: str) -> bool:
+        """Disconnect AirPlay cast for one device."""
+        success = await self._controller.disconnect_device(device_id)
+        await asyncio.sleep(1)
+        await self.refresh_devices()
+        device = self._devices.get(device_id)
+        if device and device.is_online:
+            device.is_online = False
+            device.current_state = DeviceState.DISCONNECTED
+            await self._db.set_device_online(device_id, False)
+            await self._db.update_device_state(device_id, DeviceState.DISCONNECTED, "airplay_disconnected")
+            await self._emit("device_disconnected", {"device_id": device_id})
+        logger.info("airplay_disconnect", device_id=device_id, success=success)
+        return success
+
     async def _startup_airplay_reconnect(self) -> None:
         """Re-establish AirPlay for devices that were online before restart."""
         delay = self._config.imouse.airplay_connect_delay_seconds
@@ -372,6 +387,10 @@ class DeviceManager:
     async def is_frozen(self, device_id: str) -> bool:
         device = self._devices.get(device_id)
         if not device or not device.last_activity_at:
+            return False
+        if device.workflow_paused:
+            return False
+        if device.current_state == DeviceState.ERROR:
             return False
         threshold = self._config.timing.frozen_device_threshold_seconds
         elapsed = (datetime.now(timezone.utc) - device.last_activity_at).total_seconds()

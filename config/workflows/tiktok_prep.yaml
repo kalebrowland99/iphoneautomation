@@ -1,6 +1,6 @@
 name: tiktok_prep
 description: >
-  Sequential prep: unlock → home → clear gallery via iMouse album API → upload
+  Sequential prep: unlock → force-quit apps → clear gallery via iMouse album API → upload
   gallery → VPN (Shadowrocket — "Not Connected" OCR + vpntoggle) → TikTok. VPN runs
   AFTER the album clear/upload so it can't interfere with the Photos shortcut.
   Phone slot folder (e.g. gallery/12/).
@@ -44,7 +44,28 @@ steps:
     when_detection: lock_screen
     duration_seconds: 2
 
-  # ── 2. Go home ──────────────────────────────────────────────────────
+  # ── 2. Force-quit apps (same as tiktok_end) ─────────────────────────
+  - type: execute_action
+    name: go_home_before_kill
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: settle_before_kill
+    duration_seconds: 3
+
+  - type: execute_action
+    name: kill_apps
+    on_failure: pause
+    action:
+      type: kill_app
+    skip_post_action: true
+
+  - type: wait
+    name: after_kill
+    duration_seconds: 3
+
   - type: execute_action
     name: go_home
     action:
@@ -53,7 +74,7 @@ steps:
 
   - type: wait
     name: settle_home
-    duration_seconds: 0.5
+    duration_seconds: 3
 
   # ── 3. Clear photo library (iMouse album API — Photos app not required) ─
   # go_home above — no second home press before clear.
@@ -62,13 +83,16 @@ steps:
     on_failure: pause
     action:
       type: album_clear
-      timeout_ms: 120000
+      timeout_ms: 60000
+      sheet_appear_timeout_seconds: 18
+      round_active_timeout_seconds: 60
+      sheet_poll_interval_seconds: 5
     skip_post_action: true
 
   # album_clear loops until Recents is empty (3 or 20+ items), then upload runs.
   - type: wait
     name: after_clear
-    duration_seconds: 1
+    duration_seconds: 3
 
   # ── 4. Upload gallery folder (slot number, e.g. gallery/12/) ──────
   - type: execute_action
@@ -146,7 +170,7 @@ steps:
           state: WAITING
           min_confidence: 0.55
 
-  # ── 7. VPN off → tap vpntoggle → verify "Not Connected" gone ───────
+  # ── 7. Not Connected showing → tap → wait 5s → continue prep ─
   - type: screenshot
     name: shadowrocket_toggle_screen
     when_state: WAITING
@@ -160,7 +184,6 @@ steps:
   - type: execute_action
     name: tap_vpntoggle
     when_state: WAITING
-    when_detection: vpntoggle
     on_failure: pause
     action:
       type: tap_detection
@@ -171,33 +194,7 @@ steps:
   - type: wait
     name: after_vpn_toggle
     when_state: WAITING
-    duration_seconds: 2
-
-  - type: screenshot
-    name: verify_vpn_connected_screen
-    when_state: WAITING
-
-  - type: analyze_screen
-    name: analyze_vpn_connected
-    when_state: WAITING
-    ocr_keywords: ["Not Connected"]
-
-  - type: verify
-    name: confirm_vpn_connected
-    when_state: WAITING
-    condition: ocr_missing
-    template: "Not Connected"
-    on_failure: pause
-
-  - type: determine_state
-    name: vpn_active_confirmed
-    when_state: WAITING
-    state_rules:
-      - condition: ocr_missing
-        text: "Not Connected"
-        state: ACTIVE
-      - condition: default
-        state: WAITING
+    duration_seconds: 5
 
   # ── 8. Home after VPN ───────────────────────────────────────────────
   - type: execute_action
@@ -210,64 +207,7 @@ steps:
     name: after_vpn_home
     duration_seconds: 2
 
-  # ── 9. Re-check VPN in Shadowrocket before TikTok (if still WAITING) ─
-  - type: execute_action
-    name: go_home_before_vpn_recheck
-    when_state: WAITING
-    action:
-      type: home
-    skip_post_action: true
-
-  - type: wait
-    name: before_vpn_recheck
-    when_state: WAITING
-    duration_seconds: 1
-
-  - type: screenshot
-    name: home_for_shadowrocket_recheck
-    when_state: WAITING
-    templates: [shadowrocket]
-
-  - type: analyze_screen
-    name: analyze_shadowrocket_recheck
-    when_state: WAITING
-    templates: [shadowrocket]
-
-  - type: execute_action
-    name: open_shadowrocket_recheck
-    when_state: WAITING
-    on_failure: pause
-    action:
-      type: tap_detection
-      detection: shadowrocket
-    skip_post_action: true
-
-  - type: wait
-    name: shadowrocket_open_recheck
-    when_state: WAITING
-    duration_seconds: 2
-
-  - type: check_ocr_state
-    name: vpn_confirmed_before_tiktok
-    when_state: WAITING
-    on_failure: pause
-    action:
-      texts: ["Not Connected", "NOT CONNECTED", "Not connected"]
-      threshold: 0.65
-      duration_seconds: 12
-      retry_delay: 1.5
-      state_if_found: WAITING
-      state_if_missing: ACTIVE
-      fallback_templates:
-        - template: bluetoggle
-          state: ACTIVE
-          min_confidence: 0.45
-        - template: vpntoggle
-          state: WAITING
-          min_confidence: 0.55
-      require_state: ACTIVE
-
-  # ── 10. TikTok (home screen) ────────────────────────────────────────
+  # ── 9. TikTok (home screen) ────────────────────────────────────────
   - type: execute_action
     name: go_home_for_tiktok
     action:
@@ -276,7 +216,7 @@ steps:
 
   - type: wait
     name: settle_for_tiktok
-    duration_seconds: 1
+    duration_seconds: 3
 
   - type: wait_for_detection
     name: wait_for_tiktok_icon

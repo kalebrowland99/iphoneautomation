@@ -12,8 +12,13 @@ from imouse_farm.workflows.engine import WorkflowEngine
 
 logger = get_logger(__name__)
 
-TIKTOK_FULL_PIPELINE = ("tiktok_prep", "tiktok_post", "tiktok_end")
-TIKTOK_POST_END_PIPELINE = ("tiktok_post", "tiktok_end")
+TIKTOK_FULL_PIPELINE = (
+    "tiktok_prep",
+    "tiktok_account_switch",
+    "tiktok_post",
+    "tiktok_end",
+)
+TIKTOK_POST_END_PIPELINE = ("tiktok_account_switch", "tiktok_post", "tiktok_end")
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -56,13 +61,14 @@ class WorkflowPipeline:
             "step": index + 1,
             "total_steps": len(workflows),
             "workflows": list(workflows),
+            "brand": pipe.get("brand", "labely"),
         }
 
     def is_active(self, device_id: str) -> bool:
         pipe = self._pipelines.get(device_id)
         return bool(pipe and pipe["status"] in ("running", "paused"))
 
-    async def start(self, device_id: str, *, from_post: int | None = None) -> bool:
+    async def start(self, device_id: str, *, from_post: int | None = None, brand: str = "labely") -> bool:
         if self.is_active(device_id):
             return False
         if self._engine.list_running():
@@ -70,39 +76,47 @@ class WorkflowPipeline:
                 if entry["device_id"] == device_id:
                     return False
 
-        start_post_index: int | None = None
-        if from_post is not None:
-            if not (2 <= from_post <= POST_COUNT):
+        if from_post is None:
+            workflows = list(TIKTOK_FULL_PIPELINE)
+            post_start = 1
+        else:
+            if not (1 <= from_post <= POST_COUNT):
                 return False
             workflows = list(TIKTOK_POST_END_PIPELINE)
-            start_post_index = from_post
-        else:
-            workflows = list(TIKTOK_FULL_PIPELINE)
+            post_start = from_post
 
+        run_brand = str(brand or "labely").strip().lower()
         self._pipelines[device_id] = {
             "workflows": workflows,
             "index": 0,
             "status": "running",
             "from_post": from_post,
+            "start_post_index": post_start,
+            "brand": run_brand,
         }
         first = workflows[0]
-        started = await self._engine.start_workflow(
-            first, device_id, start_post_index=start_post_index
-        )
+        if first == "tiktok_post":
+            started = await self._engine.start_workflow(
+                first,
+                device_id,
+                start_post_index=post_start,
+                brand=run_brand,
+            )
+        else:
+            started = await self._engine.start_workflow(first, device_id, brand=run_brand)
         if not started:
             self._pipelines.pop(device_id, None)
             return False
 
-        if from_post is not None:
-            label = f"Posts {from_post}→{POST_COUNT} + end ({first})"
-            pipe_meta = {
-                "pipeline": workflows,
-                "from_post": from_post,
-                "source": "dashboard",
-            }
+        if from_post is None:
+            label = f"Full run ({' → '.join(workflows)})"
         else:
-            label = f"Full run started ({first})"
-            pipe_meta = {"pipeline": workflows, "source": "dashboard"}
+            label = f"Posts {post_start}→{POST_COUNT} + end ({first})"
+        pipe_meta = {
+            "pipeline": workflows,
+            "from_post": from_post,
+            "source": "dashboard",
+        }
 
         await self._db.log_activity(
             "info",
@@ -117,6 +131,7 @@ class WorkflowPipeline:
                 "device_id": device_id,
                 "workflows": workflows,
                 "from_post": from_post,
+                "brand": run_brand,
             },
         )
         return True
@@ -201,7 +216,14 @@ class WorkflowPipeline:
                 device_id,
                 {"next_workflow": next_wf, "source": "pipeline"},
             )
-            started = await self._engine.start_workflow(next_wf, device_id)
+            start_post_index = (
+                pipe.get("start_post_index")
+                if next_wf == "tiktok_post"
+                else None
+            )
+            started = await self._engine.start_workflow(
+                next_wf, device_id, start_post_index=start_post_index, brand=pipe.get("brand", "labely")
+            )
             if not started:
                 pipe["status"] = "failed"
                 await self._db.log_activity(

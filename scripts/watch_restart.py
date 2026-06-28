@@ -11,6 +11,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 CONFIG = PROJECT_ROOT / "config" / "config.yaml"
+LOCK_FILE = PROJECT_ROOT / "data" / "watch_restart.lock"
 
 # Load .env before spawning the server subprocess.
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -59,6 +60,43 @@ def _files_changed(before: dict[Path, float], after: dict[Path, float]) -> bool:
     return any(before.get(path) != mtime for path, mtime in after.items())
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _acquire_watcher_lock() -> bool:
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if LOCK_FILE.exists():
+        try:
+            existing = int(LOCK_FILE.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            existing = 0
+        if existing and existing != os.getpid() and _pid_alive(existing):
+            print(
+                f"Another watch_restart is already running (PID {existing}). Exiting.",
+                file=sys.stderr,
+            )
+            return False
+    LOCK_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    return True
+
+
+def _release_watcher_lock() -> None:
+    if not LOCK_FILE.exists():
+        return
+    try:
+        if int(LOCK_FILE.read_text(encoding="utf-8").strip()) == os.getpid():
+            LOCK_FILE.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        LOCK_FILE.unlink(missing_ok=True)
+
+
 def _start_server() -> subprocess.Popen[bytes]:
     print("Starting iMouse Farm...", flush=True)
     print("Dashboard: http://localhost:8080", flush=True)
@@ -87,6 +125,8 @@ def _stop_server(proc: subprocess.Popen[bytes] | None) -> None:
 def main() -> int:
     if not PYTHON.exists():
         print("Missing .venv — run setup.ps1 first.", file=sys.stderr)
+        return 1
+    if not _acquire_watcher_lock():
         return 1
 
     mtimes = _snapshot_mtimes()
@@ -125,6 +165,8 @@ def main() -> int:
         print("\nShutting down...", flush=True)
         _stop_server(proc)
         return 0
+    finally:
+        _release_watcher_lock()
 
 
 if __name__ == "__main__":

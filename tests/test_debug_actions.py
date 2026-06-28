@@ -33,7 +33,7 @@ def test_debug_tests_have_required_fields() -> None:
         if kind == "tap":
             assert spec["detection"]
             assert spec["hint"]
-            assert test_id.startswith("tap-")
+            assert test_id.startswith("tap-") or test_id.startswith("end-tap-")
         elif kind == "upload_gallery":
             assert test_id == "upload-gallery"
         elif kind == "album_clear":
@@ -62,6 +62,22 @@ def test_debug_tests_have_required_fields() -> None:
             assert spec.get("texts")
             assert spec.get("fallback_tap")
             assert spec["hint"]
+        elif kind == "hvitserk_after_favorites":
+            assert spec.get("texts")
+            assert spec["hint"]
+        elif kind == "tiktok_popup_scan":
+            assert spec["hint"]
+        elif kind == "account_switch_step":
+            assert spec["step"]
+            assert spec["hint"]
+
+
+def test_list_account_switch_debug_tests() -> None:
+    tests = list_debug_tests("account_switch")
+    ids = {t["id"] for t in tests}
+    assert "account-ensure-full" in ids
+    assert "account-tap-profile-tab" in ids
+    assert all(t["group"] == "account_switch" for t in tests)
 
 
 def test_upload_gallery_is_first_debug_test() -> None:

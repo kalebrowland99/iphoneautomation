@@ -7,6 +7,7 @@ import time
 from asyncio import QueueEmpty
 from typing import Any, Callable, Awaitable
 
+from imouse_farm.actions.cancel import is_cancelled
 from imouse_farm.actions.pre_touch_reset import (
     pre_touch_mouse_reset,
     request_needs_pre_touch_reset,
@@ -168,6 +169,14 @@ class ActionEngine:
         delay = self._config.timing.action_retry_delay_seconds
 
         for attempt in range(retries + 1):
+            if is_cancelled(request.device_id):
+                logger.info(
+                    "action_cancelled",
+                    device_id=request.device_id,
+                    action=request.action_type.value,
+                    step=request.step_name,
+                )
+                return False
             start = time.monotonic()
             action_id = await self._db.log_action_start(
                 request.device_id,
@@ -230,6 +239,8 @@ class ActionEngine:
 
     async def _run_action(self, request: ActionRequest) -> bool:
         device_id = request.device_id
+        if is_cancelled(device_id):
+            return False
         params = request.params
         action = request.action_type
         ctrl = self._controller
@@ -252,6 +263,15 @@ class ActionEngine:
                 for tap_idx in range(tap_count):
                     if not await ctrl.tap(device_id, x, y):
                         return False
+                    if tap_count > 1:
+                        logger.info(
+                            "tap_repeat",
+                            device_id=device_id,
+                            x=x,
+                            y=y,
+                            tap=tap_idx + 1,
+                            tap_count=tap_count,
+                        )
                     if tap_idx < tap_count - 1:
                         await asyncio.sleep(interval)
                 return True
@@ -391,7 +411,24 @@ class ActionEngine:
                         prefer_top=prefer_top,
                         query=query_hint or best.get("text"),
                     )
-                    await ctrl.tap(device_id, int(best["x"]), int(best["y"]))
+                    x, y = int(best["x"]), int(best["y"])
+                    tap_count = max(1, int(params.get("tap_count", 1)))
+                    interval = float(params.get("tap_interval_seconds", 0.4))
+                    for tap_idx in range(tap_count):
+                        if not await ctrl.tap(device_id, x, y):
+                            return False
+                        if tap_count > 1:
+                            logger.info(
+                                "tap_ocr_repeat",
+                                device_id=device_id,
+                                text=best.get("text"),
+                                x=x,
+                                y=y,
+                                tap=tap_idx + 1,
+                                tap_count=tap_count,
+                            )
+                        if tap_idx < tap_count - 1:
+                            await asyncio.sleep(interval)
                     return True
 
                 async def _should_skip_tap() -> bool:
@@ -442,6 +479,8 @@ class ActionEngine:
 
                 async def _wait_for_ocr(deadline: float) -> bool:
                     while True:
+                        if is_cancelled(device_id):
+                            return False
                         if await _try_tap_once():
                             return True
                         if wait_timeout <= 0 or time.monotonic() >= deadline:
@@ -451,6 +490,8 @@ class ActionEngine:
 
                 async def _poll_primary_until(deadline: float) -> bool:
                     while True:
+                        if is_cancelled(device_id):
+                            return False
                         if await _try_tap_once():
                             return True
                         if time.monotonic() >= deadline:
@@ -499,36 +540,69 @@ class ActionEngine:
                         str(t).strip() for t in unstable_retry_raw if str(t).strip()
                     ]
                     phase1_seconds = float(params.get("initial_wait_seconds", 30))
-                    phase2_seconds = float(params.get("after_retry_wait_seconds", 20))
-                    logger.info(
-                        "tap_ocr_unstable_wait_start",
-                        device_id=device_id,
-                        phase1_seconds=phase1_seconds,
-                        phase2_seconds=phase2_seconds,
-                        texts=candidates,
+                    phase2_seconds = float(params.get("after_retry_wait_seconds", 60))
+                    wait_cap = float(params.get("wait_timeout_seconds", 0))
+                    total_wait = wait_cap if wait_cap > 0 else phase1_seconds + phase2_seconds
+                    started_at = time.monotonic()
+                    deadline = started_at + total_wait
+                    max_wall = float(params.get("max_wait_timeout_seconds", 0))
+                    if max_wall <= 0:
+                        max_wall = max(total_wait + phase2_seconds * 3, 300.0)
+                    after_retry_seconds = phase2_seconds
+                    unstable_cooldown = float(
+                        params.get("unstable_retry_cooldown_seconds", 2.0)
                     )
-                    if await _poll_primary_until(time.monotonic() + phase1_seconds):
-                        return True
-                    if retry_texts:
-                        tapped_unstable = await _tap_auxiliary_texts(retry_texts)
-                        logger.info(
-                            "tap_ocr_unstable_retry",
-                            device_id=device_id,
-                            tapped=tapped_unstable,
-                            texts=retry_texts,
-                        )
-                    if await _poll_primary_until(time.monotonic() + phase2_seconds):
-                        return True
+                    last_unstable_tap_at = 0.0
+                    logger.info(
+                        "tap_ocr_unstable_poll_start",
+                        device_id=device_id,
+                        total_wait_seconds=total_wait,
+                        max_wait_seconds=max_wall,
+                        after_retry_seconds=after_retry_seconds,
+                        texts=candidates,
+                        unstable_retry_texts=retry_texts,
+                    )
+                    while time.monotonic() < deadline:
+                        if is_cancelled(device_id):
+                            return False
+                        if await _try_tap_once():
+                            return True
+                        if retry_texts:
+                            now = time.monotonic()
+                            if now - last_unstable_tap_at >= unstable_cooldown:
+                                tapped_unstable = await _tap_auxiliary_texts(retry_texts)
+                                if tapped_unstable:
+                                    old_deadline = deadline
+                                    deadline = min(
+                                        deadline + after_retry_seconds,
+                                        started_at + max_wall,
+                                    )
+                                    logger.info(
+                                        "tap_ocr_unstable_retry",
+                                        device_id=device_id,
+                                        texts=retry_texts,
+                                        extended_seconds=round(deadline - old_deadline, 1),
+                                        remaining_seconds=round(deadline - now, 1),
+                                    )
+                                    last_unstable_tap_at = now
+                                    await asyncio.sleep(unstable_cooldown)
+                                    continue
+                        await asyncio.sleep(poll_interval)
+                    if is_cancelled(device_id):
+                        return False
                     if optional:
                         logger.info("tap_ocr_skipped", device_id=device_id, texts=candidates)
                         return True
                     raise RuntimeError(
-                        f"None of {candidates!r} found on screen after unstable-network retry"
+                        f"None of {candidates!r} found on screen after waiting for "
+                        f"Hvitserk or unstable-network retry ({total_wait:.0f}s)"
                     )
 
                 deadline = time.monotonic() + wait_timeout if wait_timeout > 0 else time.monotonic()
                 if await _wait_for_ocr(deadline):
                     return True
+                if is_cancelled(device_id):
+                    return False
                 if optional:
                     logger.info("tap_ocr_skipped", device_id=device_id, texts=candidates)
                     return True
@@ -578,17 +652,40 @@ class ActionEngine:
                     if await _wait_for_ocr(retry_deadline):
                         return True
 
+                if is_cancelled(device_id):
+                    return False
                 raise RuntimeError(f"None of {candidates!r} found on screen")
             case ActionType.SWIPE:
-                return await ctrl.swipe(
-                    device_id,
-                    direction=str(params.get("direction", "up")),
-                    length=float(params.get("length", params.get("len", 0.9))),
-                    sx=_coerce_int(params.get("sx", params.get("x1"))),
-                    sy=_coerce_int(params.get("sy", params.get("y1"))),
-                    ex=_coerce_int(params.get("ex", params.get("x2"))),
-                    ey=_coerce_int(params.get("ey", params.get("y2"))),
-                )
+                direction = str(params.get("direction", "up"))
+                length = float(params.get("length", params.get("len", 0.9)))
+                sx = _coerce_int(params.get("sx", params.get("x1")))
+                sy = _coerce_int(params.get("sy", params.get("y1")))
+                ex = _coerce_int(params.get("ex", params.get("x2")))
+                ey = _coerce_int(params.get("ey", params.get("y2")))
+                swipe_count = max(1, int(params.get("swipe_count", 1)))
+                interval = float(params.get("swipe_interval_seconds", 1.5))
+                for swipe_idx in range(swipe_count):
+                    if not await ctrl.swipe(
+                        device_id,
+                        direction=direction,
+                        length=length,
+                        sx=sx,
+                        sy=sy,
+                        ex=ex,
+                        ey=ey,
+                    ):
+                        return False
+                    if swipe_count > 1:
+                        logger.info(
+                            "swipe_repeat",
+                            device_id=device_id,
+                            direction=direction,
+                            swipe=swipe_idx + 1,
+                            swipe_count=swipe_count,
+                        )
+                    if swipe_idx < swipe_count - 1:
+                        await asyncio.sleep(interval)
+                return True
             case ActionType.LONG_PRESS:
                 return await ctrl.long_press(
                     device_id, int(params["x"]), int(params["y"]),
@@ -649,11 +746,22 @@ class ActionEngine:
                 return await ctrl.kill_app(device_id)
             case ActionType.ALBUM_CLEAR:
                 self._block_album_when_vpn_on(device_id, "Album clear")
-                return await ctrl.album_clear(
-                    device_id,
-                    album_name=params.get("album_name"),
-                    timeout_ms=int(params.get("timeout_ms", 120000)),
-                )
+                clear_kw: dict[str, Any] = {
+                    "timeout_ms": int(params.get("timeout_ms", 60000)),
+                }
+                if params.get("album_name") is not None:
+                    clear_kw["album_name"] = params.get("album_name")
+                for src, dst in (
+                    ("post_grace_seconds", "post_grace_seconds"),
+                    ("sheet_appear_timeout_seconds", "sheet_appear_timeout"),
+                    ("round_active_timeout_seconds", "round_active_timeout"),
+                    ("sheet_poll_interval_seconds", "sheet_poll_interval_seconds"),
+                ):
+                    if src in params:
+                        clear_kw[dst] = float(params[src])
+                if "max_rounds" in params:
+                    clear_kw["max_rounds"] = int(params["max_rounds"])
+                return await ctrl.album_clear(device_id, **clear_kw)
             case ActionType.ALBUM_UPLOAD:
                 self._block_album_when_vpn_on(device_id, "Album upload")
                 from imouse_farm.utils.gallery import list_media_files
@@ -677,6 +785,13 @@ class ActionEngine:
                 )
             case _:
                 raise ValueError(f"Unknown action type: {action}")
+
+    async def abort_device(self, device_id: str) -> int:
+        """Mark device cancelled and drop queued actions (Kill / Stop)."""
+        from imouse_farm.actions.cancel import mark_cancelled
+
+        mark_cancelled(device_id)
+        return await self.cancel_pending(device_id)
 
     async def cancel_pending(self, device_id: str) -> int:
         """Drop queued actions for a device (e.g. after Stop)."""

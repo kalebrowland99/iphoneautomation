@@ -21,6 +21,16 @@ def test_apply_exclusive_detections_keeps_higher_confidence() -> None:
     assert "bluetoggle" not in detections
 
 
+def test_apply_detection_fallbacks_maps_bluetoggle_to_vpntoggle() -> None:
+    detections = {
+        "bluetoggle": {"x": 10, "y": 20, "confidence": 0.7},
+    }
+    out = apply_detection_fallbacks(detections)
+    assert "vpntoggle" in out
+    assert out["vpntoggle"]["x"] == 10
+    assert out["vpntoggle"]["matched_via"] == "bluetoggle"
+
+
 def test_apply_exclusive_detections_prefers_vpntoggle_on_tie() -> None:
     detections = apply_exclusive_detections(
         {

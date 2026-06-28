@@ -7,6 +7,8 @@ from typing import Any, Callable
 # primary detection -> alternate template names (tried when primary is missing)
 DETECTION_FALLBACKS: dict[str, list[str]] = {
     "continuearrow": ["post"],
+    # Same physical switch — gray (off) vs blue (on) template.
+    "vpntoggle": ["bluetoggle"],
 }
 
 # Only one detection per group may survive — highest confidence wins.

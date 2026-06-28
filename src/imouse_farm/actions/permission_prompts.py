@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+from typing import Any
+
+from imouse_farm.vision.ocr_match import ocr_compact, ocr_contains_phrase
 
 # Prefer specific labels first (e.g. "Always Allow" before bare "Allow").
 UPLOAD_PERMISSION_TEXTS = [
@@ -62,8 +65,6 @@ DELETE_SHEET_DISTRACTOR_TEXTS = [
 DELETE_SHEET_MIN_Y = 500
 DELETE_SHEET_RELAXED_MIN_Y = 460
 DELETE_SHEET_SIGNAL_MIN_Y = 380
-# Offset below "Don't Delete" when OCR sees the sheet but not the confirm label.
-DELETE_BELOW_DONT_DELETE_OFFSET_Y = 65
 
 # Labels that must never be tapped during album clear.
 DELETE_DISTRACTOR_SUBSTRINGS = (
@@ -111,6 +112,39 @@ TIKTOK_POST_NOTIFY_KEYWORDS = (
     "post interactions?",
 )
 
+TIKTOK_CONTINUE_EDITING_KEYWORDS = (
+    "continue editing this post",
+    "continue editing",
+)
+
+TIKTOK_CONTINUE_EDITING_SWIPE_X = 65
+TIKTOK_CONTINUE_EDITING_SWIPE_Y = 151
+TIKTOK_CONTINUE_EDITING_SWIPE_DISTANCE = 200
+
+TIKTOK_GET_NOTIFIED_BUTTON_LABELS = (
+    "get notified",
+    "get notified!",
+)
+
+# Tap these on TikTok in-app permission modals (contacts, etc.) — not iOS system sheets.
+TIKTOK_DONT_ALLOW_BUTTON_TEXTS = [
+    "Don't allow",
+    "Don't Allow",
+    "DONT ALLOW",
+    "Dont allow",
+]
+
+# TikTok in-app sheets that offer "Don't allow" (OCR may glue words together).
+TIKTOK_IN_APP_DENY_KEYWORDS = (
+    "find contacts",
+    "access to your contacts",
+    "allow access to your contacts",
+    "tiktok contacts",
+    "connect with people you know",
+    "sync your contacts",
+    "find facebook friends",
+)
+
 # iOS permission dialogs we should auto-allow (camera, mic, photos).
 ALLOW_RESOURCE_KEYWORDS = (
     "camera",
@@ -138,6 +172,17 @@ PERMISSION_DIALOG_KEYWORDS = (
 NEGATIVE_BUTTON_WORDS = ("don't", "dont", "not to track", "ask app")
 
 
+def _has_deny_permission_button(ocr_text: str) -> bool:
+    compact = ocr_compact(ocr_text)
+    return (
+        "dontallow" in compact
+        or "askapnottotrack" in compact
+        or "don't allow" in str(ocr_text or "").lower()
+        or "dont allow" in str(ocr_text or "").lower()
+        or "ask app not to track" in str(ocr_text or "").lower()
+    )
+
+
 def is_negated_delete_label(text: str) -> bool:
     """True for Don't Delete / Do Not Delete style labels."""
     label = str(text or "").strip().lower()
@@ -151,6 +196,9 @@ def is_deny_permission_label(text: str) -> bool:
         return False
     if "delet" in label:
         return False
+    compact = ocr_compact(label)
+    if compact in ("dontallow", "askapnottotrack"):
+        return True
     if "allow" in label or "track" in label:
         return any(neg in label for neg in NEGATIVE_BUTTON_WORDS)
     return label in ("ask app not to track", "don't allow", "dont allow")
@@ -166,6 +214,7 @@ def is_photo_delete_sheet_text(ocr_text: str) -> bool:
         for phrase in (
             "delete photo",
             "delete photos",
+            "to delete",
             "delete items",
             "delete item",
             "delete always",
@@ -240,7 +289,7 @@ def sheet_text_has_bulk_delete_option(matches: list[dict]) -> bool:
     return bool(
         DELETE_EVERYTHING_RE.search(joined)
         or DELETE_ALL_COUNT_RE.search(joined)
-        or re.search(r"delete\s+all(?:\s+photos)?(?:\s|$)", joined)
+        or re.search(r"delete\s+all\s+photos", joined)
     )
 
 
@@ -310,6 +359,29 @@ def delete_sheet_title_phrases() -> tuple[str, ...]:
     )
 
 
+def delete_sheet_body_phrases() -> tuple[str, ...]:
+    """Sheet body copy — not button labels (avoids Show All ↔ Delete All OCR false positives)."""
+    return (
+        "from library",
+        "will be deleted",
+        "this photo will",
+        "remove from",
+    )
+
+
+def delete_sheet_has_body_copy(matches: list[dict]) -> bool:
+    """True when OCR includes sheet body text above the action buttons."""
+    body_min_y = DELETE_SHEET_SIGNAL_MIN_Y - 80
+    for match in matches:
+        text = str(match.get("text", "")).lower()
+        if int(match.get("y", 0)) >= body_min_y:
+            continue
+        if any(phrase in text for phrase in delete_sheet_body_phrases()):
+            return True
+    joined = _joined_match_text(matches)
+    return any(phrase in joined for phrase in delete_sheet_body_phrases())
+
+
 def _joined_match_text(matches: list[dict]) -> str:
     return " ".join(str(m.get("text", "")) for m in matches).lower()
 
@@ -322,18 +394,34 @@ def delete_sheet_is_visible(
     """True when the iOS delete confirmation sheet appears to be on screen."""
     if not matches:
         return False
-    for match in matches:
-        text = str(match.get("text", ""))
-        if is_delete_confirm_label(text) or is_negated_delete_label(text):
-            return True
-    joined = _joined_match_text(matches)
-    return any(phrase in joined for phrase in delete_sheet_title_phrases())
+    if any(is_negated_delete_label(str(m.get("text", ""))) for m in matches):
+        return True
+    bottom_deletes = [
+        m
+        for m in matches
+        if is_delete_confirm_label(str(m.get("text", "")))
+        and not is_delete_distractor_label(str(m.get("text", "")))
+        and int(m.get("y", 0)) >= min_y
+    ]
+    if not bottom_deletes:
+        return False
+    if delete_sheet_has_body_copy(matches):
+        return True
+    if sheet_text_has_bulk_delete_option(matches):
+        return True
+    return any(
+        is_bulk_delete_label(str(m.get("text", "")))
+        and not is_bare_delete_label(str(m.get("text", "")))
+        for m in bottom_deletes
+    )
 
 
 def is_delete_distractor_label(text: str) -> bool:
     """True for sheet labels like Show All that sit near the delete button."""
     label = str(text or "").strip().lower()
     if not label:
+        return True
+    if re.search(r"show\s*all", label):
         return True
     if "delet" in label and is_delete_confirm_label(text):
         return False
@@ -369,6 +457,28 @@ def pick_delete_confirm_match(
     candidates = filter_delete_confirm_matches(matches, min_y=min_y)
     if not candidates:
         return None
+
+    dont_delete_rows = [
+        m for m in matches if is_negated_delete_label(str(m.get("text", "")))
+    ]
+    distractor_rows = [
+        m for m in matches if is_delete_distractor_label(str(m.get("text", "")))
+    ]
+    if dont_delete_rows or distractor_rows:
+        floor_y = 0
+        if dont_delete_rows:
+            floor_y = max(int(m.get("y", 0)) for m in dont_delete_rows)
+        if distractor_rows:
+            floor_y = max(
+                floor_y,
+                max(int(m.get("y", 0)) for m in distractor_rows),
+            )
+        below_floor = [
+            m for m in candidates if int(m.get("y", 0)) > floor_y + 15
+        ]
+        if below_floor:
+            candidates = below_floor
+
     if sheet_text_has_bulk_delete_option(matches) or any(
         is_bulk_delete_label(str(m.get("text", ""))) for m in candidates
     ):
@@ -397,18 +507,16 @@ def pick_delete_confirm_match(
     )
 
 
-def infer_delete_button_from_sheet(matches: list[dict]) -> tuple[int, int] | None:
-    """Guess delete button coords when the sheet is visible but OCR missed the label."""
-    negated = [
-        m for m in matches if is_negated_delete_label(str(m.get("text", "")))
-    ]
-    if negated:
-        ref = max(negated, key=lambda m: int(m.get("y", 0)))
-        return (
-            int(ref["x"]),
-            int(ref["y"]) + DELETE_BELOW_DONT_DELETE_OFFSET_Y,
-        )
-    return None
+def delete_confirmation_sheet_present(matches: list[dict]) -> bool:
+    """True when the iOS delete confirmation sheet is up (not Recents / Show All)."""
+    return any(is_negated_delete_label(str(m.get("text", ""))) for m in matches)
+
+
+def delete_tap_ready_in_one_scan(matches: list[dict]) -> bool:
+    """True when cancel + delete buttons are both visible — safe to tap without waiting."""
+    if not delete_confirmation_sheet_present(matches):
+        return False
+    return resolve_delete_tap(matches, min_y=DELETE_SHEET_RELAXED_MIN_Y) is not None
 
 
 def resolve_delete_tap(
@@ -416,23 +524,15 @@ def resolve_delete_tap(
     *,
     min_y: int = DELETE_SHEET_MIN_Y,
     relaxed_min_y: int = DELETE_SHEET_RELAXED_MIN_Y,
-) -> dict | None | tuple[str, tuple[int, int]]:
-    """Return an OCR delete match, a smart fallback coordinate, or None."""
+) -> dict | None:
+    """Return an on-screen delete button OCR match, or None if not found safely."""
     matches = enrich_delete_sheet_matches(matches)
     if not delete_sheet_is_visible(matches):
         return None
     picked = pick_delete_confirm_match(matches, min_y=min_y)
     if picked:
         return picked
-    picked = pick_delete_confirm_match(matches, min_y=relaxed_min_y)
-    if picked:
-        return picked
-    if sheet_text_has_bulk_delete_option(matches):
-        return None
-    inferred = infer_delete_button_from_sheet(matches)
-    if inferred is not None:
-        return ("fallback", inferred)
-    return None
+    return pick_delete_confirm_match(matches, min_y=relaxed_min_y)
 
 
 def delete_match_is_stable(first: dict, second: dict, *, tolerance: int = 45) -> bool:
@@ -446,11 +546,23 @@ def delete_match_is_stable(first: dict, second: dict, *, tolerance: int = 45) ->
 def is_permission_dialog_text(ocr_text: str) -> bool:
     """True when on-screen OCR looks like an iOS permission alert."""
     text = ocr_text.lower()
-    has_buttons = "allow" in text and (
-        "don't allow" in text or "dont allow" in text or "ask app not to track" in text
+    has_buttons = "allow" in text and _has_deny_permission_button(ocr_text)
+    has_dialog_phrase = any(
+        ocr_contains_phrase(ocr_text, kw) for kw in PERMISSION_DIALOG_KEYWORDS
     )
-    has_dialog_phrase = any(kw in text for kw in PERMISSION_DIALOG_KEYWORDS)
     return has_buttons or has_dialog_phrase
+
+
+def is_tiktok_in_app_deny_dialog(ocr_text: str) -> bool:
+    """True for TikTok in-app modals with Don't allow (contacts, sync friends, etc.)."""
+    if not any(ocr_contains_phrase(ocr_text, kw) for kw in TIKTOK_IN_APP_DENY_KEYWORDS):
+        return False
+    return _has_deny_permission_button(ocr_text)
+
+
+def tiktok_dont_allow_button_texts() -> list[str]:
+    """Button labels for TikTok in-app Don't allow prompts."""
+    return list(TIKTOK_DONT_ALLOW_BUTTON_TEXTS)
 
 
 def should_allow_permission(ocr_text: str) -> bool:
@@ -473,11 +585,40 @@ def is_tiktok_email_confirm_dialog(ocr_text: str) -> bool:
 def is_tiktok_post_notify_dialog(ocr_text: str) -> bool:
     """True when TikTok asks to get notified of post interactions."""
     text = ocr_text.lower()
-    return any(kw in text for kw in TIKTOK_POST_NOTIFY_KEYWORDS)
+    if any(kw in text for kw in TIKTOK_POST_NOTIFY_KEYWORDS):
+        return True
+    if "get notified" not in text:
+        return False
+    if "not now" in text or "notnow" in text.replace(" ", ""):
+        return True
+    stripped = " ".join(text.split())
+    if stripped in TIKTOK_GET_NOTIFIED_BUTTON_LABELS:
+        return True
+    for line in text.splitlines():
+        line_norm = " ".join(line.strip().split())
+        if line_norm in TIKTOK_GET_NOTIFIED_BUTTON_LABELS:
+            return True
+    return False
 
 
 def tiktok_post_notify_dismiss_coords() -> tuple[int, int]:
     return TIKTOK_POST_NOTIFY_DISMISS_X, TIKTOK_POST_NOTIFY_DISMISS_Y
+
+
+def is_tiktok_continue_editing_dialog(ocr_text: str) -> bool:
+    """True when TikTok shows 'Continue editing this post?' draft recovery sheet."""
+    text = str(ocr_text or "").lower()
+    if any(kw in text for kw in TIKTOK_CONTINUE_EDITING_KEYWORDS):
+        return True
+    return "continue editing" in text and "post" in text
+
+
+def tiktok_continue_editing_swipe_coords() -> tuple[int, int, int, int]:
+    """Swipe up from (x, y) to dismiss continue-editing sheet."""
+    x = TIKTOK_CONTINUE_EDITING_SWIPE_X
+    y = TIKTOK_CONTINUE_EDITING_SWIPE_Y
+    ey = max(0, y - TIKTOK_CONTINUE_EDITING_SWIPE_DISTANCE)
+    return x, y, x, ey
 
 
 def tiktok_not_now_button_texts() -> list[str]:
@@ -489,3 +630,105 @@ def is_not_now_label(text: str) -> bool:
     """True when OCR text is a Not Now button (not e.g. Update Not Now elsewhere)."""
     label = str(text or "").strip().lower()
     return label in ("not now", "notnow") or label.endswith(" not now")
+
+
+def known_popup_watcher_button_labels() -> list[str]:
+    """OCR button labels the permission watcher may tap for TikTok / iOS popups."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for label in (
+        *TIKTOK_NOT_NOW_BUTTON_TEXTS,
+        *TIKTOK_DONT_ALLOW_BUTTON_TEXTS,
+        *UPLOAD_PERMISSION_TEXTS,
+        *DENY_BUTTON_TEXTS,
+    ):
+        key = label.strip().lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(label)
+    return out
+
+
+def analyze_popup_screen(ocr_text: str) -> dict[str, Any]:
+    """Classify on-screen OCR the same way PermissionWatcher does (detect only)."""
+    text = ocr_text or ""
+    snippet = text[:400] + ("…" if len(text) > 400 else "")
+
+    if is_photo_delete_sheet_text(text):
+        return {
+            "dialog": "photo_delete_sheet",
+            "watcher_action": "skip",
+            "watcher_detail": "Photo delete sheet — permission watcher ignores this.",
+            "button_labels": [],
+            "ocr_snippet": snippet,
+        }
+
+    if is_tiktok_email_confirm_dialog(text):
+        return {
+            "dialog": "tiktok_email_confirm",
+            "watcher_action": "tap_not_now",
+            "watcher_detail": "Tap Not Now on TikTok email confirm sheet.",
+            "button_labels": tiktok_not_now_button_texts(),
+            "ocr_snippet": snippet,
+        }
+
+    if is_tiktok_continue_editing_dialog(text):
+        sx, sy, ex, ey = tiktok_continue_editing_swipe_coords()
+        return {
+            "dialog": "tiktok_continue_editing",
+            "watcher_action": "swipe_up",
+            "watcher_detail": f"Swipe up from ({sx}, {sy}) to dismiss draft sheet.",
+            "button_labels": [],
+            "swipe_sx": sx,
+            "swipe_sy": sy,
+            "swipe_ex": ex,
+            "swipe_ey": ey,
+            "ocr_snippet": snippet,
+        }
+
+    if is_tiktok_post_notify_dialog(text):
+        x, y = tiktok_post_notify_dismiss_coords()
+        return {
+            "dialog": "tiktok_post_notify",
+            "watcher_action": "tap_coord",
+            "watcher_detail": f"Tap dismiss at ({x}, {y}) — no button OCR.",
+            "button_labels": [],
+            "tap_x": x,
+            "tap_y": y,
+            "ocr_snippet": snippet,
+        }
+
+    if is_tiktok_in_app_deny_dialog(text):
+        return {
+            "dialog": "tiktok_in_app_deny",
+            "watcher_action": "tap_dont_allow",
+            "watcher_detail": "Tap Don't allow on TikTok in-app permission sheet (e.g. contacts).",
+            "button_labels": tiktok_dont_allow_button_texts(),
+            "ocr_snippet": snippet,
+        }
+
+    if is_permission_dialog_text(text):
+        allow = should_allow_permission(text)
+        labels = button_texts_for_permission(allow)
+        action = "tap_allow" if allow else "tap_deny"
+        detail = (
+            "Tap Allow / photos permission labels."
+            if allow
+            else "Tap Don't Allow / Ask App Not to Track."
+        )
+        return {
+            "dialog": "ios_permission",
+            "watcher_action": action,
+            "watcher_detail": detail,
+            "button_labels": labels,
+            "allow_resource": allow,
+            "ocr_snippet": snippet,
+        }
+
+    return {
+        "dialog": "none",
+        "watcher_action": "none",
+        "watcher_detail": "No known TikTok popup or iOS permission dialog detected.",
+        "button_labels": [],
+        "ocr_snippet": snippet,
+    }

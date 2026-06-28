@@ -99,6 +99,8 @@ class TimingConfig(BaseModel):
     frozen_device_threshold_seconds: float = 120.0
     workflow_step_delay_seconds: float = 0.25
     unknown_screen_escalation_count: int = 5
+    tiktok_touch_cooldown_seconds: float = 7.0
+    permission_watcher_poll_seconds: float = 0.25
 
 
 class DeviceGroupConfig(BaseModel):
@@ -148,6 +150,61 @@ class DashboardConfig(BaseModel):
     farm_slots: int = 20
 
 
+class TabCoord(BaseModel):
+    x: int = 0
+    y: int = 0
+
+
+class TikTokNavigationConfig(BaseModel):
+    profile_tab: TabCoord = Field(default_factory=lambda: TabCoord(x=550, y=1037))
+    home_tab: TabCoord = Field(default_factory=lambda: TabCoord(x=60, y=1041))
+    account_switcher_opener: TabCoord = Field(
+        default_factory=lambda: TabCoord(x=301, y=288)
+    )
+    account_switcher_opener_fallback: TabCoord = Field(
+        default_factory=lambda: TabCoord(x=136, y=156)
+    )
+    account_likes_dismiss_ok: TabCoord = Field(
+        default_factory=lambda: TabCoord(x=308, y=766)
+    )
+    account_name_search_rect_pct: list[float] = Field(
+        default_factory=lambda: [0.0, 0.0, 1.0, 0.35]
+    )
+
+    @property
+    def profile_tab_x(self) -> int:
+        return int(self.profile_tab.x)
+
+    @property
+    def profile_tab_y(self) -> int:
+        return int(self.profile_tab.y)
+
+    @property
+    def home_tab_x(self) -> int:
+        return int(self.home_tab.x)
+
+    @property
+    def home_tab_y(self) -> int:
+        return int(self.home_tab.y)
+
+    @property
+    def account_switcher_opener_x(self) -> int:
+        return int(self.account_switcher_opener.x)
+
+    @property
+    def account_switcher_opener_y(self) -> int:
+        return int(self.account_switcher_opener.y)
+
+
+class BatchConfig(BaseModel):
+    batch_size: int = 1
+    cast_connect_max_attempts: int = 8
+    cast_connect_retry_seconds: float = 15.0
+    batch_device_timeout_seconds: float = 7200.0
+    disconnect_on_complete: bool = True
+    between_phones_pause_seconds: float = 2.0
+
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "json"
@@ -166,8 +223,10 @@ class AppConfig(BaseModel):
     device_groups: dict[str, DeviceGroupConfig] = Field(default_factory=dict)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    batch: BatchConfig = Field(default_factory=BatchConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     workflows_directory: str = "config/workflows"
+    tiktok_navigation: TikTokNavigationConfig = Field(default_factory=TikTokNavigationConfig)
 
 
 class WorkflowStepConfig(BaseModel):

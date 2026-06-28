@@ -9,9 +9,9 @@ POST_COUNT = 3
 POST_TEXTS_PATH = Path("data/post_texts.json")
 
 GALLERY_ITEM_COORDS: dict[int, tuple[int, int]] = {
-    1: (82, 201),   # left / newest in Recents
-    2: (191, 190),  # middle
-    3: (321, 194),  # right / oldest
+    1: (95, 295),     # left / newest in Recents (post 3)
+    2: (305, 291),    # middle (post 2)
+    3: (513, 267),    # right / oldest (post 1)
 }
 
 _store: dict[str, dict[int, dict[str, str]]] = {}
@@ -100,6 +100,29 @@ def set_final_caption(device_key: str, post: int, text: str) -> None:
 def clear_all_post_texts(device_key: str) -> None:
     _store[device_key] = _default_posts()
     _save_store()
+
+
+def copy_onscreen_to_all_slots(source_key: str) -> int:
+    """Copy onscreen text from one slot to every other slot in the store."""
+    if source_key not in _store:
+        return 0
+    source = _store[source_key]
+    onscreen_by_post = {post: data["onscreen"] for post, data in source.items()}
+    updated = 0
+    for device_key, posts in _store.items():
+        if device_key == source_key:
+            continue
+        for post, text in onscreen_by_post.items():
+            if text and posts.get(post, {}).get("onscreen") != text:
+                posts[post]["onscreen"] = text
+                updated += 1
+    if updated:
+        _save_store()
+    return updated
+
+
+def list_device_keys() -> list[str]:
+    return list(_store.keys())
 
 
 def gallery_slot_for_post(post: int) -> int:

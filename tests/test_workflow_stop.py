@@ -36,7 +36,7 @@ async def test_stop_device_clears_paused_without_runner() -> None:
         vision=MagicMock(),
         popup_manager=MagicMock(),
         state_machine=MagicMock(),
-        action_engine=MagicMock(),
+        action_engine=MagicMock(abort_device=AsyncMock(return_value=0)),
         db=MagicMock(),
         permission_watchers=None,
     )

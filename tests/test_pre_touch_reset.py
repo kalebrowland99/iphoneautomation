@@ -12,6 +12,13 @@ def test_pre_touch_reset_for_tiktok_text_input() -> None:
     assert needs_pre_touch_reset("tiktok_post", ActionType.TEXT_INPUT) is True
 
 
+def test_pre_touch_reset_for_tiktok_prep() -> None:
+    assert needs_pre_touch_reset("tiktok_prep", ActionType.TAP_DETECTION) is True
+    assert needs_pre_touch_reset("tiktok_prep", ActionType.SWIPE) is True
+    assert needs_pre_touch_reset("tiktok_prep", ActionType.TAP_OCR) is True
+    assert needs_pre_touch_reset("tiktok_prep", ActionType.ALBUM_CLEAR) is False
+
+
 def test_pre_touch_reset_skips_non_tiktok() -> None:
     assert needs_pre_touch_reset("warmup", ActionType.TAP) is False
 

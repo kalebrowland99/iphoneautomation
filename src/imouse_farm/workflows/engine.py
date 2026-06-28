@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 from imouse_farm.actions.engine import ActionEngine
+from imouse_farm.actions.pre_touch_reset import is_tiktok_workflow
 from imouse_farm.config.models import (
     ActionType,
     AppConfig,
@@ -20,11 +21,13 @@ from imouse_farm.config.models import (
 )
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
+from imouse_farm.workflows.account_switch import ensure_tiktok_account
 from imouse_farm.permissions.watcher import PermissionWatcherManager
 from imouse_farm.popups.manager import PopupManager
 from imouse_farm.screenshots.service import ScreenshotService
 from imouse_farm.state.machine import StateMachine
 from imouse_farm.captions.ai_generator import stem_to_food_name
+from imouse_farm.post.account_profile_store import get_profile_for_device
 from imouse_farm.post.post_caption_store import (
     POST_COUNT,
     device_storage_key,
@@ -45,8 +48,18 @@ from imouse_farm.vision.fallbacks import (
     expand_template_names,
     resolve_template_state_fallback,
 )
+from imouse_farm.vision.template_scan import pick_detection_hit
 
 logger = get_logger(__name__)
+
+TIKTOK_TOUCH_COOLDOWN_ACTIONS = frozenset({
+    ActionType.TAP,
+    ActionType.TAP_DETECTION,
+    ActionType.TAP_OCR,
+    ActionType.SWIPE,
+    ActionType.DRAG,
+})
+POPUP_DISMISS_SETTLE_SECONDS = 1.0
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
@@ -73,6 +86,8 @@ class WorkflowRunner:
         on_event: EventCallback | None = None,
         on_finished: Callable[[str], Awaitable[None]] | None = None,
         start_post_index: int = 1,
+        permission_watchers: PermissionWatcherManager | None = None,
+        brand: str = "labely",
     ) -> None:
         self._workflow = workflow
         self._device_id = device_id
@@ -86,6 +101,7 @@ class WorkflowRunner:
         self._db = db
         self._on_event = on_event
         self._on_finished = on_finished
+        self._permission_watchers = permission_watchers
         self._running = False
         self._step_failed = False
         self._failure_message = ""
@@ -96,7 +112,9 @@ class WorkflowRunner:
         self._run_id: int | None = None
         self._has_recent_screenshot = False
         self._has_recent_analysis = False
+        self._current_step_index = -1
         self._start_post_index = max(1, int(start_post_index))
+        self._brand = str(brand or "labely").strip().lower()
 
     @property
     def start_post_index(self) -> int:
@@ -173,12 +191,18 @@ class WorkflowRunner:
                     f"{self._workflow.name} post {iteration}/{self._workflow.max_iterations or iteration}",
                 )
 
-                for step in self._workflow.steps:
+                for step_index, step in enumerate(self._workflow.steps):
                     if not self._running:
                         break
                     if await self._device_manager.is_workflow_paused(self._device_id):
                         break
+                    self._current_step_index = step_index
                     await self._execute_step(step)
+
+                if self._workflow.name == "tiktok_post" and not self._step_failed:
+                    from imouse_farm.post.account_profile_store import mark_post_completed
+
+                    mark_post_completed(self._post_text_key(), iteration, brand=self._brand)
 
                 if not self._workflow.loop:
                     break
@@ -229,12 +253,16 @@ class WorkflowRunner:
         self._variables["phone_name"] = device.phone_name
         self._variables["device_slot"] = device.user_name
         self._variables["gallery_folder"] = str(folder)
+        profile = get_profile_for_device(device.device_id, device.user_name, brand=self._brand)
+        self._variables["tiktok_account"] = profile.get("tiktok_handle", "")
+        self._variables["brand"] = self._brand
         logger.info(
             "workflow_variables",
             device_id=self._device_id,
             slot=device.user_name,
             phone=device.phone_name,
             gallery_folder=str(folder),
+            tiktok_account=self._variables.get("tiktok_account"),
         )
 
     def _post_text_key(self) -> str:
@@ -341,6 +369,8 @@ class WorkflowRunner:
         *,
         threshold: float = 0.75,
         prefer_bottom: bool = False,
+        rect: list[int] | None = None,
+        is_ex: bool = False,
     ) -> dict[str, Any] | None:
         ctrl = self._device_manager.controller
         for text in texts:
@@ -352,6 +382,8 @@ class WorkflowRunner:
                 [query],
                 threshold=threshold,
                 contain=True,
+                rect=rect,
+                is_ex=is_ex,
             )
             if not matches:
                 continue
@@ -364,6 +396,85 @@ class WorkflowRunner:
                 best = max(matches, key=lambda m: float(m.get("confidence", 0)))
             return {**best, "text": best.get("text") or query}
         return None
+
+    async def _sample_best_detection(
+        self,
+        step: WorkflowStepConfig,
+        target: str,
+        templates: list[str],
+        action_cfg: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Capture several frames per poll and keep the strongest template/OCR hit."""
+        from imouse_farm.vision.template_scan import (
+            ocr_rect_from_pct,
+            pick_detection_hit,
+            stronger_hit,
+        )
+
+        samples = max(1, int(action_cfg.get("samples_per_poll", 1)))
+        sample_interval = float(action_cfg.get("sample_interval_seconds", 0.4))
+        ocr_texts = [
+            str(t).strip()
+            for t in (action_cfg.get("ocr_fallback_texts") or [])
+            if str(t).strip()
+        ]
+        ocr_threshold = float(action_cfg.get("ocr_threshold", 0.5))
+        ocr_prefer_top = bool(action_cfg.get("prefer_top", True))
+        ocr_ex = bool(action_cfg.get("ocr_ex", False))
+        raw_rect = action_cfg.get("ocr_search_rect_pct")
+        device = self._device_manager.get_device(self._device_id)
+        ocr_rect: list[int] | None = None
+        if isinstance(raw_rect, list) and len(raw_rect) == 4 and device:
+            ocr_rect = ocr_rect_from_pct(
+                device.screen_width, device.screen_height, raw_rect
+            )
+
+        best_hit: dict[str, Any] | None = None
+        for sample_idx in range(samples):
+            capture_step = WorkflowStepConfig(
+                type="screenshot",
+                name=f"{step.name}_capture_{sample_idx}",
+                templates=templates,
+            )
+            analyze_step = WorkflowStepConfig(
+                type="analyze_screen",
+                name=f"{step.name}_analyze_{sample_idx}",
+                templates=templates,
+            )
+            await self._step_capture(capture_step)
+            await self._step_analyze(analyze_step)
+
+            template_hit = pick_detection_hit(self._current_detections(), target)
+            if template_hit:
+                template_hit = dict(template_hit)
+                template_hit.setdefault("detection_type", "template")
+                best_hit = stronger_hit(best_hit, template_hit)
+
+            if ocr_texts:
+                ocr_hit = await self._device_ocr_best_hit(
+                    ocr_texts,
+                    threshold=ocr_threshold,
+                    prefer_bottom=not ocr_prefer_top,
+                    rect=ocr_rect,
+                    is_ex=ocr_ex,
+                )
+                if ocr_hit:
+                    ocr_entry = {
+                        "x": int(ocr_hit["x"]),
+                        "y": int(ocr_hit["y"]),
+                        "confidence": float(ocr_hit.get("confidence", 0.85)),
+                        "matched_via": "ocr",
+                        "detection_type": "ocr",
+                        "text": ocr_hit.get("text"),
+                    }
+                    best_hit = stronger_hit(best_hit, ocr_entry)
+
+            if sample_idx < samples - 1:
+                await asyncio.sleep(sample_interval)
+
+        if best_hit:
+            self._set_detection(target, best_hit)
+        return best_hit
 
     async def _log_activity(
         self,
@@ -416,6 +527,12 @@ class WorkflowRunner:
                 )
             return
 
+        if (
+            not step.name.startswith("_")
+            and is_tiktok_workflow(self._workflow.name)
+        ):
+            await self._try_dismiss_popups(step.name)
+
         if not step.name.startswith("_"):
             await self._log_activity(
                 "info",
@@ -449,6 +566,8 @@ class WorkflowRunner:
                     await self._step_wait(step)
                 case "wait_for_detection":
                     await self._step_wait_for_detection(step)
+                case "ensure_tiktok_account":
+                    await self._step_ensure_tiktok_account(step)
                 case _:
                     logger.warning("unknown_step_type", step_type=step.type, name=step.name)
         except Exception as exc:
@@ -499,9 +618,61 @@ class WorkflowRunner:
                     return True, str(hit.get("text") or candidate)
         return False, ""
 
+    async def _device_template_confidence(self, template_name: str) -> float:
+        detections = await self._merge_device_template_detections(
+            [template_name], {}
+        )
+        hit = detections.get(template_name)
+        if not hit:
+            return 0.0
+        return float(hit.get("confidence", 0))
+
+    async def _template_fallback_state(
+        self,
+        fallback_entries: list[dict[str, Any]],
+        *,
+        prefer_state: str,
+    ) -> tuple[str | None, float]:
+        """On-device template match for VPN toggle state during OCR polling."""
+        entries = [
+            entry
+            for entry in fallback_entries
+            if str(entry.get("state") or "").strip() == prefer_state
+        ]
+        if not entries:
+            return None, 0.0
+        template_names = [
+            str(entry.get("template") or "").strip()
+            for entry in entries
+            if str(entry.get("template") or "").strip()
+        ]
+        if not template_names:
+            return None, 0.0
+        detections = await self._merge_device_template_detections(template_names, {})
+        return resolve_template_state_fallback(detections, entries)
+
+    async def _tap_detection_inline(self, detection: str) -> None:
+        await self._step_action(
+            WorkflowStepConfig(
+                type="execute_action",
+                name=f"_inline_tap_{detection}",
+                action={
+                    "type": "tap_detection",
+                    "detection": detection,
+                    "refind_on_device": True,
+                },
+                skip_post_action=True,
+            )
+        )
+
     async def _step_check_ocr_state(self, step: WorkflowStepConfig) -> None:
         """Set device state from on-device OCR, with optional template fallback."""
         action = self._resolve_variables(step.action)
+        mode = str(action.get("mode") or "").strip()
+        if mode == "template_connected":
+            await self._step_check_template_connected(step, action)
+            return
+
         texts = [str(t) for t in (action.get("texts") or ["Not Connected"]) if str(t).strip()]
         threshold = float(action.get("threshold", 0.65))
         retry_delay = float(action.get("retry_delay", 1.5))
@@ -514,15 +685,75 @@ class WorkflowRunner:
         raw_fallback_templates = action.get("fallback_templates")
         require_state = action.get("require_state")
         required = DeviceState(require_state) if require_state else None
+        reconnect_cast = bool(action.get("reconnect_cast_during_poll"))
+        focus_app_after_reconnect = str(
+            action.get("focus_app_after_reconnect") or ""
+        ).strip()
+
+        fallback_entries: list[dict[str, Any]] = []
+        if isinstance(raw_fallback_templates, list) and raw_fallback_templates:
+            fallback_entries = [
+                entry for entry in raw_fallback_templates if isinstance(entry, dict)
+            ]
+        elif fallback_template:
+            fallback_entries = [{
+                "template": fallback_template,
+                "state": state_if_fallback.value,
+                "min_confidence": fallback_min_confidence,
+            }]
 
         deadline = time.monotonic() + timeout
         matched_text = ""
         found = False
+        template_override: str | None = None
         while self._running:
+            if reconnect_cast:
+                await self._device_manager.refresh_devices()
+                device = self._device_manager.get_device(self._device_id)
+                if device is not None and not device.is_online:
+                    logger.info(
+                        "ocr_state_reconnect_cast",
+                        device_id=self._device_id,
+                        step=step.name,
+                    )
+                    await self._device_manager.reconnect_airplay(self._device_id)
+                    await asyncio.sleep(2.0)
+                    await self._device_manager.refresh_devices()
+                    if focus_app_after_reconnect:
+                        await self._log_activity(
+                            "info",
+                            "workflow",
+                            f"Re-open app after cast reconnect ({focus_app_after_reconnect})",
+                            step=step.name,
+                        )
+                        await self._tap_detection_inline(focus_app_after_reconnect)
+                        await asyncio.sleep(2.0)
+            if fallback_entries:
+                winner, conf = await self._template_fallback_state(
+                    fallback_entries,
+                    prefer_state=state_if_missing.value,
+                )
+                if winner:
+                    found = False
+                    matched_text = ""
+                    template_override = f"{winner} visible (conf={conf:.2f})"
+                    break
             found, matched_text = await self._device_ocr_has_text(
                 texts, threshold=threshold
             )
-            if found or time.monotonic() >= deadline:
+            if found and fallback_entries:
+                winner, conf = await self._template_fallback_state(
+                    fallback_entries,
+                    prefer_state=state_if_missing.value,
+                )
+                if winner:
+                    found = False
+                    matched_text = ""
+                    template_override = f"{winner} visible (conf={conf:.2f})"
+                    break
+            if not found:
+                break
+            if time.monotonic() >= deadline:
                 break
             await asyncio.sleep(retry_delay)
 
@@ -531,19 +762,8 @@ class WorkflowRunner:
             reason = f"found '{matched_text}'"
         else:
             state = state_if_missing
-            reason = f"'{texts[0]}' not found"
-            fallback_entries: list[dict[str, Any]] = []
-            if isinstance(raw_fallback_templates, list) and raw_fallback_templates:
-                fallback_entries = [
-                    entry for entry in raw_fallback_templates if isinstance(entry, dict)
-                ]
-            elif fallback_template:
-                fallback_entries = [{
-                    "template": fallback_template,
-                    "state": state_if_fallback.value,
-                    "min_confidence": fallback_min_confidence,
-                }]
-            if fallback_entries and state == state_if_missing:
+            reason = template_override or f"'{texts[0]}' not found"
+            if fallback_entries and state == state_if_missing and not template_override:
                 template_names = [
                     str(entry.get("template") or "").strip()
                     for entry in fallback_entries
@@ -583,6 +803,85 @@ class WorkflowRunner:
             step=step.name,
             matched_text=matched_text or None,
             texts=texts,
+        )
+        if required and state != required:
+            raise RuntimeError(
+                f"VPN check expected state {required.value}, got {state.value} ({reason})"
+            )
+
+    async def _step_check_template_connected(
+        self,
+        step: WorkflowStepConfig,
+        action: dict[str, Any],
+    ) -> None:
+        """Confirm VPN is on via toggle templates, not OCR status text."""
+        active_template = str(action.get("active_template") or "bluetoggle").strip()
+        inactive_template = str(action.get("inactive_template") or "vpntoggle").strip()
+        min_confidence = float(action.get("min_confidence", 0.45))
+        inactive_max_confidence = float(action.get("inactive_max_confidence", 0.42))
+        retry_delay = float(action.get("retry_delay", 2.0))
+        timeout = float(action.get("duration_seconds", 45))
+        reconnect_cast = bool(action.get("reconnect_cast_during_poll"))
+        focus_app_after_reconnect = str(
+            action.get("focus_app_after_reconnect") or ""
+        ).strip()
+        require_state = action.get("require_state")
+        required = DeviceState(require_state) if require_state else None
+
+        deadline = time.monotonic() + timeout
+        reason = f"{active_template} not visible after {int(timeout)}s"
+        state = DeviceState.WAITING
+
+        while self._running:
+            if reconnect_cast:
+                await self._device_manager.refresh_devices()
+                device = self._device_manager.get_device(self._device_id)
+                if device is not None and not device.is_online:
+                    logger.info(
+                        "template_connected_reconnect_cast",
+                        device_id=self._device_id,
+                        step=step.name,
+                    )
+                    await self._device_manager.reconnect_airplay(self._device_id)
+                    await asyncio.sleep(2.0)
+                    await self._device_manager.refresh_devices()
+                    if focus_app_after_reconnect:
+                        await self._log_activity(
+                            "info",
+                            "workflow",
+                            f"Re-open app after cast reconnect ({focus_app_after_reconnect})",
+                            step=step.name,
+                        )
+                        await self._tap_detection_inline(focus_app_after_reconnect)
+                        await asyncio.sleep(2.0)
+
+            active_conf = await self._device_template_confidence(active_template)
+            if active_conf >= min_confidence:
+                state = DeviceState.ACTIVE
+                reason = f"{active_template} visible (conf={active_conf:.2f})"
+                break
+
+            inactive_conf = await self._device_template_confidence(inactive_template)
+            if inactive_conf < inactive_max_confidence:
+                state = DeviceState.ACTIVE
+                reason = (
+                    f"{inactive_template} gone after toggle "
+                    f"(conf={inactive_conf:.2f})"
+                )
+                break
+
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(retry_delay)
+
+        await self._state_machine.transition(
+            self._device_id, state, reason=f"workflow:{step.name}", force=True
+        )
+        await self._log_activity(
+            "info",
+            "workflow",
+            f"VPN status → {state.value} ({reason})",
+            step=step.name,
         )
         if required and state != required:
             raise RuntimeError(
@@ -826,6 +1125,26 @@ class WorkflowRunner:
         action_type = ActionType(action_def.get("type", "tap_detection"))
         params = {k: v for k, v in action_def.items() if k != "type"}
 
+        if step.name == "tap_gallery":
+            params["tap_count"] = max(2, int(params.get("tap_count", 2)))
+            params.setdefault("tap_interval_seconds", 0.5)
+        elif step.name == "tap_plus":
+            params["tap_count"] = max(2, int(params.get("tap_count", 2)))
+            params.setdefault("tap_interval_seconds", 0.5)
+        elif step.name == "tap_favorites":
+            params["tap_count"] = max(2, int(params.get("tap_count", 2)))
+            params.setdefault("tap_interval_seconds", 0.5)
+        elif step.name == "tap_aa":
+            params["tap_count"] = 1
+        elif step.name == "wait_for_recents":
+            fallback = params.get("fallback_tap")
+            if isinstance(fallback, dict):
+                fallback["tap_count"] = max(2, int(fallback.get("tap_count", 2)))
+                fallback.setdefault("tap_interval_seconds", 0.5)
+        elif step.name == "swipe_left":
+            params["swipe_count"] = max(2, int(params.get("swipe_count", 2)))
+            params.setdefault("swipe_interval_seconds", 1.5)
+
         if (
             action_type == ActionType.TAP_DETECTION
             and params.get("refind_on_device")
@@ -895,6 +1214,8 @@ class WorkflowRunner:
         if not success:
             raise RuntimeError(f"Action failed: {step.name}")
 
+        await self._apply_tiktok_touch_cooldown(action_type)
+
         if step.skip_post_action:
             return
 
@@ -905,7 +1226,53 @@ class WorkflowRunner:
         await self._step_capture(WorkflowStepConfig(type="capture_screen", name="_post_action_verify"))
         await self._step_analyze(WorkflowStepConfig(type="analyze_screen", name="_post_action_analyze"))
 
+    def _immediate_next_wait_seconds(self) -> float | None:
+        idx = getattr(self, "_current_step_index", -1)
+        if idx < 0 or idx + 1 >= len(self._workflow.steps):
+            return None
+        nxt = self._workflow.steps[idx + 1]
+        if nxt.type in ("wait", "wait_random"):
+            return float(nxt.duration_seconds or 1.0)
+        return None
+
+    async def _apply_tiktok_touch_cooldown(self, action_type: ActionType) -> None:
+        cooldown = float(self._config.timing.tiktok_touch_cooldown_seconds or 0)
+        if cooldown <= 0 or not is_tiktok_workflow(self._workflow.name):
+            return
+        if action_type not in TIKTOK_TOUCH_COOLDOWN_ACTIONS:
+            return
+        next_wait = self._immediate_next_wait_seconds()
+        if next_wait is not None and next_wait >= cooldown:
+            return
+        await asyncio.sleep(cooldown)
+
+    async def _step_ensure_tiktok_account(self, step: WorkflowStepConfig) -> None:
+        handle = str(self._variables.get("tiktok_account") or "").strip()
+        if not handle:
+            await self._log_activity(
+                "info",
+                "workflow",
+                "Account switch skipped — set @ handle on dashboard for this slot",
+                step=step.name,
+            )
+            return
+
+        async def _log(level: str, category: str, message: str, **details: Any) -> None:
+            await self._log_activity(level, category, message, step=step.name, **details)
+
+        await ensure_tiktok_account(
+            controller=self._device_manager.controller,
+            device_id=self._device_id,
+            tiktok_handle=handle,
+            navigation=self._config.tiktok_navigation,
+            log_activity=_log,
+            device_manager=self._device_manager,
+            templates_dir=self._config.analysis.templates_directory,
+            brand=self._brand,
+        )
+
     async def _step_verify(self, step: WorkflowStepConfig) -> None:
+        await self._try_dismiss_popups(step.name)
         if not self._last_analysis:
             raise RuntimeError("No analysis for verification")
         passed = self._vision.verify_condition(
@@ -923,6 +1290,37 @@ class WorkflowRunner:
                 return
             raise RuntimeError(f"Verification failed: {step.name}")
 
+    async def _try_dismiss_popups(self, context: str) -> bool:
+        if not self._permission_watchers or not is_tiktok_workflow(self._workflow.name):
+            return False
+        dismissed = await self._permission_watchers.try_dismiss(self._device_id)
+        if dismissed:
+            await self._log_activity(
+                "info",
+                "workflow",
+                f"Dismissed TikTok/iOS popup during {context}",
+            )
+            await asyncio.sleep(POPUP_DISMISS_SETTLE_SECONDS)
+        return dismissed
+
+    async def _sleep_with_popup_watch(self, seconds: float, context: str) -> None:
+        if (
+            seconds <= 0
+            or not self._permission_watchers
+            or not is_tiktok_workflow(self._workflow.name)
+        ):
+            await asyncio.sleep(seconds)
+            return
+        deadline = time.monotonic() + seconds
+        while self._running and time.monotonic() < deadline:
+            await self._try_dismiss_popups(context)
+            if self._device_manager:
+                await self._device_manager.record_activity(self._device_id)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(self._config.timing.permission_watcher_poll_seconds, remaining))
+
     async def _step_wait(self, step: WorkflowStepConfig) -> None:
         if step.type == "wait_random" or (step.min_seconds and step.max_seconds):
             duration = random.uniform(
@@ -931,7 +1329,7 @@ class WorkflowRunner:
             )
         else:
             duration = step.duration_seconds or 1.0
-        await asyncio.sleep(duration)
+        await self._sleep_with_popup_watch(duration, step.name or "wait")
 
     async def _step_wait_for_detection(self, step: WorkflowStepConfig) -> None:
         """Poll screenshot + analyze until a template is detected or timeout."""
@@ -959,6 +1357,7 @@ class WorkflowRunner:
         templates = expand_template_names(step.templates or [target])
         timeout = float(step.duration_seconds or 90.0)
         poll = float(step.min_seconds or 2.0)
+        samples_per_poll = max(1, int(action_cfg.get("samples_per_poll", 1)))
         deadline = time.monotonic() + timeout
         attempt = 0
 
@@ -967,7 +1366,9 @@ class WorkflowRunner:
             "workflow",
             f"Waiting for {target}"
             + (f" or OCR {ocr_texts!r}" if ocr_texts else "")
-            + f" (up to {int(timeout)}s)",
+            + f" (up to {int(timeout)}s"
+            + (f", {samples_per_poll} captures/poll" if samples_per_poll > 1 else "")
+            + ")",
             detection=target,
         )
 
@@ -977,64 +1378,42 @@ class WorkflowRunner:
                 continue
 
             attempt += 1
-            capture_step = WorkflowStepConfig(
-                type="screenshot",
-                name=f"{step.name}_capture",
-                templates=templates,
-            )
-            analyze_step = WorkflowStepConfig(
-                type="analyze_screen",
-                name=f"{step.name}_analyze",
-                templates=templates,
-            )
-            await self._step_capture(capture_step)
-            await self._step_analyze(analyze_step)
+            await self._try_dismiss_popups(step.name)
+            if samples_per_poll > 1 or action_cfg.get("ocr_fallback_texts"):
+                hit = await self._sample_best_detection(
+                    step, target, templates, action_cfg
+                )
+            else:
+                capture_step = WorkflowStepConfig(
+                    type="screenshot",
+                    name=f"{step.name}_capture",
+                    templates=templates,
+                )
+                analyze_step = WorkflowStepConfig(
+                    type="analyze_screen",
+                    name=f"{step.name}_analyze",
+                    templates=templates,
+                )
+                await self._step_capture(capture_step)
+                await self._step_analyze(analyze_step)
+                hit = None
 
-            if self._has_detection(target):
-                hit = next(
-                    (d for d in self._last_analysis.detections if d.name == target),
-                    None,
-                ) if self._last_analysis else None
-                if not hit:
-                    for d in self._last_analysis.detections if self._last_analysis else []:
-                        if d.name in (DETECTION_FALLBACKS.get(target) or []):
-                            hit = d
-                            break
-                conf = f"{hit.confidence:.2f}" if hit else "?"
+            if self._has_detection(target) or hit:
+                hit_dict = hit or pick_detection_hit(
+                    apply_detection_fallbacks(self._current_detections()), target
+                )
+                conf = f"{float(hit_dict.get('confidence', 0)):.2f}" if hit_dict else "?"
+                via = hit_dict.get("matched_via") if hit_dict else None
                 await self._log_activity(
                     "info",
                     "workflow",
-                    f"Found {target} after {attempt} attempt(s) (conf={conf})",
+                    f"Found {target} after {attempt} attempt(s) (conf={conf}"
+                    + (f", via={via})" if via else ")"),
                     detection=target,
                     attempts=attempt,
-                    confidence=float(hit.confidence) if hit else None,
+                    confidence=float(hit_dict.get("confidence", 0)) if hit_dict else None,
                 )
                 return
-
-            if ocr_texts:
-                ocr_hit = await self._device_ocr_best_hit(
-                    ocr_texts,
-                    threshold=ocr_threshold,
-                    prefer_bottom=ocr_prefer_bottom,
-                )
-                if ocr_hit:
-                    self._set_detection(
-                        ocr_as,
-                        {
-                            **ocr_hit,
-                            "matched_via": "ocr",
-                            "detection_type": "ocr",
-                        },
-                    )
-                    await self._log_activity(
-                        "info",
-                        "workflow",
-                        f"Found {ocr_as} via OCR '{ocr_hit.get('text')}' "
-                        f"after {attempt} attempt(s) at ({ocr_hit['x']}, {ocr_hit['y']})",
-                        detection=ocr_as,
-                        attempts=attempt,
-                    )
-                    return
 
             if time.monotonic() >= deadline:
                 raise RuntimeError(
@@ -1134,6 +1513,7 @@ class WorkflowEngine:
         device_id: str,
         *,
         start_post_index: int | None = None,
+        brand: str = "labely",
     ) -> bool:
         workflow = self._workflows.get(workflow_name)
         if not workflow or not workflow.enabled:
@@ -1163,6 +1543,10 @@ class WorkflowEngine:
         if self._permission_watchers:
             await self._permission_watchers.acquire(device_id)
 
+        from imouse_farm.actions.cancel import clear_cancelled
+
+        clear_cancelled(device_id)
+
         async def _on_runner_finished(dev_id: str) -> None:
             if self._permission_watchers:
                 await self._permission_watchers.release(dev_id)
@@ -1181,6 +1565,8 @@ class WorkflowEngine:
             on_event=self._emit,
             on_finished=_on_runner_finished,
             start_post_index=post_index,
+            permission_watchers=self._permission_watchers,
+            brand=brand,
         )
         self._runners[key] = runner
         await runner.start()
@@ -1191,6 +1577,8 @@ class WorkflowEngine:
 
     async def stop_device(self, device_id: str, workflow_name: str | None = None) -> bool:
         """Stop a running or paused workflow, including stale state after server restart."""
+        await self._actions.abort_device(device_id)
+
         stopped = False
         prefix = f"{device_id}:"
         keys_to_remove: list[str] = []
@@ -1206,7 +1594,7 @@ class WorkflowEngine:
         for key in keys_to_remove:
             self._runners.pop(key, None)
 
-        if stopped and self._permission_watchers:
+        if self._permission_watchers:
             await self._permission_watchers.force_stop(device_id)
 
         device = self._device_manager.get_device(device_id)

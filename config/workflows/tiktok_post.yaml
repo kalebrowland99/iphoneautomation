@@ -40,20 +40,22 @@ steps:
       type: tap_detection
       detection: plus
       refind_on_device: true
+      tap_count: 2
+      tap_interval_seconds: 0.5
     skip_post_action: true
 
   - type: wait
     name: after_plus
-    duration_seconds: 1
+    duration_seconds: 5
 
-  # ── 2. Tap gallery (fixed coord) ────────────────────────────────────
+  # ── 2. Double-tap gallery (58, 1035) ────────────────────────────────
   - type: execute_action
     name: tap_gallery
     on_failure: pause
     action:
       type: tap
-      x: 33
-      y: 669
+      x: 58
+      y: 1035
       tap_count: 2
       tap_interval_seconds: 0.5
     skip_post_action: true
@@ -75,8 +77,8 @@ steps:
       search_rect_pct: [0.0, 0.0, 1.0, 0.32]
       # Gallery icon may be offset on some phones (e.g. slot 9) — retap then retry Recents.
       fallback_tap:
-        x: 326
-        y: 609
+        x: 527
+        y: 940
         tap_count: 2
         tap_interval_seconds: 0.5
       fallback_tap_delay_seconds: 1
@@ -86,7 +88,7 @@ steps:
 
   - type: wait
     name: after_gallery_picker
-    duration_seconds: 1
+    duration_seconds: 3
 
   # ── 3. Pick media (Recents: post 1→right 3→left; coords from gallery_x/y)
   - type: execute_action
@@ -100,7 +102,7 @@ steps:
 
   - type: wait
     name: after_gallery_item
-    duration_seconds: 2
+    duration_seconds: 3
 
   - type: execute_action
     name: tap_next_after_media
@@ -127,13 +129,13 @@ steps:
     on_failure: pause
     action:
       type: tap
-      x: 194
-      y: 39
+      x: 310
+      y: 62
     skip_post_action: true
 
   - type: wait
     name: after_music_gallery
-    duration_seconds: 1.5
+    duration_seconds: 3
 
   # ── 5. Wait for Favorites, then tap ─────────────────────────────────
   - type: execute_action
@@ -145,9 +147,11 @@ steps:
       wait_timeout_seconds: 60
       poll_interval_seconds: 1.5
       optional: false
+      tap_count: 2
+      tap_interval_seconds: 0.5
     skip_post_action: true
 
-  # ── 6. Wait for Hvitserk (30s), unstable retry, wait 20s more, tap ─
+  # ── 6. Wait for Hvitserk or unstable retry while music loads ────────
   - type: execute_action
     name: tap_hvitserk_choice
     on_failure: pause
@@ -159,21 +163,24 @@ steps:
         - "Hvitserks choice"
         - "Hvitserks Choice"
         - "HVITSERK'S CHOICE"
-      initial_wait_seconds: 30
-      after_retry_wait_seconds: 20
+        - "Hvitserk"
+      wait_timeout_seconds: 120
+      after_retry_wait_seconds: 60
+      max_wait_timeout_seconds: 300
       unstable_retry_texts:
         - "Your network is unstable. Tap to retry."
         - "Your network is unstable"
         - "network is unstable"
         - "Tap to retry"
+      unstable_retry_cooldown_seconds: 2
       poll_interval_seconds: 1.5
-      threshold: 0.65
+      threshold: 0.6
       optional: false
     skip_post_action: true
 
   - type: wait
     name: after_hvitserk
-    duration_seconds: 1.5
+    duration_seconds: 3
 
   # ── 7. Dismiss music picker (center tap) ────────────────────────────
   - type: execute_action
@@ -186,30 +193,26 @@ steps:
 
   - type: wait
     name: after_dismiss_music
-    duration_seconds: 1.5
+    duration_seconds: 3
 
-  # ── 8. Wait for AA, then tap ────────────────────────────────────────
-  - type: wait_for_detection
-    name: wait_for_aa
-    templates: [aa]
-    when_detection: aa
-    duration_seconds: 60
-    min_seconds: 2
-    on_failure: pause
+  # ── 8. Tap Aa (fixed coord) ─────────────────────────────────────────
+  - type: wait
+    name: before_tap_aa
+    duration_seconds: 3
 
   - type: execute_action
     name: tap_aa
-    requires_analysis: true
     on_failure: pause
     action:
-      type: tap_detection
-      detection: aa
-      refind_on_device: true
+      type: tap
+      x: 566
+      y: 422
+      tap_count: 1
     skip_post_action: true
 
   - type: wait
     name: after_aa
-    duration_seconds: 1
+    duration_seconds: 3
 
   # ── 9. Type onscreen text from dashboard ────────────────────────────
   - type: execute_action
@@ -222,17 +225,17 @@ steps:
 
   - type: wait
     name: after_caption
-    duration_seconds: 1.5
+    duration_seconds: 3
 
-  # ── 10. White background — fixed coord (201, 38) ×2, post 1 only ───
+  # ── 10. White background — fixed coord (303, 63) ×2, post 1 only ───
   - type: execute_action
     name: tap_white_background
     when_post_index: 1
     on_failure: pause
     action:
       type: tap
-      x: 201
-      y: 38
+      x: 303
+      y: 63
       tap_count: 2
       tap_interval_seconds: 0.5
     skip_post_action: true
@@ -240,7 +243,7 @@ steps:
   - type: wait
     name: after_white_background
     when_post_index: 1
-    duration_seconds: 1.5
+    duration_seconds: 3
 
   # ── 11. Done (top-right) ────────────────────────────────────────────
   - type: execute_action
@@ -259,50 +262,37 @@ steps:
     name: after_done
     duration_seconds: 3
 
-  # ── 12. Editor icon — fixed coord (374, 163) ────────────────────────
+  # ── 12. Editor icon — fixed coord (566, 247) ────────────────────────
   - type: execute_action
     name: tap_editor
     on_failure: pause
     action:
       type: tap
-      x: 374
-      y: 163
+      x: 566
+      y: 247
     skip_post_action: true
 
   - type: wait
     name: after_editor
-    duration_seconds: 1.5
+    duration_seconds: 3
 
   # ── 13. Swipe left twice (timeline scrub area) ──────────────────────
   - type: execute_action
-    name: swipe_left_1
+    name: swipe_left
     action:
       type: swipe
       direction: left
-      sx: 341
-      sy: 533
+      sx: 526
+      sy: 922
       ex: 40
-      ey: 533
+      ey: 922
+      swipe_count: 2
+      swipe_interval_seconds: 1.5
     skip_post_action: true
 
   - type: wait
-    name: after_swipe_1
-    duration_seconds: 1.5
-
-  - type: execute_action
-    name: swipe_left_2
-    action:
-      type: swipe
-      direction: left
-      sx: 341
-      sy: 533
-      ex: 40
-      ey: 533
-    skip_post_action: true
-
-  - type: wait
-    name: after_swipe_2
-    duration_seconds: 1.5
+    name: after_swipe_left
+    duration_seconds: 3
 
   # ── 14. Text scrub marker ───────────────────────────────────────────
   - type: execute_action
@@ -310,13 +300,13 @@ steps:
     on_failure: pause
     action:
       type: tap
-      x: 161
-      y: 561
+      x: 240
+      y: 846
     skip_post_action: true
 
   - type: wait
     name: after_text_scrub
-    duration_seconds: 1.5
+    duration_seconds: 3
 
   # ── 15. Hold + drag clip trim ───────────────────────────────────────
   - type: execute_action
@@ -324,18 +314,18 @@ steps:
     on_failure: pause
     action:
       type: drag
-      x1: 214
-      y1: 508
-      direction: left
-      distance: 172
-      duration_ms: 1000
+      x1: 320
+      y1: 771
+      x2: 55
+      y2: 765
+      duration_ms: 850
       move_ms: 10
       hold_ms: 0
     skip_post_action: true
 
   - type: wait
     name: after_drag_trim
-    duration_seconds: 2
+    duration_seconds: 3
 
   # ── 16. Wait for continue arrow (or Post), then tap ─────────────────
   - type: wait_for_detection
@@ -374,7 +364,7 @@ steps:
 
   - type: wait
     name: after_continuearrow
-    duration_seconds: 2
+    duration_seconds: 3
 
   # ── 17. Tap caption field (skip if Post OCR already tapped) ────────
   - type: execute_action
@@ -389,7 +379,7 @@ steps:
 
   - type: wait
     name: after_tap_caption_field
-    duration_seconds: 2
+    duration_seconds: 3
 
   # ── 18. Type final post caption + hashtags (single line, no Enter) ─
   - type: execute_action
@@ -406,28 +396,28 @@ steps:
     name: after_final_caption
     duration_seconds: 3
 
-  # ── 19. Post button — fixed coord (352, 45), production only ────────
+  # ── 19. Post button — fixed coord (544, 68), production only ────────
   - type: execute_action
     name: tap_post
     unless_debug_skip_post: true
     on_failure: pause
     action:
       type: tap
-      x: 352
-      y: 45
+      x: 544
+      y: 68
     skip_post_action: true
 
   - type: wait
     name: after_post
     unless_debug_skip_post: true
-    duration_seconds: 2
+    duration_seconds: 3
 
   # Post 3 only: wait for TikTok upload to finish before leaving the app.
   - type: wait
     name: wait_for_upload_after_final_post
     when_post_index: 3
     unless_debug_skip_post: true
-    duration_seconds: 300
+    duration_seconds: 120
 
   # Leave TikTok UI (keyboard / upload overlay) before tiktok_end — post 3 only.
   - type: execute_action
@@ -442,7 +432,7 @@ steps:
     name: after_leave_tiktok
     when_post_index: 3
     unless_debug_skip_post: true
-    duration_seconds: 1.5
+    duration_seconds: 3
 
   # ── 19b. Debug: kill TikTok & reopen (skip real post) ───────────────
   - type: execute_action

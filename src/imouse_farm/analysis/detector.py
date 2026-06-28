@@ -13,6 +13,7 @@ from imouse_farm.analysis.ocr import configure_tesseract, extract_text, find_key
 from imouse_farm.analysis.template import load_image, match_all_templates, match_template
 from imouse_farm.config.models import AnalysisConfig, DetectionResult, DeviceState, ScreenAnalysisResult
 from imouse_farm.utils.logging import get_logger
+from imouse_farm.vision.ocr_match import ocr_contains_phrase
 
 logger = get_logger(__name__)
 
@@ -195,7 +196,7 @@ class ScreenAnalyzer:
                     return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
             elif condition == "ocr_contains":
                 text = rule.get("text", "")
-                if text.lower() in analysis.ocr_text.lower():
+                if text and ocr_contains_phrase(analysis.ocr_text, text):
                     return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
             elif condition == "default":
                 return DeviceState(rule.get("state", "UNKNOWN_SCREEN"))
@@ -212,5 +213,5 @@ class ScreenAnalyzer:
         if condition == "template_match" and template:
             return any(d.name == template for d in analysis.detections)
         if condition == "ocr_contains" and template:
-            return template.lower() in analysis.ocr_text.lower()
+            return ocr_contains_phrase(analysis.ocr_text, template)
         return False

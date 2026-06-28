@@ -20,6 +20,9 @@ def load_config(path: str | Path) -> AppConfig:
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
     data = _load_yaml(config_path)
+    nav_path = config_path.parent / "tiktok_navigation.yaml"
+    if nav_path.exists() and "tiktok_navigation" not in data:
+        data["tiktok_navigation"] = _load_yaml(nav_path)
     return AppConfig.model_validate(data)
 
 

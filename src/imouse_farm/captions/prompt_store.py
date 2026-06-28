@@ -1,6 +1,11 @@
-"""In-memory AI caption prompt and hashtag settings (dashboard-editable)."""
+"""AI caption prompt and hashtag settings (dashboard-editable, persisted to disk)."""
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
+
+CAPTION_AI_SETTINGS_PATH = Path("data/caption_ai_settings.json")
 
 DEFAULT_AI_PROMPT = """\
 each post has a video filename that names the food. underscores and hyphens in the filename separate words. read the raw filename first, then grab the food from the second hyphen chunk.
@@ -25,6 +30,35 @@ _settings: dict[str, str] = {
 }
 
 
+def _load_settings() -> None:
+    global _settings
+    if not CAPTION_AI_SETTINGS_PATH.exists():
+        return
+    try:
+        raw = json.loads(CAPTION_AI_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if not isinstance(raw, dict):
+        return
+    if "prompt" in raw:
+        _settings["prompt"] = str(raw.get("prompt", ""))
+    if "hashtags" in raw:
+        _settings["hashtags"] = str(raw.get("hashtags", ""))
+
+
+def _save_settings() -> None:
+    CAPTION_AI_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CAPTION_AI_SETTINGS_PATH.write_text(
+        json.dumps(
+            {"prompt": _settings["prompt"], "hashtags": _settings["hashtags"]},
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def get_ai_prompt() -> str:
     return _settings["prompt"]
 
@@ -35,11 +69,16 @@ def get_ai_hashtags() -> str:
 
 def set_ai_prompt(text: str) -> None:
     _settings["prompt"] = text or ""
+    _save_settings()
 
 
 def set_ai_hashtags(text: str) -> None:
     _settings["hashtags"] = text or ""
+    _save_settings()
 
 
 def get_ai_settings() -> dict[str, str]:
     return {"prompt": get_ai_prompt(), "hashtags": get_ai_hashtags()}
+
+
+_load_settings()

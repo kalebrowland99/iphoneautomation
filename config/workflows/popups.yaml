@@ -85,6 +85,7 @@ popups:
       - "Get notified of post interactions"
       - "notified of post interactions"
       - "post interactions?"
+      - "Get notified"
     dismiss_action:
       type: tap
       x: 196

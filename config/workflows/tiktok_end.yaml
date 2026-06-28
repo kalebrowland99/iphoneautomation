@@ -1,7 +1,7 @@
 name: tiktok_end
 description: >
   After posting: force-quit apps (AppSwitch + swipe up ×5), then turn off VPN
-  (open Shadowrocket → "Not Connected" check → bluetoggle off).
+  (open Shadowrocket → tap VPN toggle, same as prep).
 
 loop: false
 
@@ -17,7 +17,7 @@ steps:
 
   - type: wait
     name: settle_before_kill
-    duration_seconds: 1.5
+    duration_seconds: 3
 
   - type: execute_action
     name: kill_apps
@@ -28,7 +28,7 @@ steps:
 
   - type: wait
     name: after_kill
-    duration_seconds: 1.5
+    duration_seconds: 3
 
   - type: execute_action
     name: go_home
@@ -38,9 +38,9 @@ steps:
 
   - type: wait
     name: settle_home
-    duration_seconds: 1.5
+    duration_seconds: 3
 
-  # ── 2. Open Shadowrocket → VPN status via "Not Connected" text ─────
+  # ── 2. Open Shadowrocket → tap VPN toggle (same as prep) ────────────
   - type: screenshot
     name: home_for_shadowrocket
     templates: [shadowrocket]
@@ -62,67 +62,25 @@ steps:
     duration_seconds: 2
 
   - type: screenshot
-    name: shadowrocket_status_screen
-
-  - type: check_ocr_state
-    name: vpn_state
-    action:
-      texts: ["Not Connected", "NOT CONNECTED", "Not connected"]
-      threshold: 0.65
-      duration_seconds: 12
-      retry_delay: 1.5
-      state_if_found: WAITING
-      state_if_missing: ACTIVE
-      fallback_templates:
-        - template: bluetoggle
-          state: ACTIVE
-          min_confidence: 0.45
-        - template: vpntoggle
-          state: WAITING
-          min_confidence: 0.55
-
-  # ── 3. VPN on → tap bluetoggle off → verify "Not Connected" ───────
-  - type: screenshot
     name: shadowrocket_toggle_screen
-    when_state: ACTIVE
-    templates: [bluetoggle]
+    templates: [vpntoggle, bluetoggle]
 
   - type: analyze_screen
-    name: analyze_bluetoggle
-    when_state: ACTIVE
-    templates: [bluetoggle]
+    name: analyze_vpntoggle
+    templates: [vpntoggle, bluetoggle]
 
   - type: execute_action
-    name: tap_bluetoggle
-    when_state: ACTIVE
-    when_detection: bluetoggle
+    name: tap_vpntoggle
     on_failure: pause
     action:
       type: tap_detection
-      detection: bluetoggle
+      detection: vpntoggle
       refind_on_device: true
     skip_post_action: true
 
   - type: wait
     name: after_vpn_toggle
-    when_state: ACTIVE
-    duration_seconds: 2.5
-
-  - type: screenshot
-    name: verify_vpn_off_screen
-    when_state: ACTIVE
-
-  - type: analyze_screen
-    name: analyze_vpn_off
-    when_state: ACTIVE
-    ocr_keywords: ["Not Connected"]
-
-  - type: verify
-    name: confirm_vpn_off
-    when_state: ACTIVE
-    condition: ocr_contains
-    template: "Not Connected"
-    on_failure: pause
+    duration_seconds: 3
 
   - type: execute_action
     name: go_home_final
