@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Callable
 
-from imouse_farm.config.models import BatchConfig
+from imouse_farm.config.models import AppConfig, BatchConfig
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.post.post_caption_store import validate_post_texts
+from imouse_farm.captions.service import (
+    default_onscreen_template_for_brand,
+    generate_captions_for_device,
+)
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.workflows.pipeline import WorkflowPipeline
 
@@ -29,12 +33,17 @@ class FarmBatchRunner:
     def __init__(
         self,
         config: BatchConfig,
+        app_config: AppConfig,
         device_manager: DeviceManager,
         pipeline: WorkflowPipeline,
         db: DatabaseRepository,
         imouse_connect_delay: float = 4.0,
+        *,
+        auto_generate_captions: bool = True,
     ) -> None:
         self._config = config
+        self._app_config = app_config
+        self._auto_captions = bool(auto_generate_captions)
         self._dm = device_manager
         self._pipeline = pipeline
         self._db = db
@@ -207,6 +216,21 @@ class FarmBatchRunner:
                     text_key = _post_text_key(device)
                     check_from = from_post if from_post is not None else 1
                     missing = validate_post_texts(text_key, from_post=check_from)
+                    if missing and self._auto_captions and self._app_config.openai.enabled:
+                        try:
+                            await generate_captions_for_device(
+                                self._app_config,
+                                device,
+                                onscreen_template=default_onscreen_template_for_brand(brand),
+                            )
+                            missing = validate_post_texts(text_key, from_post=check_from)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "batch_auto_caption_failed",
+                                device_id=device.device_id,
+                                slot=device.user_name,
+                                error=str(exc),
+                            )
                     if missing:
                         self._status["failed"].append({
                             "slot": device.user_name,
@@ -217,8 +241,16 @@ class FarmBatchRunner:
                         continue
 
                     self._batch_done_events[device.device_id] = asyncio.Event()
+                    chain_valcoin = (
+                        brand == "labely"
+                        and from_post is None
+                        and self._config.chain_valcoin_after_labely
+                    )
                     started = await self._pipeline.start(
-                        device.device_id, from_post=from_post, brand=brand
+                        device.device_id,
+                        from_post=from_post,
+                        brand=brand,
+                        chain_valcoin_after_labely=chain_valcoin,
                     )
                     if not started:
                         self._batch_done_events.pop(device.device_id, None)

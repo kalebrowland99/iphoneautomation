@@ -8,6 +8,7 @@ import pytest
 
 from imouse_farm.workflows.pipeline import (
     TIKTOK_FULL_PIPELINE,
+    TIKTOK_LABELY_THEN_VALCOIN_STEPS,
     TIKTOK_POST_END_PIPELINE,
     WorkflowPipeline,
 )
@@ -28,6 +29,23 @@ async def test_start_without_from_post_runs_full_pipeline() -> None:
     assert pipe._pipelines["dev-1"]["workflows"] == list(TIKTOK_FULL_PIPELINE)
     assert len(pipe._pipelines["dev-1"]["workflows"]) == 4
     assert pipe._pipelines["dev-1"]["from_post"] is None
+
+
+@pytest.mark.asyncio
+async def test_start_labely_chains_valcoin_after_three_posts() -> None:
+    engine = MagicMock()
+    engine.list_running.return_value = []
+    engine.start_workflow = AsyncMock(return_value=True)
+    db = MagicMock()
+    db.log_activity = AsyncMock()
+    pipe = WorkflowPipeline(engine, MagicMock(), db)
+
+    assert await pipe.start("dev-1", brand="labely", chain_valcoin_after_labely=True) is True
+
+    engine.start_workflow.assert_awaited_once_with("tiktok_prep", "dev-1", brand="labely")
+    assert len(pipe._pipelines["dev-1"]["steps"]) == len(TIKTOK_LABELY_THEN_VALCOIN_STEPS)
+    assert pipe._pipelines["dev-1"]["steps"][3]["brand"] == "valcoin"
+    assert pipe._pipelines["dev-1"]["steps"][3]["workflow"] == "tiktok_account_switch"
 
 
 @pytest.mark.asyncio

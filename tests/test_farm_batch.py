@@ -9,8 +9,10 @@ import asyncio
 
 import pytest
 
-from imouse_farm.config.models import BatchConfig
+from imouse_farm.config.models import AppConfig, BatchConfig
 from imouse_farm.workflows.farm_batch import FarmBatchRunner
+
+_APP = AppConfig()
 
 
 @pytest.mark.asyncio
@@ -33,9 +35,11 @@ async def test_disconnect_unselected_casts_drops_extra_online_phones() -> None:
 
     runner = FarmBatchRunner(
         BatchConfig(),
+        _APP,
         dm,
         MagicMock(),
         db,
+        auto_generate_captions=False,
     )
 
     await runner._disconnect_unselected_casts({selected.device_id})
@@ -53,9 +57,11 @@ async def test_stop_does_not_disconnect_airplay() -> None:
     pipeline.stop = AsyncMock()
     runner = FarmBatchRunner(
         BatchConfig(disconnect_on_complete=True),
+        _APP,
         dm,
         pipeline,
         MagicMock(),
+        auto_generate_captions=False,
     )
     runner._batch_done_events = {"phone-1": asyncio.Event()}
     runner._task = None
@@ -73,9 +79,11 @@ async def test_pipeline_stopped_does_not_disconnect_airplay() -> None:
     dm.get_device = MagicMock(return_value=SimpleNamespace(user_name="1"))
     runner = FarmBatchRunner(
         BatchConfig(disconnect_on_complete=True),
+        _APP,
         dm,
         MagicMock(),
         MagicMock(),
+        auto_generate_captions=False,
     )
     runner._batch_done_events = {"phone-1": asyncio.Event()}
     runner._status = {"completed": [], "failed": []}
@@ -96,9 +104,11 @@ async def test_pipeline_completed_disconnects_when_configured() -> None:
     dm.get_device = MagicMock(return_value=SimpleNamespace(user_name="1"))
     runner = FarmBatchRunner(
         BatchConfig(disconnect_on_complete=True),
+        _APP,
         dm,
         MagicMock(),
         MagicMock(),
+        auto_generate_captions=False,
     )
     runner._batch_done_events = {"phone-1": asyncio.Event()}
     runner._status = {"completed": [], "failed": []}
@@ -119,9 +129,11 @@ async def test_start_queues_one_phone_per_step() -> None:
     ]
     runner = FarmBatchRunner(
         BatchConfig(batch_size=1),
+        _APP,
         MagicMock(),
         MagicMock(),
         MagicMock(),
+        auto_generate_captions=False,
     )
     runner._run_batches = AsyncMock()  # type: ignore[method-assign]
     assert await runner.start(devices) is True

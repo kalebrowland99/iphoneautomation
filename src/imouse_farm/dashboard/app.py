@@ -34,7 +34,11 @@ from imouse_farm.captions.prompt_store import (
     set_ai_hashtags,
     set_ai_prompt,
 )
-from imouse_farm.captions.service import farm_devices_sorted, generate_captions_for_device
+from imouse_farm.captions.service import (
+    farm_devices_sorted,
+    generate_captions_for_device,
+    generate_captions_for_devices,
+)
 from imouse_farm.post.account_profile_store import (
     brand_profile_key,
     get_brand_profile,
@@ -64,6 +68,8 @@ from imouse_farm.settings.device_settings import (
     get_device_settings,
     set_debug_skip_post,
 )
+from imouse_farm.dashboard.run_status import compute_run_progress
+from imouse_farm.dashboard.slideshow_routes import register_slideshow_routes
 from imouse_farm.utils.gallery import list_media_stems_for_posts, phone_gallery_folder
 from imouse_farm.utils.logging import get_logger
 
@@ -445,7 +451,14 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         if missing:
             raise HTTPException(400, "; ".join(missing))
         success = await app_instance.workflow_pipeline.start(
-            device_id, from_post=from_post, brand=brand
+            device_id,
+            from_post=from_post,
+            brand=brand,
+            chain_valcoin_after_labely=(
+                brand == "labely"
+                and from_post is None
+                and app_instance.config.batch.chain_valcoin_after_labely
+            ),
         )
         if not success:
             raise HTTPException(400, "Failed to start full run — workflow may already be active")
@@ -639,40 +652,26 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         if not devices:
             raise HTTPException(400, "No farm phones registered")
 
-        results: list[dict[str, Any]] = []
-        errors: list[dict[str, str]] = []
-
-        for device in devices:
-            try:
-                result = await generate_captions_for_device(
-                    app_instance.config,
-                    device,
-                    prompt=body.prompt if body else None,
-                    hashtags=body.hashtags if body else None,
-                    onscreen_template=body.onscreen_template if body else None,
-                )
-                results.append(result)
-            except Exception as exc:  # noqa: BLE001
-                errors.append({
-                    "slot": str(device.user_name),
-                    "device_id": device.device_id,
-                    "error": str(exc),
-                })
+        result = await generate_captions_for_devices(
+            app_instance.config,
+            devices,
+            prompt=body.prompt if body else None,
+            hashtags=body.hashtags if body else None,
+            onscreen_template=body.onscreen_template if body else None,
+            brand="labely",
+        )
 
         await app_instance.db.log_activity(
             "info",
             "caption",
-            f"AI captions generated for {len(results)} phone(s)",
+            f"AI captions generated for {result['generated']} phone(s)",
             None,
-            {"ok": len(results), "failed": len(errors)},
+            {"ok": result["generated"], "failed": result["failed"]},
         )
-        return {
-            "success": len(results) > 0,
-            "generated": len(results),
-            "failed": len(errors),
-            "results": results,
-            "errors": errors,
-        }
+        if result["generated"] == 0:
+            detail = result["errors"][0]["error"] if result["errors"] else "No captions generated"
+            raise HTTPException(400, detail)
+        return result
 
     @app.post("/api/caption-ai/generate-all")
     async def generate_all_captions_route(
@@ -806,5 +805,26 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         finally:
             if websocket in app_state.ws_clients:
                 app_state.ws_clients.remove(websocket)
+
+    @app.get("/api/run/status")
+    async def get_run_status(job_id: str | None = None) -> dict[str, Any]:
+        batch = app_instance.farm_batch.get_status()
+        job_data: dict[str, Any] | None = None
+        if job_id:
+            job = await app_instance.slideshow_jobs.get(job_id)
+            if job:
+                job_data = job.to_dict()
+        progress = compute_run_progress(slideshow_job=job_data, batch=batch)
+        return {
+            "batch": batch,
+            "slideshow_job": job_data,
+            "progress": progress,
+        }
+
+    register_slideshow_routes(
+        app,
+        config=config,
+        get_app=lambda: app_instance,
+    )
 
     return app

@@ -1,0 +1,2231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>__APP_NAME__</title>
+    <style>
+        :root {
+            --bg: #09090b;
+            --surface: #111114;
+            --surface-2: #18181b;
+            --surface-3: #1f1f23;
+            --border: #27272a;
+            --border-subtle: #1f1f23;
+            --text: #fafafa;
+            --text-secondary: #a1a1aa;
+            --muted: #71717a;
+            --accent: __ACCENT_COLOR__;
+            --accent-hover: __ACCENT_HOVER__;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --radius: 10px;
+            --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.25);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Header */
+        .app-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.875rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            flex-shrink: 0;
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .brand-mark {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.875rem;
+            color: white;
+        }
+        .brand h1 {
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+        .brand p {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-top: 1px;
+        }
+        .brand-switch {
+            display: flex;
+            gap: 0.35rem;
+            margin-left: 1rem;
+        }
+        .brand-switch a {
+            font-size: 0.75rem;
+            color: var(--muted);
+            text-decoration: none;
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            border: 1px solid transparent;
+        }
+        .brand-switch a:hover { color: var(--text); border-color: var(--border); }
+        .brand-switch a.active {
+            color: var(--text);
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.08);
+        }
+        .chip-account {
+            display: block;
+            font-size: 0.625rem;
+            color: var(--muted);
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-top: 0.15rem;
+        }
+        .chip-sticker {
+            display: inline-block;
+            padding: 0.1rem 0.45rem;
+            border-radius: 4px;
+            font-size: 0.625rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            flex-shrink: 0;
+        }
+        .chip-sticker.success { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+        .chip-sticker.failed { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+        .chip-sticker.running { background: rgba(99, 102, 241, 0.15); color: var(--accent); }
+        .chip-sticker.idle { background: var(--surface-3); color: var(--muted); }
+        .account-field-row { margin-bottom: 0.75rem; }
+        .account-field-row label {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-bottom: 0.35rem;
+        }
+        .account-field-row input, .account-field-row select {
+            width: 100%;
+            padding: 0.5rem 0.625rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--surface-2);
+            color: var(--text);
+            font-size: 0.8125rem;
+        }
+        .account-status-line {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-top: 0.5rem;
+        }
+        .header-metrics {
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+            font-size: 0.8125rem;
+        }
+        .metric {
+            display: flex;
+            flex-direction: column;
+            gap: 0.125rem;
+        }
+        .metric-label {
+            font-size: 0.6875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--muted);
+            font-weight: 500;
+        }
+        .metric-value {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        .live-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.25rem 0.625rem;
+            border-radius: 999px;
+            background: rgba(34, 197, 94, 0.12);
+            color: var(--success);
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .live-pill.off {
+            background: var(--surface-3);
+            color: var(--muted);
+        }
+        .live-pill .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .banner-warn {
+            background: rgba(245, 158, 11, 0.12);
+            color: var(--warning);
+            padding: 0.5rem 1.5rem;
+            font-size: 0.8125rem;
+            border-bottom: 1px solid rgba(245, 158, 11, 0.2);
+            display: none;
+            flex-shrink: 0;
+        }
+
+        /* Device strip */
+        .device-strip {
+            padding: 0.75rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface-2);
+            flex-shrink: 0;
+        }
+        .strip-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.625rem;
+        }
+        .strip-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+        .strip-hint {
+            font-size: 0.75rem;
+            color: var(--muted);
+            flex: 1;
+        }
+        .device-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        .device-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.375rem 0.75rem;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            cursor: pointer;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            transition: border-color 0.15s, background 0.15s, color 0.15s;
+            user-select: none;
+        }
+        .device-chip:hover:not(.empty) {
+            border-color: #3f3f46;
+            color: var(--text);
+        }
+        .device-chip.selected {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--text);
+            box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.35);
+        }
+        .device-chip.running {
+            border-color: rgba(34, 197, 94, 0.45);
+        }
+        .device-chip.offline { opacity: 0.55; }
+        .device-chip.empty {
+            opacity: 0.35;
+            cursor: default;
+            border-style: dashed;
+        }
+        .chip-num { font-variant-numeric: tabular-nums; min-width: 1.25rem; }
+        .chip-pipe {
+            font-size: 0.6875rem;
+            color: var(--success);
+            font-weight: 600;
+        }
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .status-dot.online { background: var(--success); }
+        .status-dot.offline { background: var(--muted); }
+
+        /* Main layout */
+        .app-body {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 300px 1fr 340px;
+            min-height: 0;
+        }
+        @media (max-width: 1200px) {
+            .app-body {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr auto;
+                overflow-y: auto;
+            }
+        }
+
+        .panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            border-right: 1px solid var(--border);
+        }
+        .panel:last-child { border-right: none; border-left: 1px solid var(--border); }
+        .panel-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+        .panel-header {
+            padding: 1rem 1rem 0;
+            flex-shrink: 0;
+        }
+        .panel-header h2 {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--text);
+            letter-spacing: -0.01em;
+        }
+        .panel-header p {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-top: 0.25rem;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 0.875rem 1rem;
+            margin-bottom: 0.75rem;
+            box-shadow: var(--shadow);
+        }
+        .card:last-child { margin-bottom: 0; }
+        .card-title {
+            font-size: 0.6875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            margin-bottom: 0.625rem;
+        }
+        .card-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            margin-bottom: 0.625rem;
+        }
+        .card-title-row .card-title { margin-bottom: 0; }
+        .card-status {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem 0.75rem;
+            font-size: 0.8125rem;
+        }
+        .stat-grid .label { color: var(--muted); font-size: 0.75rem; }
+        .stat-grid .value { color: var(--text); font-weight: 500; }
+
+        .selected-device-name {
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.25rem;
+        }
+        .selected-device-meta {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+        }
+
+        .btn-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.375rem;
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.4375rem 0.875rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            transition: background 0.15s, opacity 0.15s;
+        }
+        .btn:hover:not(:disabled) { background: var(--accent-hover); }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn-sm { padding: 0.3125rem 0.625rem; font-size: 0.75rem; border-radius: 6px; }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+        .btn-ghost:hover:not(:disabled) {
+            background: var(--surface-3);
+            color: var(--text);
+        }
+        .btn-ghost.active {
+            color: var(--accent);
+            border-color: rgba(99, 102, 241, 0.45);
+            background: rgba(99, 102, 241, 0.08);
+        }
+        .btn-success {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+        .btn-success:hover:not(:disabled) {
+            background: rgba(34, 197, 94, 0.22);
+        }
+        .btn-connect { background: #16a34a; }
+        .btn-connect:hover:not(:disabled) { background: #15803d; }
+        .btn-primary-action {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            font-size: 0.9375rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+        }
+        .btn-primary-action:hover:not(:disabled) {
+            background: linear-gradient(135deg, var(--accent-hover), #a78bfa);
+        }
+        .btn-kill {
+            color: var(--error);
+            border-color: rgba(239, 68, 68, 0.35);
+        }
+        .btn-kill:hover:not(:disabled) {
+            background: rgba(239, 68, 68, 0.1);
+            color: #fca5a5;
+        }
+        .pipeline-actions-secondary { margin-top: 0.5rem; }
+
+        .batch-slot-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .batch-slot-toolbar span {
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
+        .batch-slot-toolbar .link-btn {
+            background: none;
+            border: none;
+            color: var(--accent-hover);
+            font-size: 0.75rem;
+            cursor: pointer;
+            padding: 0;
+        }
+        .batch-slot-toolbar .link-btn:hover { text-decoration: underline; }
+        .start-post-picker {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            flex-wrap: wrap;
+            margin: 0.65rem 0 0.75rem;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+        }
+        .start-post-picker .picker-label {
+            font-weight: 600;
+            color: var(--text);
+            margin-right: 0.15rem;
+        }
+        .start-post-picker label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            cursor: pointer;
+            user-select: none;
+        }
+        .start-post-picker input[type="radio"] {
+            margin: 0;
+            accent-color: var(--accent);
+        }
+        .batch-slot-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 0.375rem;
+            margin-bottom: 0.75rem;
+        }
+        .batch-slot-item {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            padding: 0.25rem 0.35rem;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--surface-2);
+        }
+        .batch-slot-item.empty {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+        .batch-slot-item input {
+            accent-color: var(--accent);
+            margin: 0;
+            cursor: pointer;
+        }
+        .batch-slot-item.empty input { cursor: not-allowed; }
+
+        .field { margin-bottom: 0.625rem; }
+        .field:last-child { margin-bottom: 0; }
+        .field label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 0.35rem;
+        }
+        .field-hint {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-top: 0.35rem;
+        }
+        textarea, input[type="text"], select {
+            width: 100%;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            padding: 0.5rem 0.625rem;
+            font-size: 0.8125rem;
+            font-family: inherit;
+        }
+        textarea { resize: vertical; min-height: 3rem; }
+        textarea:focus, input:focus, select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+        }
+
+        .toggle-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            margin-bottom: 0.625rem;
+        }
+        .toggle-row input { margin-top: 0.2rem; accent-color: var(--accent); }
+
+        details.debug-panel {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface);
+            overflow: hidden;
+        }
+        details.debug-panel summary {
+            padding: 0.625rem 0.875rem;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            cursor: pointer;
+            list-style: none;
+            user-select: none;
+        }
+        details.debug-panel summary::-webkit-details-marker { display: none; }
+        details.debug-panel[open] summary {
+            border-bottom: 1px solid var(--border);
+        }
+        .debug-body {
+            padding: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .debug-tabs {
+            display: flex;
+            gap: 0.25rem;
+        }
+        .debug-tabs button {
+            flex: 1;
+            padding: 0.35rem;
+            font-size: 0.75rem;
+            border: 1px solid var(--border);
+            background: var(--surface-2);
+            color: var(--muted);
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .debug-tabs button.active {
+            color: var(--accent);
+            border-color: rgba(99, 102, 241, 0.45);
+            background: rgba(99, 102, 241, 0.08);
+        }
+
+        /* Activity */
+        .activity-panel .panel-scroll { padding-top: 0.5rem; }
+        .activity-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: center;
+            padding: 0 1rem 0.75rem;
+            flex-shrink: 0;
+        }
+        .activity-toolbar .spacer { flex: 1; }
+        .activity-feed {
+            margin: 0 1rem 1rem;
+            flex: 1;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+            font-size: 0.75rem;
+            min-height: 200px;
+            box-shadow: var(--shadow);
+        }
+        .activity-row {
+            display: grid;
+            grid-template-columns: 4.5rem 3.25rem 4rem 1fr;
+            gap: 0.5rem;
+            padding: 0.45rem 0.875rem;
+            border-bottom: 1px solid var(--border-subtle);
+            align-items: start;
+        }
+        .activity-row:hover { background: rgba(255,255,255,0.02); }
+        .activity-row:last-child { border-bottom: none; }
+        .activity-row .ts { color: var(--muted); font-variant-numeric: tabular-nums; }
+        .activity-row .msg { color: var(--text-secondary); word-break: break-word; }
+        .activity-row .msg.error-text { color: var(--error); }
+        .activity-row .msg.warn-text { color: var(--warning); }
+        .activity-details {
+            grid-column: 1 / -1;
+            margin-top: 0.25rem;
+            padding: 0.5rem;
+            background: var(--surface-2);
+            border-radius: 6px;
+            font-size: 0.6875rem;
+            color: var(--muted);
+            display: none;
+            white-space: pre-wrap;
+        }
+        .activity-row.expanded .activity-details { display: block; }
+        .activity-row.clickable { cursor: pointer; }
+        .activity-empty {
+            padding: 3rem 1rem;
+            text-align: center;
+            color: var(--muted);
+            font-family: inherit;
+            font-size: 0.875rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.1rem 0.45rem;
+            border-radius: 4px;
+            font-size: 0.625rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .badge.IDLE { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+        .badge.ACTIVE { background: rgba(99, 102, 241, 0.15); color: var(--accent-hover); }
+        .badge.WAITING { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+        .badge.ERROR { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+        .badge.UNKNOWN_SCREEN { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+        .badge.DISCONNECTED, .badge.empty, .badge.OFF { background: var(--surface-3); color: var(--muted); }
+        .lvl-info { background: rgba(99, 102, 241, 0.15); color: var(--accent-hover); }
+        .lvl-warn { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+        .lvl-error { background: rgba(239, 68, 68, 0.15); color: var(--error); }
+        .lvl-debug { background: var(--surface-3); color: var(--muted); }
+        .lvl-success { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+        .cat-badge { background: var(--surface-3); color: var(--muted); font-weight: 500; }
+
+        .post-group {
+            margin-top: 0.875rem;
+            padding-top: 0.875rem;
+            border-top: 1px solid var(--border);
+        }
+        .post-group:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+        .post-group-title {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 0.5rem;
+        }
+        .ai-caption-status { font-size: 0.75rem; color: var(--muted); }
+        .ai-caption-status.error { color: var(--error); }
+        .ai-caption-status.success { color: var(--success); }
+    </style>
+</head>
+<body>
+    <header class="app-header">
+        <div class="brand">
+            <div class="brand-mark">__APP_MARK__</div>
+            <div>
+                <h1>__APP_NAME__</h1>
+                <p>__APP_TAGLINE__</p>
+            </div>
+            <nav class="brand-switch" aria-label="Dashboard brand">
+                <a href="/" id="brand-link-labely">Labely</a>
+                <a href="/valcoin" id="brand-link-valcoin">ValCoin</a>
+            </nav>
+        </div>
+        <div class="header-metrics">
+            <div class="metric">
+                <span class="metric-label">Devices online</span>
+                <span class="metric-value" id="farm-online-count">0 / 20</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Batch</span>
+                <span class="metric-value" id="header-batch-status">Idle</span>
+            </div>
+            <div id="live-indicator" class="live-pill off">
+                <span class="dot"></span>
+                <span id="connection-status">Connecting</span>
+            </div>
+        </div>
+    </header>
+
+    <div id="page-banner" class="banner-warn"></div>
+
+    <section class="device-strip">
+        <div class="strip-header">
+            <span class="strip-title">Devices</span>
+            <span id="farm-selected-hint" class="strip-hint">Select a device to configure and run workflows</span>
+            <button class="btn btn-sm btn-ghost" type="button" onclick="refreshFarmDevices()">Refresh</button>
+        </div>
+        <div id="farm-grid" class="device-chips"></div>
+    </section>
+
+    <div class="app-body">
+        <!-- Control sidebar -->
+        <aside class="panel control-panel">
+            <div class="panel-scroll">
+                <div class="card" id="device-summary-card">
+                    <div class="selected-device-name" id="phone-title">—</div>
+                    <div class="selected-device-meta">
+                        <span id="conn-dot" class="status-dot offline"></span>
+                        <span id="phone-connected">Not connected</span>
+                        <span id="phone-state" class="badge DISCONNECTED">—</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Status</div>
+                    <div class="stat-grid">
+                        <div><div class="label">Workflow</div><div class="value" id="meta-workflow">—</div></div>
+                        <div><div class="label">Last action</div><div class="value" id="meta-action">—</div></div>
+                        <div><div class="label">Errors</div><div class="value" id="meta-errors">0</div></div>
+                        <div><div class="label">Last seen</div><div class="value" id="meta-seen">—</div></div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title-row">
+                        <span class="card-title">Single device</span>
+                        <span class="card-status" id="pipeline-status">Idle</span>
+                    </div>
+                    <label class="toggle-row">
+                        <input type="checkbox" id="debug-skip-post" onchange="saveDebugSkipPost()">
+                        <span>Debug: skip post (kill TikTok instead of tapping Post)</span>
+                    </label>
+                    <div class="start-post-picker">
+                        <span class="picker-label">Start from post <span class="field-hint">(optional)</span></span>
+                        <label><input type="radio" name="pipeline-from-post" value="" checked> Full</label>
+                        <label><input type="radio" name="pipeline-from-post" value="1"> 1</label>
+                        <label><input type="radio" name="pipeline-from-post" value="2"> 2</label>
+                        <label><input type="radio" name="pipeline-from-post" value="3"> 3</label>
+                    </div>
+                    <button class="btn btn-primary-action" id="btn-pipeline-start" onclick="startPipeline()">Run</button>
+                    <div class="btn-row pipeline-actions-secondary">
+                        <button class="btn btn-sm btn-ghost" id="btn-pipeline-pause" onclick="pausePipeline()">Pause</button>
+                        <button class="btn btn-sm btn-ghost" id="btn-pipeline-resume" onclick="resumePipeline()">Resume</button>
+                        <button class="btn btn-sm btn-ghost btn-kill" id="btn-pipeline-stop" onclick="stopPipeline()">Kill</button>
+                    </div>
+                </div>
+
+                <div class="card" id="slideshow-card">
+                    <div class="card-title-row">
+                        <span class="card-title">Slideshow pipeline</span>
+                        <span class="card-status" id="slideshow-status">Idle</span>
+                    </div>
+                    <p class="field-hint" style="margin-bottom:0.625rem">Generate slideshows, auto-write AI captions from video filenames, upload MP4s into selected galleries, then run the farm batch.</p>
+                    <div class="btn-row">
+                        <button class="btn btn-sm btn-primary-action" id="btn-slideshow-run" onclick="generateAndRunSlideshow()">Generate &amp; run</button>
+                    </div>
+                    <p class="field-hint" id="slideshow-detail" style="margin-top:0.5rem;min-height:1.25rem"></p>
+                </div>
+
+                <div class="card">
+                    <div class="card-title-row">
+                        <span class="card-title">Farm batch</span>
+                        <span class="card-status" id="batch-status">Idle</span>
+                    </div>
+                    <p class="field-hint" style="margin-bottom:0.625rem">Select phones to run. Processes one at a time, lowest slot first — cast on, full pipeline, cast off, then next.</p>
+                    <div class="batch-slot-toolbar">
+                        <span id="batch-slot-count">0 selected</span>
+                        <span>
+                            <button type="button" class="link-btn" onclick="selectAllBatchSlots()">All</button>
+                            ·
+                            <button type="button" class="link-btn" onclick="clearBatchSlots()">None</button>
+                        </span>
+                    </div>
+                    <div id="batch-slot-picker" class="batch-slot-grid"></div>
+                    <div class="start-post-picker">
+                        <span class="picker-label">Start from post <span class="field-hint">(optional)</span></span>
+                        <label><input type="radio" name="batch-from-post" value="" checked> Full</label>
+                        <label><input type="radio" name="batch-from-post" value="1"> 1</label>
+                        <label><input type="radio" name="batch-from-post" value="2"> 2</label>
+                        <label><input type="radio" name="batch-from-post" value="3"> 3</label>
+                    </div>
+                    <div class="btn-row">
+                        <button class="btn btn-sm btn-success" id="btn-batch-start" onclick="startFarmBatch()">Run selected</button>
+                        <button class="btn btn-sm btn-ghost btn-kill" id="btn-batch-stop" onclick="stopFarmBatch()">Kill batch</button>
+                    </div>
+                </div>
+
+                <details class="debug-panel" id="debug-panel">
+                    <summary>Advanced &amp; debug</summary>
+                    <div class="debug-body">
+                        <div class="card-title" style="margin-bottom:0.5rem">Quick actions</div>
+                        <div class="field">
+                            <label for="workflow-select">Workflow</label>
+                            <select id="workflow-select"></select>
+                        </div>
+                        <div class="btn-row">
+                            <button class="btn btn-sm btn-connect" id="btn-connect" onclick="connectDevice()">Connect AirPlay</button>
+                            <button class="btn btn-sm btn-ghost" id="btn-disconnect" onclick="disconnectDevice()">Disconnect</button>
+                            <button class="btn btn-sm" onclick="startWorkflow()">Start</button>
+                            <button class="btn btn-sm btn-ghost btn-kill" onclick="stopWorkflow()">Kill</button>
+                            <button class="btn btn-sm btn-ghost" onclick="execAction('home')">Home</button>
+                        </div>
+                        <div class="card-title" style="margin:0.75rem 0 0.5rem">Debug tests</div>
+                        <div class="debug-tabs">
+                            <button type="button" id="debug-tab-prep" class="active" onclick="setDebugTab('prep')">Prep</button>
+                            <button type="button" id="debug-tab-account_switch" onclick="setDebugTab('account_switch')">Account</button>
+                            <button type="button" id="debug-tab-post" onclick="setDebugTab('post')">Post</button>
+                            <button type="button" id="debug-tab-end" onclick="setDebugTab('end')">End</button>
+                        </div>
+                        <select id="debug-test-select"></select>
+                        <div class="btn-row">
+                            <button class="btn btn-sm btn-ghost" id="btn-debug-run" onclick="runDebugTest()">Run test</button>
+                            <button class="btn btn-sm btn-ghost btn-kill" id="btn-debug-kill" onclick="killDebugTest()" disabled>Kill</button>
+                            <button class="btn btn-sm btn-ghost" onclick="captureScreen()">Capture screenshot</button>
+                            <button class="btn btn-sm btn-ghost" id="btn-restart-server" onclick="restartServer()">Restart server</button>
+                        </div>
+                    </div>
+                </details>
+            </div>
+        </aside>
+
+        <!-- Activity -->
+        <main class="panel activity-panel">
+            <div class="panel-header">
+                <h2>Activity</h2>
+                <p>Live log for the selected device</p>
+            </div>
+            <div class="activity-toolbar">
+                <select id="filter-level">
+                    <option value="">All levels</option>
+                    <option value="error">Error</option>
+                    <option value="warn">Warn</option>
+                    <option value="info">Info</option>
+                    <option value="debug">Debug</option>
+                </select>
+                <select id="filter-category">
+                    <option value="">All categories</option>
+                    <option value="workflow">Workflow</option>
+                    <option value="action">Action</option>
+                    <option value="vision">Vision</option>
+                    <option value="error">Error</option>
+                    <option value="device">Device</option>
+                    <option value="state">State</option>
+                    <option value="test">Test</option>
+                </select>
+                <div class="spacer"></div>
+                <button class="btn btn-sm btn-ghost active" id="btn-autoscroll" onclick="toggleAutoscroll()">Auto-scroll</button>
+                <button class="btn btn-sm btn-ghost" id="btn-pause" onclick="togglePause()">Pause live</button>
+                <button class="btn btn-sm btn-ghost" onclick="refreshActivity()">Refresh</button>
+            </div>
+            <div class="activity-feed" id="activity-feed">
+                <div class="activity-empty">Loading activity…</div>
+            </div>
+        </main>
+
+        <!-- Captions -->
+        <aside class="panel captions-panel">
+            <div class="panel-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.5rem">
+                <div>
+                    <h2>Content</h2>
+                    <p>Captions for the selected device</p>
+                </div>
+                <button type="button" class="btn btn-sm btn-ghost" id="btn-clear-post-texts" onclick="clearAllPostTexts()">Clear</button>
+            </div>
+            <div class="panel-scroll">
+                <div class="card" id="account-card">
+                    <div class="card-title">TikTok @ account</div>
+                    <div class="account-field-row" style="margin-bottom:0.5rem">
+                        <input type="text" id="account-handle" placeholder="@username" autocomplete="off">
+                        <p class="field-hint" style="margin-top:0.35rem">For this phone on the <strong id="account-brand-label">__APP_NAME__</strong> dashboard. Switch brand via the header tabs.</p>
+                    </div>
+                    <div class="account-status-line" id="account-status-line">Run status: —</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">AI generation</div>
+                    <div class="field">
+                        <label for="ai-prompt">Caption prompt</label>
+                        <textarea id="ai-prompt" rows="5" placeholder="Style instructions for generated captions…"></textarea>
+                    </div>
+                    <div class="field">
+                        <label for="ai-hashtags">Hashtags</label>
+                        <input type="text" id="ai-hashtags" placeholder="#______ #toxic_____ …">
+                    </div>
+                    <div class="field">
+                        <label for="onscreen-template">Onscreen template</label>
+                        <select id="onscreen-template" onchange="applyOnscreenTemplate()">
+                            <option value="">Custom (manual)</option>
+                            <option value="toxic_walmart">Toxic · Walmart Edition</option>
+                            <option value="america_sick">America Is Sick · Edition</option>
+                        </select>
+                        <p class="field-hint">Post 1 = rightmost file, post 3 = leftmost.</p>
+                    </div>
+                    <div class="btn-row" style="align-items:center">
+                        <button type="button" class="btn btn-sm btn-ghost" id="btn-ai-generate-device" onclick="generateAiCaptions(false)">Generate selected</button>
+                        <button type="button" class="btn btn-sm" id="btn-ai-generate" onclick="generateAiCaptions(true)">Generate all phones</button>
+                        <span class="ai-caption-status" id="ai-caption-status"></span>
+                    </div>
+                </div>
+
+                <div id="post-texts">
+                    <div class="post-group" data-post="1">
+                        <div class="post-group-title">Post 1</div>
+                        <div class="field">
+                            <label for="onscreen-1">Onscreen text</label>
+                            <textarea id="onscreen-1" data-post="1" data-field="onscreen" rows="2"></textarea>
+                        </div>
+                        <div class="field">
+                            <label for="final-1">Final caption</label>
+                            <textarea id="final-1" data-post="1" data-field="final" rows="3"></textarea>
+                        </div>
+                    </div>
+                    <div class="post-group" data-post="2">
+                        <div class="post-group-title">Post 2</div>
+                        <div class="field">
+                            <label for="onscreen-2">Onscreen text</label>
+                            <textarea id="onscreen-2" data-post="2" data-field="onscreen" rows="2"></textarea>
+                        </div>
+                        <div class="field">
+                            <label for="final-2">Final caption</label>
+                            <textarea id="final-2" data-post="2" data-field="final" rows="3"></textarea>
+                        </div>
+                    </div>
+                    <div class="post-group" data-post="3">
+                        <div class="post-group-title">Post 3</div>
+                        <div class="field">
+                            <label for="onscreen-3">Onscreen text</label>
+                            <textarea id="onscreen-3" data-post="3" data-field="onscreen" rows="2"></textarea>
+                        </div>
+                        <div class="field">
+                            <label for="final-3">Final caption</label>
+                            <textarea id="final-3" data-post="3" data-field="final" rows="3"></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        const FARM_SLOTS = __FARM_SLOTS__;
+        const BRAND_ID = '__BRAND_ID__';
+        let slotProfiles = {};
+        let deviceId = null;
+        let selectedSlot = null;
+        let farmDevices = [];
+        let slotToDevice = {};
+        let ws = null;
+        let activityEntries = [];
+        let activityAutoScroll = true;
+        let activityPaused = false;
+        let debugTab = 'prep';
+        const DEBUG_STORAGE = {
+            open: 'farmDebugPanelOpen',
+            tab: 'farmDebugTab',
+            test: 'farmDebugTestId',
+        };
+        let postTextSaveTimers = {};
+        let cachedPostTexts = [];
+        let batchSelectedSlots = new Set();
+        let accountHandleEditing = false;
+        let slideshowJobId = null;
+        let slideshowPollTimer = null;
+
+        function isAccountHandleFocused() {
+            return document.activeElement?.id === 'account-handle';
+        }
+
+        async function refreshSlideshowConfig() {
+            try {
+                const cfg = await api('/slideshow/config');
+                const card = document.getElementById('slideshow-card');
+                const btn = document.getElementById('btn-slideshow-run');
+                if (card) card.style.display = cfg.enabled ? '' : 'none';
+                if (btn) btn.disabled = !cfg.enabled;
+            } catch (_) {}
+        }
+
+        function updateSlideshowUI(job) {
+            const statusEl = document.getElementById('slideshow-status');
+            const detailEl = document.getElementById('slideshow-detail');
+            const btn = document.getElementById('btn-slideshow-run');
+            if (!statusEl) return;
+            if (!job) {
+                statusEl.textContent = 'Idle';
+                if (detailEl) detailEl.textContent = '';
+                if (btn) btn.disabled = false;
+                return;
+            }
+            const running = job.status === 'running';
+            statusEl.textContent = running ? `${job.phase}` : job.status;
+            if (detailEl) {
+                const parts = [job.message || ''];
+                if (job.error) parts.push(job.error);
+                detailEl.textContent = parts.filter(Boolean).join(' — ');
+            }
+            if (btn) btn.disabled = running;
+        }
+
+        function stopSlideshowPoll() {
+            if (slideshowPollTimer) {
+                clearInterval(slideshowPollTimer);
+                slideshowPollTimer = null;
+            }
+        }
+
+        function startSlideshowPoll(jobId) {
+            slideshowJobId = jobId;
+            stopSlideshowPoll();
+            const tick = async () => {
+                try {
+                    const job = await api(`/slideshow/jobs/${encodeURIComponent(jobId)}`);
+                    updateSlideshowUI(job);
+                    if (job.status === 'completed' || job.status === 'failed') {
+                        stopSlideshowPoll();
+                        slideshowJobId = null;
+                    }
+                } catch (_) {}
+            };
+            void tick();
+            slideshowPollTimer = setInterval(tick, 4000);
+        }
+
+        async function generateAndRunSlideshow() {
+            const slots = [...batchSelectedSlots].map(s => parseInt(s, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
+            if (!slots.length) {
+                alert('Select at least one phone slot for the slideshow pipeline.');
+                return;
+            }
+            const btn = document.getElementById('btn-slideshow-run');
+            if (btn) btn.disabled = true;
+            try {
+                const res = await api('/slideshow/generate-and-run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ brand: BRAND_ID, slots, run_batch: true }),
+                });
+                updateSlideshowUI(res.job);
+                if (res.job?.id) startSlideshowPoll(res.job.id);
+            } catch (err) {
+                alert(err.message || String(err));
+                updateSlideshowUI(null);
+            }
+        }
+
+        function bindAccountHandleInput() {
+            const el = document.getElementById('account-handle');
+            if (!el || el.dataset.bound === '1') return;
+            el.dataset.bound = '1';
+            el.addEventListener('focus', () => { accountHandleEditing = true; });
+            el.addEventListener('blur', () => {
+                accountHandleEditing = false;
+                saveAccountProfile();
+            });
+        }
+
+        function initBrandNav() {
+            const labely = document.getElementById('brand-link-labely');
+            const valcoin = document.getElementById('brand-link-valcoin');
+            if (labely) labely.classList.toggle('active', BRAND_ID === 'labely');
+            if (valcoin) valcoin.classList.toggle('active', BRAND_ID === 'valcoin');
+        }
+
+        function accountSticker(profile) {
+            if (!profile) return '';
+            const status = profile.last_run_status || 'idle';
+            const posts = profile.posts_completed || 0;
+            const target = profile.posts_target || 3;
+            let label = status;
+            if (status === 'success') label = `OK ${posts}/${target}`;
+            else if (status === 'failed') label = `Fail ${posts}/${target}`;
+            else if (status === 'running') label = `Run ${posts}/${target}`;
+            return `<span class="chip-sticker ${status}">${escapeHtml(label)}</span>`;
+        }
+
+        function formatAccountStatus(profile) {
+            if (!profile) return 'Run status: —';
+            const handle = profile.tiktok_handle || '(no @ set)';
+            const status = profile.last_run_status || 'idle';
+            const posts = profile.posts_completed || 0;
+            const target = profile.posts_target || 3;
+            return `Run status: ${status} · ${posts}/${target} posts · ${handle}`;
+        }
+
+        async function loadSlotProfiles() {
+            try {
+                const res = await api(`/account-profiles?brand=${enc(BRAND_ID)}`);
+                slotProfiles = res.profiles || {};
+            } catch (_) {
+                slotProfiles = {};
+            }
+        }
+
+        async function loadAccountProfileForDevice() {
+            if (!deviceId) return;
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/account-profile?brand=${enc(BRAND_ID)}`);
+                applyAccountProfileToForm(res.profile || {});
+            } catch (_) {}
+        }
+
+        function applyAccountProfileToForm(profile) {
+            const p = profile || {};
+            const handleEl = document.getElementById('account-handle');
+            if (handleEl && !accountHandleEditing && !isAccountHandleFocused()) {
+                handleEl.value = p.tiktok_handle || '';
+            }
+            document.getElementById('account-status-line').textContent = formatAccountStatus(p);
+        }
+
+        async function saveAccountProfile() {
+            const body = {
+                tiktok_handle: document.getElementById('account-handle').value.trim(),
+                brand: BRAND_ID,
+            };
+            try {
+                let profile;
+                if (deviceId) {
+                    const res = await api(`/devices/${enc(deviceId)}/account-profile`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    profile = res.profile || {};
+                } else if (selectedSlot) {
+                    const res = await api(`/slots/${enc(selectedSlot)}/account-profile`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    profile = res.profile || {};
+                } else {
+                    return;
+                }
+                if (selectedSlot) slotProfiles[`slot:${selectedSlot}`] = profile;
+                applyAccountProfileToForm(profile);
+                renderFarmGrid();
+            } catch (err) {
+                alert(`Failed to save account: ${err.message}`);
+            }
+        }
+
+        function loadBatchSelection() {
+            try {
+                const saved = localStorage.getItem('batchSelectedSlots');
+                if (saved) batchSelectedSlots = new Set(JSON.parse(saved));
+            } catch (_) {
+                batchSelectedSlots = new Set();
+            }
+        }
+
+        function saveBatchSelection() {
+            localStorage.setItem('batchSelectedSlots', JSON.stringify([...batchSelectedSlots]));
+            updateBatchSlotCount();
+        }
+
+        function registeredSlots() {
+            const slots = [];
+            for (let i = 1; i <= FARM_SLOTS; i++) {
+                if (slotToDevice[String(i)]) slots.push(String(i));
+            }
+            return slots;
+        }
+
+        function ensureBatchSelectionDefaults() {
+            const reg = registeredSlots();
+            if (!batchSelectedSlots.size && reg.length) {
+                reg.forEach(s => batchSelectedSlots.add(s));
+                saveBatchSelection();
+            }
+            batchSelectedSlots.forEach(s => {
+                if (!slotToDevice[s]) batchSelectedSlots.delete(s);
+            });
+        }
+
+        function updateBatchSlotCount() {
+            const el = document.getElementById('batch-slot-count');
+            if (!el) return;
+            const n = batchSelectedSlots.size;
+            el.textContent = n === 1 ? '1 phone selected' : `${n} phones selected`;
+        }
+
+        function toggleBatchSlot(slot, checked) {
+            if (!slotToDevice[slot]) return;
+            if (checked) batchSelectedSlots.add(slot);
+            else batchSelectedSlots.delete(slot);
+            saveBatchSelection();
+        }
+
+        function selectAllBatchSlots() {
+            registeredSlots().forEach(s => batchSelectedSlots.add(s));
+            saveBatchSelection();
+            renderBatchSlotPicker();
+        }
+
+        function clearBatchSlots() {
+            batchSelectedSlots.clear();
+            saveBatchSelection();
+            renderBatchSlotPicker();
+        }
+
+        function renderBatchSlotPicker() {
+            const picker = document.getElementById('batch-slot-picker');
+            if (!picker) return;
+            ensureBatchSelectionDefaults();
+            const items = [];
+            for (let i = 1; i <= FARM_SLOTS; i++) {
+                const key = String(i);
+                const hasDevice = Boolean(slotToDevice[key]);
+                const checked = hasDevice && batchSelectedSlots.has(key);
+                items.push(`
+                <label class="batch-slot-item ${hasDevice ? '' : 'empty'}">
+                    <input type="checkbox" ${hasDevice ? '' : 'disabled'}
+                           ${checked ? 'checked' : ''}
+                           onchange="toggleBatchSlot('${key}', this.checked)">
+                    <span>${key}</span>
+                </label>`);
+            }
+            picker.innerHTML = items.join('');
+            updateBatchSlotCount();
+        }
+
+        function setBatchPickerEnabled(enabled) {
+            document.querySelectorAll('#batch-slot-picker .batch-slot-item').forEach(label => {
+                const cb = label.querySelector('input');
+                if (!cb) return;
+                cb.disabled = label.classList.contains('empty') || !enabled;
+            });
+            document.querySelectorAll('.batch-slot-toolbar .link-btn').forEach(btn => {
+                btn.disabled = !enabled;
+                btn.style.opacity = enabled ? '1' : '0.45';
+            });
+        }
+
+        function connectWS() {
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${proto}//${location.host}/ws`);
+            const liveEl = document.getElementById('live-indicator');
+            ws.onopen = () => {
+                document.getElementById('connection-status').textContent = 'Live';
+                liveEl.classList.remove('off');
+            };
+            ws.onclose = () => {
+                document.getElementById('connection-status').textContent = 'Reconnecting';
+                liveEl.classList.add('off');
+                setTimeout(connectWS, 3000);
+            };
+            ws.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                if (msg.event === 'activity' && !activityPaused) {
+                    prependActivity(msg.data);
+                }
+                if (['workflow_started', 'state_changed', 'action_completed', 'action_failed',
+                     'popup_detected', 'device_disconnected', 'device_connected',
+                     'pipeline_started', 'pipeline_paused', 'pipeline_resumed',
+                     'pipeline_stopped', 'pipeline_completed', 'pipeline_failed',
+                     'batch_started', 'batch_connecting', 'batch_running',
+                     'batch_disconnecting', 'batch_completed', 'batch_failed', 'batch_stopped'].includes(msg.event)) {
+                    refreshFarmDevices({ quiet: true });
+                    if (msg.event.startsWith('batch_')) {
+                        updateBatchUI(msg.data || {});
+                    }
+                    if (deviceId) updateDeviceMeta();
+                }
+            };
+        }
+
+        async function api(path, opts = {}) {
+            const res = await fetch(`/api${path}`, opts);
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error(text || res.statusText);
+            }
+            return res.json();
+        }
+
+        function enc(id) { return encodeURIComponent(id); }
+
+        function showBanner(msg) {
+            const el = document.getElementById('page-banner');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+
+        function hideBanner() {
+            document.getElementById('page-banner').style.display = 'none';
+        }
+
+        function deviceSlot(device) {
+            const slot = String(device.user_name || '').trim();
+            if (slot) return slot;
+            const m = (device.display_label || '').match(/Phone\s+(\d+)/i);
+            return m ? m[1] : '';
+        }
+
+        function updateFarmHeaderStats() {
+            const online = farmDevices.filter(d => d.connected).length;
+            document.getElementById('farm-online-count').textContent = `${online} / ${FARM_SLOTS}`;
+        }
+
+        function renderFarmGrid() {
+            const grid = document.getElementById('farm-grid');
+            const chips = [];
+            for (let i = 1; i <= FARM_SLOTS; i++) {
+                const key = String(i);
+                const d = slotToDevice[key];
+                const selected = selectedSlot === key;
+                const online = Boolean(d && d.connected);
+                const pipe = d && d.pipeline;
+                let pipeHint = '';
+                if (pipe && pipe.status === 'running') {
+                    pipeHint = `<span class="chip-pipe">${pipe.step}/${pipe.total_steps}</span>`;
+                } else if (pipe && pipe.status === 'paused') {
+                    pipeHint = '<span class="chip-pipe">||</span>';
+                }
+                const state = d ? (online ? d.current_state : 'OFF') : 'empty';
+                const profile = d?.account_profile || slotProfiles[`slot:${key}`] || null;
+                const handle = profile?.tiktok_handle || '';
+                const classes = [
+                    'device-chip',
+                    selected ? 'selected' : '',
+                    d ? (online ? '' : 'offline') : 'empty',
+                    pipe && pipe.status === 'running' ? 'running' : '',
+                ].filter(Boolean).join(' ');
+                chips.push(`
+                <div class="${classes}" data-slot="${key}" onclick="selectSlot('${key}')"
+                     title="${d ? escapeHtml(d.display_label || ('Phone ' + key)) : 'Slot ' + key + ' — empty'}">
+                    <span class="chip-num">${key}</span>
+                    ${accountSticker(profile)}
+                    <span class="status-dot ${online ? 'online' : 'offline'}"></span>
+                    ${pipeHint}
+                    ${handle ? `<span class="chip-account">${escapeHtml(handle)}</span>` : ''}
+                    <span class="badge ${state === 'empty' ? 'empty' : state}">${state === 'empty' ? '—' : state}</span>
+                </div>`);
+            }
+            grid.innerHTML = chips.join('');
+        }
+
+        async function refreshFarmDevices(opts = {}) {
+            try {
+                await loadSlotProfiles();
+                farmDevices = await api(`/devices?brand=${enc(BRAND_ID)}`);
+                slotToDevice = {};
+                for (const d of farmDevices) {
+                    const slot = deviceSlot(d);
+                    if (slot && !slotToDevice[slot]) slotToDevice[slot] = d;
+                }
+                updateFarmHeaderStats();
+                renderFarmGrid();
+                renderBatchSlotPicker();
+                if (selectedSlot) {
+                    const current = slotToDevice[selectedSlot];
+                    if (current && current.device_id === deviceId) updateDeviceUI(current);
+                }
+            } catch (err) {
+                if (!opts.quiet) showBanner('Failed to load devices: ' + err.message);
+            }
+        }
+
+        function firstOnlineSlot() {
+            for (let i = 1; i <= FARM_SLOTS; i++) {
+                const d = slotToDevice[String(i)];
+                if (d && d.connected) return String(i);
+            }
+            for (let i = 1; i <= FARM_SLOTS; i++) {
+                if (slotToDevice[String(i)]) return String(i);
+            }
+            return '1';
+        }
+
+        async function selectSlot(slot) {
+            selectedSlot = slot;
+            localStorage.setItem('farmSelectedSlot', slot);
+            document.getElementById('farm-selected-hint').textContent = `Slot ${slot} selected`;
+            renderFarmGrid();
+            const d = slotToDevice[slot];
+            if (!d) {
+                deviceId = null;
+                document.getElementById('phone-title').textContent = `Phone ${slot}`;
+                document.getElementById('phone-connected').textContent = 'Not in iMouse';
+                document.getElementById('conn-dot').className = 'status-dot offline';
+                const stateEl = document.getElementById('phone-state');
+                stateEl.textContent = '—';
+                stateEl.className = 'badge DISCONNECTED';
+                document.getElementById('meta-workflow').textContent = '—';
+                document.getElementById('meta-action').textContent = '—';
+                document.getElementById('meta-errors').textContent = '0';
+                document.getElementById('meta-seen').textContent = '—';
+                applyAccountProfileToForm(slotProfiles[`slot:${slot}`] || {});
+                showBanner(`Phone ${slot} not found. Set slot ${slot} in iMouseXP.`);
+                return;
+            }
+            hideBanner();
+            deviceId = d.device_id;
+            updateDeviceUI(d);
+            await loadPostTexts();
+            await updateDeviceMeta();
+            await refreshActivity();
+        }
+
+        function formatTime(iso) {
+            if (!iso) return '—';
+            const d = new Date(iso);
+            if (isNaN(d)) return iso.slice(11, 19) || iso;
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function levelClass(level) { return `lvl-${level || 'info'}`; }
+        function msgClass(level) {
+            if (level === 'error') return 'error-text';
+            if (level === 'warn') return 'warn-text';
+            return '';
+        }
+
+        function activityMatchesFilters(entry) {
+            const lvl = document.getElementById('filter-level').value;
+            const cat = document.getElementById('filter-category').value;
+            if (lvl && entry.level !== lvl) return false;
+            if (cat && entry.category !== cat) return false;
+            return true;
+        }
+
+        function renderActivityFeed() {
+            const feed = document.getElementById('activity-feed');
+            const filtered = activityEntries.filter(activityMatchesFilters);
+            if (!filtered.length) {
+                feed.innerHTML = '<div class="activity-empty">No activity yet</div>';
+                return;
+            }
+            feed.innerHTML = filtered.map(entry => {
+                const hasDetails = entry.details && Object.keys(entry.details).length > 0;
+                const detailsJson = hasDetails ? JSON.stringify(entry.details, null, 2) : '';
+                return `
+                <div class="activity-row ${hasDetails ? 'clickable' : ''}" data-id="${entry.id}"
+                     ${hasDetails ? `onclick="toggleDetails(${entry.id})"` : ''}>
+                    <span class="ts">${formatTime(entry.created_at)}</span>
+                    <span class="badge ${levelClass(entry.level)}">${entry.level || 'info'}</span>
+                    <span class="badge cat-badge">${entry.category || '—'}</span>
+                    <span class="msg ${msgClass(entry.level)}">${escapeHtml(entry.message)}</span>
+                    ${hasDetails ? `<pre class="activity-details" id="details-${entry.id}">${escapeHtml(detailsJson)}</pre>` : ''}
+                </div>`;
+            }).join('');
+            if (activityAutoScroll) feed.scrollTop = 0;
+        }
+
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text || '';
+            return d.innerHTML;
+        }
+
+        function toggleDetails(id) {
+            document.querySelector(`.activity-row[data-id="${id}"]`)?.classList.toggle('expanded');
+        }
+
+        function prependActivity(entry) {
+            if (activityEntries.some(e => e.id === entry.id)) return;
+            activityEntries.unshift(entry);
+            if (activityEntries.length > 300) activityEntries.length = 300;
+            renderActivityFeed();
+        }
+
+        async function refreshActivity() {
+            try {
+                const lvl = document.getElementById('filter-level').value;
+                const cat = document.getElementById('filter-category').value;
+                let q = deviceId
+                    ? `/activity?limit=150&device_id=${enc(deviceId)}`
+                    : '/activity?limit=150';
+                if (lvl) q += `&level=${lvl}`;
+                if (cat) q += `&category=${cat}`;
+                activityEntries = await api(q);
+                renderActivityFeed();
+            } catch (err) {
+                document.getElementById('activity-feed').innerHTML =
+                    `<div class="activity-empty">Activity unavailable (${escapeHtml(err.message)})</div>`;
+            }
+        }
+
+        function toggleAutoscroll() {
+            activityAutoScroll = !activityAutoScroll;
+            document.getElementById('btn-autoscroll').classList.toggle('active', activityAutoScroll);
+        }
+
+        function togglePause() {
+            activityPaused = !activityPaused;
+            const btn = document.getElementById('btn-pause');
+            btn.textContent = activityPaused ? 'Resume live' : 'Pause live';
+            btn.classList.toggle('active', activityPaused);
+            if (!activityPaused) refreshActivity();
+        }
+
+        ['filter-level', 'filter-category'].forEach(id => {
+            document.getElementById(id).addEventListener('change', refreshActivity);
+        });
+
+        function updateDeviceUI(device) {
+            document.getElementById('phone-title').textContent =
+                device.display_label || `Phone ${selectedSlot || device.user_name || '?'}`;
+            document.getElementById('conn-dot').className =
+                `status-dot ${device.connected ? 'online' : 'offline'}`;
+            document.getElementById('phone-connected').textContent =
+                device.connected ? 'Connected' : 'Disconnected';
+            const stateEl = document.getElementById('phone-state');
+            stateEl.textContent = device.current_state;
+            stateEl.className = `badge ${device.current_state}`;
+            let wfLabel = device.workflow_name || '—';
+            if (device.workflow_paused) wfLabel += ' (paused)';
+            if (device.pipeline?.status === 'running') {
+                wfLabel = `${device.pipeline.step}/${device.pipeline.total_steps}: ${device.pipeline.current_workflow || wfLabel}`;
+            } else if (device.pipeline?.status === 'paused') {
+                wfLabel = `Paused · ${device.pipeline.current_workflow || '—'}`;
+            }
+            document.getElementById('meta-workflow').textContent = wfLabel;
+            document.getElementById('meta-action').textContent = device.last_action || '—';
+            document.getElementById('meta-errors').textContent = device.error_count || 0;
+            document.getElementById('meta-seen').textContent =
+                device.last_seen_at ? formatTime(device.last_seen_at) : '—';
+            if (device.account_profile) {
+                applyAccountProfileToForm(device.account_profile);
+            }
+            const btn = document.getElementById('btn-connect');
+            btn.textContent = device.connected ? 'Reconnect' : 'Connect AirPlay';
+            btn.className = `btn btn-sm ${device.connected ? 'btn-ghost' : 'btn-connect'}`;
+            updatePipelineUI(device);
+        }
+
+        function updatePipelineUI(device) {
+            const statusEl = document.getElementById('pipeline-status');
+            const pipe = device.pipeline;
+            const debugCb = document.getElementById('debug-skip-post');
+            if (typeof device.debug_skip_post === 'boolean') debugCb.checked = device.debug_skip_post;
+            const running = pipe && pipe.status === 'running';
+            const paused = pipe && pipe.status === 'paused';
+            if (!pipe || pipe.status === 'completed') statusEl.textContent = 'Idle';
+            else if (running) statusEl.textContent = `Step ${pipe.step}/${pipe.total_steps}`;
+            else if (paused) statusEl.textContent = 'Paused';
+            else statusEl.textContent = pipe.status || 'Idle';
+            document.getElementById('btn-pipeline-start').disabled = running || paused;
+            document.getElementById('btn-pipeline-pause').disabled = !running;
+            document.getElementById('btn-pipeline-resume').disabled = !paused;
+        }
+
+        async function saveDebugSkipPost() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/settings`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ debug_skip_post: document.getElementById('debug-skip-post').checked }),
+                });
+                refreshActivity();
+            } catch (err) {
+                alert(`Failed to save: ${err.message}`);
+            }
+        }
+
+        async function flushPostTextSaves() {
+            if (!deviceId) return;
+            const tasks = [];
+            document.querySelectorAll('#post-texts textarea[data-post]').forEach(el => {
+                const key = `${el.dataset.post}-${el.dataset.field}`;
+                if (postTextSaveTimers[key]) {
+                    clearTimeout(postTextSaveTimers[key]);
+                    delete postTextSaveTimers[key];
+                }
+                tasks.push(api(`/devices/${enc(deviceId)}/post-texts/${el.dataset.post}/${el.dataset.field}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: el.value }),
+                }));
+            });
+            if (tasks.length) await Promise.all(tasks);
+        }
+
+        function getSelectedFromPost(groupName) {
+            const el = document.querySelector(`input[name="${groupName}"]:checked`);
+            if (!el || el.value === '') return null;
+            const n = parseInt(el.value, 10);
+            return (n >= 1 && n <= 3) ? n : null;
+        }
+
+        function validatePostTexts(fromPost = 1) {
+            const start = fromPost == null ? 1 : fromPost;
+            const missing = [];
+            for (let post = start; post <= 3; post++) {
+                if (!document.getElementById(`onscreen-${post}`)?.value.trim()) {
+                    missing.push(`Post ${post}: onscreen text is empty`);
+                }
+                if (!document.getElementById(`final-${post}`)?.value.trim()) {
+                    missing.push(`Post ${post}: final caption is empty`);
+                }
+            }
+            return missing;
+        }
+
+        async function startPipeline() {
+            if (!deviceId) return;
+            const fromPost = getSelectedFromPost('pipeline-from-post');
+            const checkFrom = fromPost == null ? 1 : fromPost;
+            const missing = validatePostTexts(checkFrom);
+            if (missing.length) {
+                const range = checkFrom === 1 ? '1–3' : `${checkFrom}–3`;
+                alert(`Fill captions for posts ${range}:\n\n${missing.join('\n')}`);
+                return;
+            }
+            try {
+                await flushPostTextSaves();
+                await api(`/devices/${enc(deviceId)}/pipeline/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ from_post: fromPost, brand: BRAND_ID }),
+                });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) { alert(`Start failed: ${err.message}`); }
+        }
+
+        async function pausePipeline() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/pipeline/pause`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) { alert(`Pause failed: ${err.message}`); }
+        }
+
+        async function resumePipeline() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/pipeline/resume`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) { alert(`Resume failed: ${err.message}`); }
+        }
+
+        async function stopPipeline() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/pipeline/stop`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) { alert(`Kill failed: ${err.message}`); }
+        }
+
+        async function updateDeviceMeta() {
+            if (!deviceId) return;
+            try {
+                updateDeviceUI(await api(`/devices/${enc(deviceId)}`));
+            } catch (_) {}
+        }
+
+        async function connectDevice() {
+            if (!deviceId) return;
+            const btn = document.getElementById('btn-connect');
+            btn.disabled = true;
+            btn.textContent = 'Connecting…';
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/connect`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                if (!res.connected) alert('AirPlay connect failed — check iMouseXP.');
+            } catch (err) {
+                alert(`Connect failed: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+                await updateDeviceMeta();
+            }
+        }
+
+        async function disconnectDevice() {
+            if (!deviceId) return;
+            const btn = document.getElementById('btn-disconnect');
+            btn.disabled = true;
+            try {
+                await api(`/devices/${enc(deviceId)}/disconnect`, { method: 'POST' });
+                await refreshFarmDevices({ quiet: true });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) {
+                alert(`Disconnect failed: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function captureScreen() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/screenshot`, { method: 'POST' });
+                refreshActivity();
+            } catch (err) {
+                alert(`Screenshot failed: ${err.message}`);
+            }
+        }
+
+        async function startWorkflow() {
+            if (!deviceId) return;
+            try {
+                await api('/workflows/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        workflow_name: document.getElementById('workflow-select').value || 'tiktok_prep',
+                        device_id: deviceId,
+                    }),
+                });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) { alert(`Start failed: ${err.message}`); }
+        }
+
+        async function stopWorkflow() {
+            if (!deviceId) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/workflows/stop`, { method: 'POST' });
+                await updateDeviceMeta();
+                refreshActivity();
+            } catch (err) { alert(`Kill failed: ${err.message}`); }
+        }
+
+        let debugTestRunning = false;
+        let debugTestAbort = null;
+
+        async function killDebugTest() {
+            if (!deviceId) return;
+            const killBtn = document.getElementById('btn-debug-kill');
+            const runBtn = document.getElementById('btn-debug-run');
+            killBtn.disabled = true;
+            if (debugTestAbort) {
+                debugTestAbort.abort();
+            }
+            try {
+                await api(`/devices/${enc(deviceId)}/pipeline/stop`, { method: 'POST' });
+                refreshActivity();
+            } catch (err) {
+                alert(`Kill failed: ${err.message}`);
+            } finally {
+                debugTestRunning = false;
+                debugTestAbort = null;
+                runBtn.disabled = false;
+                runBtn.textContent = 'Run test';
+                killBtn.disabled = true;
+            }
+        }
+
+        async function runDebugTest() {
+            if (debugTestRunning) return;
+            if (!deviceId) {
+                const hint = selectedSlot
+                    ? `Phone ${selectedSlot} is not connected — use Connect AirPlay, then run the test.`
+                    : 'Select a device slot first.';
+                showBanner(hint);
+                return;
+            }
+            const select = document.getElementById('debug-test-select');
+            const testId = select?.value;
+            if (!testId) {
+                showBanner('Choose a debug test from the dropdown.');
+                return;
+            }
+            const btn = document.getElementById('btn-debug-run');
+            const killBtn = document.getElementById('btn-debug-kill');
+            const controller = new AbortController();
+            debugTestAbort = controller;
+            const watchdog = setTimeout(() => controller.abort(), 10 * 60 * 1000);
+            debugTestRunning = true;
+            btn.disabled = true;
+            killBtn.disabled = false;
+            btn.textContent = 'Running…';
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/debug/${enc(testId)}?brand=${enc(BRAND_ID)}`, {
+                    method: 'POST',
+                    signal: controller.signal,
+                });
+                refreshActivity();
+                await refreshFarmDevices({ quiet: true });
+                if (res.success) {
+                    showBanner(res.message || 'Test completed');
+                } else {
+                    alert(res.message || 'Test failed');
+                }
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    let msg = err.message || 'Test failed';
+                    try {
+                        const parsed = JSON.parse(msg);
+                        if (parsed.detail) msg = String(parsed.detail);
+                    } catch (_) {}
+                    alert(msg);
+                }
+            } finally {
+                clearTimeout(watchdog);
+                debugTestRunning = false;
+                debugTestAbort = null;
+                btn.disabled = false;
+                btn.textContent = 'Run test';
+                killBtn.disabled = true;
+            }
+        }
+
+        async function waitForServerBack() {
+            const btn = document.getElementById('btn-restart-server');
+            btn.disabled = true;
+            btn.textContent = 'Waiting…';
+            for (let i = 0; i < 45; i++) {
+                await new Promise(r => setTimeout(r, 2000));
+                try {
+                    if ((await fetch('/api/health')).ok) {
+                        btn.disabled = false;
+                        btn.textContent = 'Restart server';
+                        await loadDebugTests();
+                        await loadWorkflows();
+                        if (deviceId) {
+                            await updateDeviceMeta();
+                            refreshActivity();
+                        }
+                        connectWS();
+                        showBanner('Server restarted');
+                        return;
+                    }
+                } catch (_) {}
+            }
+            btn.disabled = false;
+            btn.textContent = 'Restart server';
+            alert('Server did not come back in time.');
+        }
+
+        async function restartServer() {
+            if (!confirm('Restart the farm server?')) return;
+            const btn = document.getElementById('btn-restart-server');
+            btn.disabled = true;
+            btn.textContent = 'Restarting…';
+            try { await api('/server/restart', { method: 'POST' }); } catch (_) {}
+            waitForServerBack();
+        }
+
+        async function loadDebugTests() {
+            try {
+                const tests = await api(`/debug/tests?group=${encodeURIComponent(debugTab)}`);
+                const select = document.getElementById('debug-test-select');
+                if (!tests.length) {
+                    select.innerHTML = `<option value="">No ${debugTab} tests</option>`;
+                    return;
+                }
+                select.innerHTML = tests.map(t =>
+                    `<option value="${escapeHtml(t.id)}">${escapeHtml(t.label)}</option>`
+                ).join('');
+                const savedTest = localStorage.getItem(DEBUG_STORAGE.test);
+                if (savedTest && [...select.options].some(o => o.value === savedTest)) {
+                    select.value = savedTest;
+                }
+            } catch (err) {
+                document.getElementById('debug-test-select').innerHTML =
+                    '<option value="">Unavailable</option>';
+            }
+        }
+
+        function restoreDebugPanel() {
+            const panel = document.getElementById('debug-panel');
+            if (panel && localStorage.getItem(DEBUG_STORAGE.open) === '1') {
+                panel.open = true;
+            }
+            const savedTab = localStorage.getItem(DEBUG_STORAGE.tab);
+            const validTabs = ['prep', 'account_switch', 'post', 'end'];
+            if (savedTab && validTabs.includes(savedTab)) {
+                debugTab = savedTab;
+                validTabs.forEach(t => {
+                    const btn = document.getElementById(`debug-tab-${t}`);
+                    if (btn) btn.classList.toggle('active', t === savedTab);
+                });
+            }
+        }
+
+        function bindDebugPanel() {
+            const panel = document.getElementById('debug-panel');
+            if (panel && panel.dataset.bound !== '1') {
+                panel.dataset.bound = '1';
+                panel.addEventListener('toggle', () => {
+                    localStorage.setItem(DEBUG_STORAGE.open, panel.open ? '1' : '0');
+                });
+            }
+            const select = document.getElementById('debug-test-select');
+            if (select && select.dataset.bound !== '1') {
+                select.dataset.bound = '1';
+                select.addEventListener('change', () => {
+                    const id = select.value;
+                    if (id) localStorage.setItem(DEBUG_STORAGE.test, id);
+                });
+            }
+        }
+
+        function setDebugTab(tab) {
+            debugTab = tab;
+            localStorage.setItem(DEBUG_STORAGE.tab, tab);
+            ['prep', 'account_switch', 'post', 'end'].forEach(t => {
+                document.getElementById(`debug-tab-${t}`).classList.toggle('active', t === tab);
+            });
+            loadDebugTests();
+        }
+
+        async function loadCaptionAiSettings() {
+            try {
+                const settings = await api('/caption-ai/settings');
+                const promptEl = document.getElementById('ai-prompt');
+                const tagsEl = document.getElementById('ai-hashtags');
+                if (promptEl && settings.prompt) promptEl.value = settings.prompt;
+                if (tagsEl && settings.hashtags) tagsEl.value = settings.hashtags;
+            } catch (_) {}
+        }
+
+        let aiSettingsSaveTimer = null;
+        function scheduleCaptionAiSettingsSave() {
+            if (aiSettingsSaveTimer) clearTimeout(aiSettingsSaveTimer);
+            aiSettingsSaveTimer = setTimeout(async () => {
+                try {
+                    await api('/caption-ai/settings', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            prompt: document.getElementById('ai-prompt')?.value || '',
+                            hashtags: document.getElementById('ai-hashtags')?.value || '',
+                        }),
+                    });
+                } catch (_) {}
+            }, 500);
+        }
+
+        function bindCaptionAiInputs() {
+            document.getElementById('ai-prompt')?.addEventListener('input', scheduleCaptionAiSettingsSave);
+            document.getElementById('ai-hashtags')?.addEventListener('input', scheduleCaptionAiSettingsSave);
+        }
+
+        async function flushCaptionAiSettings() {
+            if (aiSettingsSaveTimer) {
+                clearTimeout(aiSettingsSaveTimer);
+                aiSettingsSaveTimer = null;
+            }
+            try {
+                await api('/caption-ai/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: document.getElementById('ai-prompt')?.value || '',
+                        hashtags: document.getElementById('ai-hashtags')?.value || '',
+                    }),
+                });
+            } catch (_) {}
+        }
+
+        function updateBatchUI(status) {
+            const s = status.status || 'idle';
+            const parts = [s];
+            if (status.batch_index && status.batch_total) {
+                parts.push(`${status.batch_index}/${status.batch_total}`);
+            }
+            if (status.message) parts.push(status.message);
+            const text = parts.join(' · ');
+            document.getElementById('batch-status').textContent = text;
+            document.getElementById('header-batch-status').textContent =
+                s === 'idle' ? 'Idle' : text.slice(0, 48);
+            const running = ['connecting', 'running', 'disconnecting'].includes(s);
+            document.getElementById('btn-batch-start').disabled = running;
+            document.getElementById('btn-batch-stop').disabled = !running;
+            setBatchPickerEnabled(!running);
+        }
+
+        async function loadBatchStatus() {
+            try { updateBatchUI(await api('/batch/status')); } catch (_) {}
+        }
+
+        async function startFarmBatch() {
+            ensureBatchSelectionDefaults();
+            const slots = [...batchSelectedSlots].map(s => parseInt(s, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
+            if (!slots.length) {
+                alert('Select at least one phone for the batch run.');
+                return;
+            }
+            const label = slots.length === 1 ? '1 phone' : `${slots.length} phones`;
+            const fromPost = getSelectedFromPost('batch-from-post');
+            const postLabel = fromPost == null
+                ? 'full pipeline (prep → posts 1–3 → end)'
+                : `posts ${fromPost}→3 + end (skip prep)`;
+            if (!confirm(`Run ${postLabel} on ${label}, one at a time (slots ${slots.join(', ')})?`)) return;
+            try {
+                await flushPostTextSaves();
+                await flushCaptionAiSettings();
+                const res = await api('/batch/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ slots, from_post: fromPost, brand: BRAND_ID }),
+                });
+                updateBatchUI(res.status || {});
+                refreshFarmDevices({ quiet: true });
+                refreshActivity();
+            } catch (err) { alert(`Batch failed: ${err.message}`); }
+        }
+
+        async function stopFarmBatch() {
+            try {
+                const res = await api('/batch/stop', { method: 'POST' });
+                updateBatchUI(res.status || {});
+                refreshFarmDevices({ quiet: true });
+            } catch (err) { alert(`Kill failed: ${err.message}`); }
+        }
+
+        async function generateAiCaptions(allPhones = true) {
+            if (!allPhones && !deviceId) {
+                showBanner('Select a device first');
+                return;
+            }
+            const statusEl = document.getElementById('ai-caption-status');
+            const btnAll = document.getElementById('btn-ai-generate');
+            const btnOne = document.getElementById('btn-ai-generate-device');
+            const body = {
+                prompt: document.getElementById('ai-prompt')?.value || '',
+                hashtags: document.getElementById('ai-hashtags')?.value || '',
+                onscreen_template: document.getElementById('onscreen-template')?.value || null,
+            };
+            if (statusEl) statusEl.textContent = 'Generating…';
+            if (btnAll) btnAll.disabled = true;
+            if (btnOne) btnOne.disabled = true;
+            try {
+                await flushCaptionAiSettings();
+                let res;
+                if (allPhones) {
+                    res = await api('/caption-ai/generate-all', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                } else {
+                    res = await api(`/devices/${enc(deviceId)}/caption-ai/generate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                }
+                if (deviceId) await loadPostTexts();
+                if (allPhones) {
+                    const failed = res.failed || 0;
+                    const ok = res.generated || 0;
+                    if (statusEl) {
+                        statusEl.textContent = failed ? `${ok} ok, ${failed} failed` : `${ok} phones generated`;
+                        statusEl.className = failed ? 'ai-caption-status error' : 'ai-caption-status success';
+                    }
+                    if (failed && res.errors?.length) {
+                        showBanner(res.errors.map(e => `Phone ${e.slot}: ${e.error}`).join(' · '));
+                    }
+                } else if (statusEl) {
+                    statusEl.textContent = `Generated ${(res.posts || []).length} captions`;
+                    statusEl.className = 'ai-caption-status success';
+                }
+            } catch (err) {
+                if (statusEl) {
+                    statusEl.textContent = err.message;
+                    statusEl.className = 'ai-caption-status error';
+                }
+            } finally {
+                if (btnAll) btnAll.disabled = false;
+                if (btnOne) btnOne.disabled = false;
+            }
+        }
+
+        async function applyOnscreenTemplate() {
+            const templateKey = document.getElementById('onscreen-template')?.value || '';
+            localStorage.setItem('onscreenTemplate', templateKey);
+            if (!templateKey || !deviceId) return;
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/onscreen-template/apply`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ template_key: templateKey }),
+                });
+                for (const p of res.posts || []) {
+                    const on = document.getElementById(`onscreen-${p.post}`);
+                    if (on) on.value = p.onscreen || '';
+                }
+                hideBanner();
+            } catch (err) {
+                showBanner(err.message);
+            }
+        }
+
+        async function clearAllPostTexts() {
+            if (!deviceId) { showBanner('Select a device first'); return; }
+            if (!confirm('Clear all captions for this device?')) return;
+            try {
+                await api(`/devices/${enc(deviceId)}/post-texts/clear`, { method: 'POST' });
+                for (let i = 1; i <= 3; i++) {
+                    const on = document.getElementById(`onscreen-${i}`);
+                    const fin = document.getElementById(`final-${i}`);
+                    if (on) on.value = '';
+                    if (fin) fin.value = '';
+                }
+            } catch (err) { showBanner(err.message); }
+        }
+
+        async function loadPostTexts() {
+            if (!deviceId) return;
+            try {
+                const res = await api(`/devices/${enc(deviceId)}/post-texts`);
+                for (const p of res.posts || []) {
+                    const title = document.querySelector(`.post-group[data-post="${p.post}"] .post-group-title`);
+                    const file = p.media_file || p.placeholder || '';
+                    if (title) title.textContent = file ? `Post ${p.post} · ${file}` : `Post ${p.post}`;
+                    const on = document.getElementById(`onscreen-${p.post}`);
+                    const fin = document.getElementById(`final-${p.post}`);
+                    if (on) on.value = p.onscreen || '';
+                    if (fin) fin.value = p.final || '';
+                }
+            } catch (_) {}
+        }
+
+        function schedulePostTextSave(postNum, field) {
+            const key = `${postNum}-${field}`;
+            if (postTextSaveTimers[key]) clearTimeout(postTextSaveTimers[key]);
+            postTextSaveTimers[key] = setTimeout(async () => {
+                if (!deviceId) return;
+                const el = document.getElementById(`${field}-${postNum}`);
+                if (!el) return;
+                try {
+                    await api(`/devices/${enc(deviceId)}/post-texts/${postNum}/${field}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: el.value }),
+                    });
+                } catch (_) {}
+            }, 400);
+        }
+
+        function bindPostTextInputs() {
+            document.querySelectorAll('#post-texts textarea[data-post]').forEach(el => {
+                el.addEventListener('input', () => {
+                    schedulePostTextSave(el.dataset.post, el.dataset.field);
+                });
+            });
+        }
+
+        async function execAction(type) {
+            if (!deviceId) return;
+            await api(`/devices/${enc(deviceId)}/actions/execute`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action_type: type, params: {} }),
+            });
+            refreshActivity();
+        }
+
+        async function loadWorkflows() {
+            const workflows = await api('/workflows');
+            document.getElementById('workflow-select').innerHTML =
+                workflows.map(w => `<option value="${escapeHtml(w.name)}">${escapeHtml(w.name)}</option>`).join('');
+            const select = document.getElementById('workflow-select');
+            if ([...select.options].some(o => o.value === 'tiktok_post')) select.value = 'tiktok_post';
+        }
+
+        async function init() {
+            initBrandNav();
+            bindAccountHandleInput();
+            bindDebugPanel();
+            restoreDebugPanel();
+            connectWS();
+            loadBatchSelection();
+            bindPostTextInputs();
+            bindCaptionAiInputs();
+            const savedTemplate = localStorage.getItem('onscreenTemplate') || '';
+            const templateEl = document.getElementById('onscreen-template');
+            if (templateEl && savedTemplate && [...templateEl.options].some(o => o.value === savedTemplate)) {
+                templateEl.value = savedTemplate;
+            }
+            try {
+                await loadWorkflows();
+                await loadCaptionAiSettings();
+                await loadDebugTests();
+                await refreshSlideshowConfig();
+                await refreshFarmDevices();
+                const urlSlot = new URLSearchParams(location.search).get('slot');
+                const savedSlot = localStorage.getItem('farmSelectedSlot');
+                await selectSlot(urlSlot || savedSlot || firstOnlineSlot());
+            } catch (e) {
+                showBanner('Failed to initialize: ' + e.message);
+            }
+            setInterval(() => {
+                refreshFarmDevices({ quiet: true });
+                if (deviceId) updateDeviceMeta().catch(() => {});
+            }, 10000);
+            await loadBatchStatus();
+            window.addEventListener('beforeunload', () => {
+                flushPostTextSaves();
+                flushCaptionAiSettings();
+            });
+        }
+        init();
+    </script>
+</body>
+</html>

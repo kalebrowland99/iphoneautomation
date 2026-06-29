@@ -196,6 +196,20 @@ class TikTokNavigationConfig(BaseModel):
         return int(self.account_switcher_opener.y)
 
 
+class SlideshowConfig(BaseModel):
+    """Autoslideshow.vercel.app → gallery ingest → farm batch pipeline."""
+
+    enabled: bool = True
+    app_base_url: str = "https://autoslideshow.vercel.app"
+    farm_secret: str = ""
+    slideshows_per_slot: int = 3
+    use_playwright_runner: bool = True
+    automation_timeout_seconds: float = 3600.0
+    clear_slot_before_ingest: bool = True
+    auto_generate_captions: bool = True
+    default_onscreen_template: str = "america_sick"
+
+
 class BatchConfig(BaseModel):
     batch_size: int = 1
     cast_connect_max_attempts: int = 8
@@ -203,6 +217,7 @@ class BatchConfig(BaseModel):
     batch_device_timeout_seconds: float = 7200.0
     disconnect_on_complete: bool = True
     between_phones_pause_seconds: float = 2.0
+    chain_valcoin_after_labely: bool = True
 
 
 class LoggingConfig(BaseModel):
@@ -223,6 +238,7 @@ class AppConfig(BaseModel):
     device_groups: dict[str, DeviceGroupConfig] = Field(default_factory=dict)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
+    slideshow: SlideshowConfig = Field(default_factory=SlideshowConfig)
     batch: BatchConfig = Field(default_factory=BatchConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     workflows_directory: str = "config/workflows"

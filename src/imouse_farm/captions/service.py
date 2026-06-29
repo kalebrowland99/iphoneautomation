@@ -99,6 +99,60 @@ async def generate_captions_for_device(
     }
 
 
+def default_onscreen_template_for_brand(brand: str, template: str | None = None) -> str | None:
+    explicit = str(template or "").strip()
+    if explicit:
+        return explicit
+    if str(brand or "").strip().lower() == "labely":
+        return "america_sick"
+    return None
+
+
+async def generate_captions_for_devices(
+    config: AppConfig,
+    devices: list[Any],
+    *,
+    prompt: str | None = None,
+    hashtags: str | None = None,
+    onscreen_template: str | None = None,
+    brand: str = "labely",
+) -> dict[str, Any]:
+    """Generate AI captions for many farm phones (continues past individual failures)."""
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    template = default_onscreen_template_for_brand(brand, onscreen_template)
+
+    for device in devices:
+        try:
+            result = await generate_captions_for_device(
+                config,
+                device,
+                prompt=prompt,
+                hashtags=hashtags,
+                onscreen_template=template,
+            )
+            results.append(result)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "caption_generate_device_failed",
+                slot=str(device.user_name),
+                error=str(exc),
+            )
+            errors.append({
+                "slot": str(device.user_name),
+                "device_id": device.device_id,
+                "error": str(exc),
+            })
+
+    return {
+        "success": len(results) > 0,
+        "generated": len(results),
+        "failed": len(errors),
+        "results": results,
+        "errors": errors,
+    }
+
+
 def farm_devices_sorted(device_manager: Any) -> list[Any]:
     """Registered devices with a farm slot (user_name), sorted numerically."""
 

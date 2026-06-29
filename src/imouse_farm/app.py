@@ -30,6 +30,9 @@ from imouse_farm.post.account_profile_store import (
     mark_run_success,
 )
 from imouse_farm.post.post_caption_store import device_storage_key
+from imouse_farm.integrations.slideshow_jobs import SlideshowJobStore
+from imouse_farm.integrations.slideshow_orchestrator import SlideshowOrchestrator
+from imouse_farm.dashboard.slideshow_routes import farm_public_host
 from imouse_farm.workflows.pipeline import WorkflowPipeline
 
 logger = get_logger(__name__)
@@ -79,10 +82,22 @@ class IMouseFarmApp:
         )
         self.farm_batch = FarmBatchRunner(
             config.batch,
+            config,
             self.device_manager,
             self.workflow_pipeline,
             self.db,
             imouse_connect_delay=config.imouse.airplay_connect_delay_seconds,
+            auto_generate_captions=config.slideshow.auto_generate_captions,
+        )
+        self.slideshow_jobs = SlideshowJobStore()
+        self.slideshow_orchestrator = SlideshowOrchestrator(
+            config.slideshow,
+            config,
+            self.slideshow_jobs,
+            self.farm_batch,
+            self.device_manager,
+            farm_public_host(config.dashboard.host),
+            config.dashboard.port,
         )
         self._frozen_check_task: asyncio.Task[None] | None = None
         self._running = False
