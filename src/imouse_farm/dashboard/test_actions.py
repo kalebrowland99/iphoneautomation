@@ -48,6 +48,20 @@ from imouse_farm.post.post_caption_store import (
 )
 from imouse_farm.utils.gallery import list_media_files, phone_gallery_folder
 from imouse_farm.utils.logging import get_logger
+from imouse_farm.actions.vpn_shadowrocket import (
+    SHADOWROCKET_ICON_X,
+    SHADOWROCKET_ICON_Y,
+    VPN_TOGGLE_X,
+    VPN_TOGGLE_Y,
+)
+from imouse_farm.dashboard.flow_debug import (
+    FLOW_DEBUG_STEPS,
+    flow_step_letter,
+    resolve_flow_debug_test_id,
+)
+
+# Re-export for tests.
+FULL_FLOW_DEBUG_STEPS = FLOW_DEBUG_STEPS
 
 logger = get_logger(__name__)
 
@@ -77,7 +91,9 @@ DebugKind = Literal[
     "tiktok_popup_scan",
     "close_app",
     "kill_app",
+    "home",
     "account_switch_step",
+    "slideshow_generate",
 ]
 
 _POST_TEMPLATE_NAMES = frozenset({"plus", "aa", "continuearrow"})
@@ -126,6 +142,7 @@ _END_DEBUG_LIST_PRIORITY = (
 )
 
 _ACCOUNT_SWITCH_DEBUG_LIST_PRIORITY = (
+    "account-ensure-current",
     "account-ensure-full",
     "account-tap-profile-tab",
     "account-open-switcher",
@@ -167,7 +184,8 @@ SPOTLIGHT_SWIPE: dict[str, int | str] = {
 class DebugTest(TypedDict, total=False):
     label: str
     kind: DebugKind
-    group: str  # prep | post | end | account_switch
+    group: str  # prep | post | end | account_switch | slideshow
+    brand: str  # labely | valcoin — for slideshow_generate
     step: str
     detection: str
     texts: list[str]
@@ -199,6 +217,7 @@ class DebugTest(TypedDict, total=False):
     open_shadowrocket: bool
     expect_missing: bool
     apply_watcher: bool
+    skip_vpn_off: bool
 
 
 # Manual tests override auto-generated template entries with the same id.
@@ -210,14 +229,50 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "clear-album": {
-        "label": "Clear photo library",
+        "label": "Clear photo library (Labely prep — VPN stays off)",
         "kind": "album_clear",
         "group": "prep",
+        "skip_vpn_off": True,
         "offline_hint": OFFLINE_HINT,
     },
     "prep-kill-apps": {
         "label": "Prep: Force-quit apps (App btn, swipe up ×5)",
         "kind": "kill_app",
+        "group": "prep",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-tap-shadowrocket": {
+        "label": f"Prep: Tap Shadowrocket ({SHADOWROCKET_ICON_X}, {SHADOWROCKET_ICON_Y})",
+        "kind": "tap_xy",
+        "group": "prep",
+        "x": SHADOWROCKET_ICON_X,
+        "y": SHADOWROCKET_ICON_Y,
+        "hint": "Home screen first. Fixed icon coordinate.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-tap-vpn-on": {
+        "label": f"Prep: Tap VPN toggle ON ({VPN_TOGGLE_X}, {VPN_TOGGLE_Y})",
+        "kind": "tap_xy",
+        "group": "prep",
+        "x": VPN_TOGGLE_X,
+        "y": VPN_TOGGLE_Y,
+        "hint": "Open Shadowrocket first. Phones start VPN off; one tap turns on.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-swipe-unlock": {
+        "label": "Prep: Swipe unlock (200,500)→(200,200)",
+        "kind": "swipe",
+        "group": "prep",
+        "x1": 200,
+        "y1": 500,
+        "x2": 200,
+        "y2": 200,
+        "duration_ms": 300,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-home": {
+        "label": "Prep: Press home",
+        "kind": "home",
         "group": "prep",
         "offline_hint": OFFLINE_HINT,
     },
@@ -270,6 +325,31 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
     },
 }
 
+SLIDESHOW_DEBUG_TESTS: dict[str, DebugTest] = {
+    "slideshow-generate-labely": {
+        "label": "Generate Labely slideshow (1 video, ingest only)",
+        "kind": "slideshow_generate",
+        "group": "slideshow",
+        "brand": "labely",
+        "hint": "Opens autoslideshow for this phone slot; MP4s land in gallery/<slot>/.",
+        "offline_hint": "Uses Playwright on this PC — phone does not need AirPlay.",
+    },
+    "slideshow-generate-valcoin": {
+        "label": "Generate ValCoin slideshow (1 video, ingest only)",
+        "kind": "slideshow_generate",
+        "group": "slideshow",
+        "brand": "valcoin",
+        "hint": "ValCoin receipt-style slideshow for this slot; ingest only, no batch.",
+        "offline_hint": "Uses Playwright on this PC — phone does not need AirPlay.",
+    },
+    "slideshow-upload-gallery": {
+        "label": "Upload gallery files to phone",
+        "kind": "upload_gallery",
+        "group": "slideshow",
+        "offline_hint": OFFLINE_HINT,
+    },
+}
+
 TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
     "detect-tiktok-popups": {
         "label": "Scan TikTok / permission popups (detect only — no tap)",
@@ -284,6 +364,31 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "post",
         "apply_watcher": True,
         "hint": "Same as scan, but runs one permission-watcher cycle and taps if a known popup is found.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-tap-gallery-only": {
+        "label": "Post: Tap gallery (58,1035) ×2",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 58,
+        "y": 1035,
+        "tap_count": 2,
+        "tap_interval_seconds": 0.5,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-tap-next-only": {
+        "label": "Post: Tap Next (OCR, optional)",
+        "kind": "tap_ocr",
+        "group": "post",
+        "texts": ["Next", "NEXT"],
+        "optional": True,
+        "require_dark_text": True,
+        "max_text_luminance": 110,
+        "wait_timeout_seconds": 30,
+        "poll_interval_seconds": 1,
+        "threshold": 0.65,
+        "contain": True,
+        "hint": "After selecting gallery video; skips if Your Story is visible.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-gallery-recents": {
@@ -433,6 +538,27 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "post_num": 1,
         "offline_hint": OFFLINE_HINT,
     },
+    "post-type-caption-1": {
+        "label": "Post 1: Type onscreen text",
+        "kind": "type_caption",
+        "group": "post",
+        "post_num": 1,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-type-caption-2": {
+        "label": "Post 2: Type onscreen text",
+        "kind": "type_caption",
+        "group": "post",
+        "post_num": 2,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-type-caption-3": {
+        "label": "Post 3: Type onscreen text",
+        "kind": "type_caption",
+        "group": "post",
+        "post_num": 3,
+        "offline_hint": OFFLINE_HINT,
+    },
     "post-tap-border2-coord": {
         "label": "Post 1: Tap white background (303, 63) ×2 — after typing caption (post 1 only)",
         "kind": "tap_xy",
@@ -484,14 +610,14 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "post-drag-trim": {
-        "label": "Post: Drag trim (320,771)→(55,765), hold 0.85s — after text scrub",
+        "label": "Post: Drag trim (320,771)→(55,765), 1.05s — after text scrub",
         "kind": "drag",
         "group": "post",
         "x1": 320,
         "y1": 771,
         "x2": 55,
         "y2": 765,
-        "duration_ms": 850,
+        "duration_ms": 1050,
         "move_ms": 10,
         "hold_ms": 0,
         "offline_hint": OFFLINE_HINT,
@@ -509,6 +635,33 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "kind": "type_final_caption",
         "group": "post",
         "post_num": 1,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-type-final-caption-1": {
+        "label": "Post 1: Type final caption + hashtags",
+        "kind": "type_final_caption",
+        "group": "post",
+        "post_num": 1,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-type-final-caption-2": {
+        "label": "Post 2: Type final caption + hashtags",
+        "kind": "type_final_caption",
+        "group": "post",
+        "post_num": 2,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-type-final-caption-3": {
+        "label": "Post 3: Type final caption + hashtags",
+        "kind": "type_final_caption",
+        "group": "post",
+        "post_num": 3,
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-go-home": {
+        "label": "Post 3: Press home after publish (wait for upload in production)",
+        "kind": "home",
+        "group": "post",
         "offline_hint": OFFLINE_HINT,
     },
     "post-final-caption-prod-1": {
@@ -554,24 +707,35 @@ TIKTOK_END_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "end-tap-shadowrocket": {
-        "label": "End: Tap Shadowrocket icon — on home screen",
-        "kind": "tap",
+        "label": f"End: Tap Shadowrocket ({SHADOWROCKET_ICON_X}, {SHADOWROCKET_ICON_Y})",
+        "kind": "tap_xy",
         "group": "end",
-        "detection": "shadowrocket",
-        "hint": "Show the home screen with the Shadowrocket icon visible.",
+        "x": SHADOWROCKET_ICON_X,
+        "y": SHADOWROCKET_ICON_Y,
+        "hint": "Home screen first.",
         "offline_hint": OFFLINE_HINT,
     },
     "end-tap-vpntoggle": {
-        "label": "End: Tap VPN toggle — inside Shadowrocket (same as prep)",
-        "kind": "tap",
+        "label": f"End: Tap VPN toggle OFF ({VPN_TOGGLE_X}, {VPN_TOGGLE_Y})",
+        "kind": "tap_xy",
         "group": "end",
-        "detection": "vpntoggle",
-        "hint": "Open Shadowrocket first; taps the VPN switch (blue or gray template).",
+        "x": VPN_TOGGLE_X,
+        "y": VPN_TOGGLE_Y,
+        "hint": "Open Shadowrocket first; one tap turns VPN off after ValCoin posts.",
         "offline_hint": OFFLINE_HINT,
     },
 }
 
 TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
+    "account-ensure-current": {
+        "label": "Account: Ensure current brand @ (stay on same account)",
+        "kind": "account_switch_step",
+        "group": "account_switch",
+        "step": "ensure",
+        "toggle_to_opposite": False,
+        "hint": "Labely dashboard → confirms device is on Labely @. Skips only if already on that @.",
+        "offline_hint": OFFLINE_HINT,
+    },
     "account-ensure-full": {
         "label": "Account: Full switch (toggle to other brand @)",
         "kind": "account_switch_step",
@@ -640,6 +804,79 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "account_switch",
         "apply_watcher": True,
         "hint": "Runs one watcher cycle; swipes/taps if a known popup is found.",
+        "offline_hint": OFFLINE_HINT,
+    },
+}
+
+_VALCOIN_PREP_DEBUG_LIST_PRIORITY = (
+    "valcoin-prep-tap-shadowrocket",
+    "valcoin-prep-tap-vpn-off",
+    "valcoin-prep-clear-album",
+    "valcoin-prep-upload-gallery",
+    "valcoin-prep-tap-allow",
+    "valcoin-prep-tap-vpn-on",
+    "valcoin-prep-tap-tiktok",
+)
+
+TIKTOK_VALCOIN_PREP_DEBUG_TESTS: dict[str, DebugTest] = {
+    "valcoin-prep-tap-shadowrocket": {
+        "label": f"ValCoin prep: Tap Shadowrocket ({SHADOWROCKET_ICON_X}, {SHADOWROCKET_ICON_Y})",
+        "kind": "tap_xy",
+        "group": "valcoin_prep",
+        "x": SHADOWROCKET_ICON_X,
+        "y": SHADOWROCKET_ICON_Y,
+        "hint": "After Labely post 3. Home first — turns VPN off next step.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "valcoin-prep-tap-vpn-off": {
+        "label": f"ValCoin prep: Tap VPN OFF ({VPN_TOGGLE_X}, {VPN_TOGGLE_Y})",
+        "kind": "tap_xy",
+        "group": "valcoin_prep",
+        "x": VPN_TOGGLE_X,
+        "y": VPN_TOGGLE_Y,
+        "hint": "Inside Shadowrocket after Labely posts. One tap turns VPN off.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "valcoin-prep-clear-album": {
+        "label": "ValCoin prep: Clear photo library (VPN must be off)",
+        "kind": "album_clear",
+        "group": "valcoin_prep",
+        "skip_vpn_off": True,
+        "hint": "Run VPN-off steps first. Clears Labely videos before ValCoin upload.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "valcoin-prep-upload-gallery": {
+        "label": "ValCoin prep: Upload gallery/<slot>/valcoin/",
+        "kind": "upload_gallery",
+        "group": "valcoin_prep",
+        "brand": "valcoin",
+        "skip_vpn_off": True,
+        "hint": "VPN off. Uploads ValCoin MP4s from the valcoin subfolder.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "valcoin-prep-tap-allow": {
+        "label": "ValCoin prep: Tap Allow / Always Allow",
+        "kind": "tap_ocr",
+        "group": "valcoin_prep",
+        "texts": list(UPLOAD_PERMISSION_TEXTS),
+        "hint": "After ValCoin gallery upload if iOS asks for photo access.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "valcoin-prep-tap-vpn-on": {
+        "label": f"ValCoin prep: Tap VPN ON ({VPN_TOGGLE_X}, {VPN_TOGGLE_Y})",
+        "kind": "tap_xy",
+        "group": "valcoin_prep",
+        "x": VPN_TOGGLE_X,
+        "y": VPN_TOGGLE_Y,
+        "hint": "After ValCoin upload. One tap turns VPN on before TikTok.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "valcoin-prep-tap-tiktok": {
+        "label": "ValCoin prep: Tap TikTok icon",
+        "kind": "tap",
+        "group": "valcoin_prep",
+        "detection": "tiktok",
+        "hint": "Home screen — opens TikTok for ValCoin account switch + posts.",
         "offline_hint": OFFLINE_HINT,
     },
 }
@@ -773,6 +1010,8 @@ def get_debug_registry(workflows_dir: str = "config/workflows") -> dict[str, Deb
     registry.update(TIKTOK_POST_DEBUG_TESTS)
     registry.update(TIKTOK_END_DEBUG_TESTS)
     registry.update(TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS)
+    registry.update(TIKTOK_VALCOIN_PREP_DEBUG_TESTS)
+    registry.update(SLIDESHOW_DEBUG_TESTS)
     return registry
 
 
@@ -784,6 +1023,8 @@ _DEBUG_LIST_PRIORITY = (
     "prep-kill-apps",
     "clear-album",
     "list-album",
+    "prep-tap-shadowrocket",
+    "prep-tap-vpn-on",
     "detect-vpn-on",
     "detect-vpn-off",
     "open-photos-spotlight",
@@ -791,28 +1032,81 @@ _DEBUG_LIST_PRIORITY = (
     "tap-ocr-delete",
 )
 
+_SLIDESHOW_DEBUG_LIST_PRIORITY = (
+    "slideshow-generate-labely",
+    "slideshow-generate-valcoin",
+    "slideshow-upload-gallery",
+)
+
 
 def list_debug_tests(group: str | None = None) -> list[dict[str, str]]:
     registry = get_debug_registry()
-    if group == "post":
+    key = (group or "flow").strip().lower()
+    if key in ("flow", "full_flow"):
+        items: list[dict[str, str]] = []
+        for idx, (short, test_id) in enumerate(FLOW_DEBUG_STEPS):
+            spec = registry.get(test_id)
+            if not spec:
+                continue
+            flow_id = f"flow:{idx + 1:03d}:{test_id}"
+            items.append(
+                {
+                    "id": flow_id,
+                    "test_id": test_id,
+                    "label": f"{flow_step_letter(idx)}. {short}",
+                    "group": "flow",
+                    "step": str(idx + 1),
+                }
+            )
+        return items
+    if key == "all":
+        priority = _DEBUG_LIST_PRIORITY
+        ordered = [i for i in priority if i in registry]
+        ordered.extend(i for i in registry if i not in ordered)
+        return [
+            {
+                "id": test_id,
+                "label": registry[test_id]["label"],
+                "group": registry[test_id].get("group", "prep"),
+            }
+            for test_id in ordered
+        ]
+    ordered: list[str] = []
+    if key == "post":
         priority = _POST_DEBUG_LIST_PRIORITY
         ordered = [i for i in priority if i in registry]
         ordered.extend(
             i for i in registry if registry[i].get("group") == "post" and i not in ordered
         )
-    elif group == "end":
+    elif key == "end":
         priority = _END_DEBUG_LIST_PRIORITY
         ordered = [i for i in priority if i in registry]
         ordered.extend(
             i for i in registry if registry[i].get("group") == "end" and i not in ordered
         )
-    elif group == "account_switch":
+    elif key == "account_switch":
         priority = _ACCOUNT_SWITCH_DEBUG_LIST_PRIORITY
         ordered = [i for i in priority if i in registry]
         ordered.extend(
             i
             for i in registry
             if registry[i].get("group") == "account_switch" and i not in ordered
+        )
+    elif key == "slideshow":
+        priority = _SLIDESHOW_DEBUG_LIST_PRIORITY
+        ordered = [i for i in priority if i in registry]
+        ordered.extend(
+            i
+            for i in registry
+            if registry[i].get("group") == "slideshow" and i not in ordered
+        )
+    elif key == "valcoin_prep":
+        priority = _VALCOIN_PREP_DEBUG_LIST_PRIORITY
+        ordered = [i for i in priority if i in registry]
+        ordered.extend(
+            i
+            for i in registry
+            if registry[i].get("group") == "valcoin_prep" and i not in ordered
         )
     else:
         priority = _DEBUG_LIST_PRIORITY
@@ -826,30 +1120,67 @@ def list_debug_tests(group: str | None = None) -> list[dict[str, str]]:
         }
         for test_id in ordered
     ]
-    if group == "prep":
+    if key == "prep":
         items = [item for item in items if item["group"] == "prep"]
-    elif group == "post":
+    elif key == "post":
         items = [item for item in items if item["group"] == "post"]
-    elif group == "end":
+    elif key == "end":
         items = [item for item in items if item["group"] == "end"]
-    elif group == "account_switch":
+    elif key == "account_switch":
         items = [item for item in items if item["group"] == "account_switch"]
+    elif key == "slideshow":
+        items = [item for item in items if item["group"] == "slideshow"]
+    elif key == "valcoin_prep":
+        items = [item for item in items if item["group"] == "valcoin_prep"]
     return items
 
 
+DEBUG_SKIP_MEDIA_KINDS = frozenset({
+    "upload_gallery",
+    "slideshow_generate",
+    "album_clear",
+})
+
+DEBUG_SKIP_MEDIA_TEST_IDS = frozenset({
+    "tap-post",
+    "post-go-home",
+})
+
+
+def debug_test_skips_media(resolved_id: str, spec: DebugTest) -> bool:
+    """True when UI-only debug should not generate, upload, delete, or publish."""
+    if resolved_id in DEBUG_SKIP_MEDIA_TEST_IDS:
+        return True
+    return str(spec.get("kind") or "tap") in DEBUG_SKIP_MEDIA_KINDS
+
+
 async def run_debug_test(
-    app: Any, device_id: str, test_id: str, *, brand: str = "labely"
+    app: Any, device_id: str, test_id: str, *, brand: str = "labely", skip_media: bool = False
 ) -> dict[str, Any]:
     from imouse_farm.actions.cancel import clear_cancelled
 
     clear_cancelled(device_id)
-    spec = dict(get_debug_registry().get(test_id) or {})
+    resolved_id = resolve_flow_debug_test_id(test_id)
+    spec = dict(get_debug_registry().get(resolved_id) or {})
     if not spec:
         raise HTTPException(404, f"Unknown debug test: {test_id}")
+    if skip_media and debug_test_skips_media(resolved_id, spec):
+        label = str(spec.get("label") or resolved_id)
+        message = f"Skipped (UI-only): {label}"
+        await app.db.log_activity(
+            "info",
+            "test",
+            message,
+            device_id,
+            {"test_id": test_id, "resolved_id": resolved_id, "skipped": True, "skip_media": True},
+        )
+        return {"success": True, "message": message, "skipped": True}
     spec["_workflow_id"] = _workflow_id_for_debug(app, device_id, spec)
     kind = spec.get("kind", "tap")
     if kind == "upload_gallery":
         return await upload_gallery_debug(app, device_id, test_id, spec)
+    if kind == "slideshow_generate":
+        return await slideshow_generate_debug(app, device_id, test_id, spec)
     if kind == "album_clear":
         return await clear_album_debug(app, device_id, test_id, spec)
     if kind == "album_list":
@@ -880,6 +1211,8 @@ async def run_debug_test(
         return await close_app_debug(app, device_id, test_id, spec)
     if kind == "kill_app":
         return await kill_app_debug(app, device_id, test_id, spec)
+    if kind == "home":
+        return await home_debug(app, device_id, test_id, spec)
     if kind == "detect_ocr":
         return await detect_ocr_debug(app, device_id, test_id, spec)
     if kind == "tiktok_popup_scan":
@@ -888,22 +1221,9 @@ async def run_debug_test(
         return await account_switch_step_debug(app, device_id, test_id, spec, brand=brand)
     if kind == "detect":
         if spec.get("open_shadowrocket"):
-            open_result = await tap_detection(
-                app,
-                device_id,
-                "shadowrocket",
-                hint="Shadowrocket icon must be visible on the home screen.",
-                offline_hint=spec.get("offline_hint", OFFLINE_HINT),
-                test_id=f"{test_id}_open_shadowrocket",
-                spec=spec,
-            )
-            if not open_result.get("success"):
-                return {
-                    "success": False,
-                    "message": f"Could not open Shadowrocket — {open_result.get('message', '')}",
-                    "detection": spec["detection"],
-                }
-            await asyncio.sleep(2)
+            open_err = await _open_shadowrocket_coord_debug(app, device_id, spec, test_id)
+            if open_err:
+                return {**open_err, "detection": spec["detection"]}
         return await tap_detection(
             app,
             device_id,
@@ -1078,6 +1398,33 @@ async def tiktok_popup_scan_debug(
     return payload
 
 
+async def _open_shadowrocket_coord_debug(
+    app: Any,
+    device_id: str,
+    spec: DebugTest,
+    test_id: str,
+) -> dict[str, Any] | None:
+    """Tap fixed Shadowrocket icon; return error dict on failure."""
+    ok = await _debug_execute_direct(
+        app,
+        device_id,
+        spec,
+        f"{test_id}_open_shadowrocket",
+        ActionType.TAP,
+        {"x": SHADOWROCKET_ICON_X, "y": SHADOWROCKET_ICON_Y},
+        step_name=f"debug_{test_id}_open_shadowrocket",
+    )
+    if not ok:
+        return {
+            "success": False,
+            "message": (
+                f"Could not tap Shadowrocket at ({SHADOWROCKET_ICON_X}, {SHADOWROCKET_ICON_Y})"
+            ),
+        }
+    await asyncio.sleep(2)
+    return None
+
+
 async def detect_ocr_debug(
     app: Any,
     device_id: str,
@@ -1097,20 +1444,9 @@ async def detect_ocr_debug(
         raise HTTPException(500, f"Debug test {test_id} has no texts configured")
 
     if spec.get("open_shadowrocket"):
-        open_result = await tap_detection(
-            app,
-            device_id,
-            "shadowrocket",
-            hint="Shadowrocket icon must be visible on the home screen.",
-            offline_hint=spec.get("offline_hint", OFFLINE_HINT),
-            test_id=f"{test_id}_open_shadowrocket",
-        )
-        if not open_result.get("success"):
-            return {
-                "success": False,
-                "message": f"Could not open Shadowrocket — {open_result.get('message', '')}",
-            }
-        await asyncio.sleep(2)
+        open_err = await _open_shadowrocket_coord_debug(app, device_id, spec, test_id)
+        if open_err:
+            return open_err
 
     expect_missing = bool(spec.get("expect_missing"))
     try:
@@ -1164,7 +1500,7 @@ async def tap_ocr_debug(
     if wait_timeout or has_unstable_flow:
         params: dict[str, Any] = {
             "texts": texts,
-            "optional": False,
+            "optional": bool(spec.get("optional", False)),
             "poll_interval_seconds": float(spec.get("poll_interval_seconds", 2)),
             "prefer_top": bool(spec.get("prefer_top", False)),
         }
@@ -1187,6 +1523,13 @@ async def tap_ocr_debug(
             "unstable_texts",
             "tap_count",
             "tap_interval_seconds",
+            "require_dark_text",
+            "max_text_luminance",
+            "skip_if_texts_present",
+            "skip_if_all_texts_present",
+            "skip_if_story_button",
+            "skip_if_threshold",
+            "skip_if_ocr_ex",
         ):
             if key in spec:
                 if key == "unstable_texts":
@@ -1497,6 +1840,7 @@ async def clear_album_debug(
             "sheet_appear_timeout_seconds": 18,
             "round_active_timeout_seconds": 60,
             "sheet_poll_interval_seconds": 5,
+            **({"skip_vpn_off": True} if spec.get("skip_vpn_off") else {}),
         },
     )
 
@@ -1517,6 +1861,60 @@ async def clear_album_debug(
     }
 
 
+async def slideshow_generate_debug(
+    app: Any,
+    device_id: str,
+    test_id: str,
+    spec: DebugTest,
+) -> dict[str, Any]:
+    """Start autoslideshow for one slot; ingest MP4s without running farm batch."""
+    dm = app.device_manager
+    device = dm.get_device(device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    slot = str(device.user_name or "").strip()
+    if not slot:
+        raise HTTPException(400, "Device has no farm slot (user_name) — register in iMouse first")
+
+    brand = str(spec.get("brand") or "labely").strip().lower()
+    if not app.config.slideshow.enabled:
+        raise HTTPException(503, "Slideshow integration is disabled in config.yaml")
+
+    await app.slideshow_orchestrator.cancel_running_jobs()
+
+    try:
+        result = await app.slideshow_orchestrator.start_job(
+            brand=brand,
+            slots=[slot],
+            run_batch=False,
+            videos_per_slot=max(1, int(app.config.slideshow.debug_slideshows_per_slot)),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    job = result.get("job") or {}
+    message = f"Started {brand} slideshow for slot {slot} (ingest only)"
+    await app.db.log_activity(
+        "info",
+        "test",
+        message,
+        device_id,
+        {
+            "test_id": test_id,
+            "brand": brand,
+            "slot": slot,
+            "job_id": job.get("id"),
+            "automation_url": result.get("automation_url"),
+        },
+    )
+    return {
+        "success": True,
+        "message": message,
+        "job": job,
+        "automation_url": result.get("automation_url"),
+    }
+
+
 async def upload_gallery_debug(
     app: Any,
     device_id: str,
@@ -1532,10 +1930,12 @@ async def upload_gallery_debug(
         raise HTTPException(503, spec.get("offline_hint", "Device offline — click Connect AirPlay first"))
 
     gallery = app.config.gallery
+    brand = str(spec.get("brand") or "labely").strip().lower()
     folder = phone_gallery_folder(
         gallery.base_directory,
         device.user_name,
         device.phone_name,
+        brand=brand,
     )
     files = list_media_files(folder, gallery.media_extensions)
     if not files:
@@ -1545,7 +1945,7 @@ async def upload_gallery_debug(
             "test",
             f"Debug upload: {message}",
             device_id,
-            {"test_id": test_id, "folder": str(folder)},
+            {"test_id": test_id, "folder": str(folder), "brand": brand},
         )
         return {
             "success": False,
@@ -1554,17 +1954,21 @@ async def upload_gallery_debug(
             "file_count": 0,
         }
 
+    upload_params: dict[str, Any] = {
+        "folder": str(folder),
+        "extensions": gallery.media_extensions,
+        "timeout_ms": gallery.upload_timeout_ms,
+    }
+    if spec.get("skip_vpn_off"):
+        upload_params["skip_vpn_off"] = True
+
     success = await _debug_execute_direct(
         app,
         device_id,
         spec,
         test_id,
         ActionType.ALBUM_UPLOAD,
-        {
-            "folder": str(folder),
-            "extensions": gallery.media_extensions,
-            "timeout_ms": gallery.upload_timeout_ms,
-        },
+        upload_params,
     )
 
     await app.db.log_activity(
@@ -1607,6 +2011,7 @@ def _workflow_id_for_debug(app: Any, device_id: str, spec: DebugTest) -> str | N
         "post": "tiktok_post",
         "end": "tiktok_end",
         "account_switch": "tiktok_account_switch",
+        "valcoin_prep": "tiktok_valcoin_prep",
     }.get(str(spec.get("group", "")))
 
 
@@ -1739,6 +2144,7 @@ async def account_switch_step_debug(
                 log_activity=_log,
                 device_manager=app.device_manager,
                 templates_dir=app.config.analysis.templates_directory,
+                vision=app.vision,
                 brand=brand,
                 device_user_name=device.user_name,
                 toggle_to_opposite=toggle_to_opposite,
@@ -2167,6 +2573,15 @@ async def final_caption_production_debug(
         "char_count": len(flat),
         "text_preview": flat[:120] + ("…" if len(flat) > 120 else ""),
     }
+
+
+async def home_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
+    await _require_online_device(app, device_id, spec)
+    ok = await _debug_execute_direct(
+        app, device_id, spec, test_id, ActionType.HOME, {}
+    )
+    await app.screenshot_service.capture(device_id)
+    return {"success": ok, "message": "Pressed home"}
 
 
 async def kill_app_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
