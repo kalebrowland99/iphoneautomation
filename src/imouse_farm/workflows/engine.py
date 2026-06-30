@@ -22,6 +22,7 @@ from imouse_farm.config.models import (
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.workflows.account_switch import ensure_tiktok_account
+from imouse_farm.workflows.tiktok_plus_ready import wait_for_tiktok_plus_visible
 from imouse_farm.permissions.watcher import PermissionWatcherManager
 from imouse_farm.popups.manager import PopupManager
 from imouse_farm.screenshots.service import ScreenshotService
@@ -30,11 +31,11 @@ from imouse_farm.captions.ai_generator import stem_to_food_name
 from imouse_farm.post.account_profile_store import get_profile_for_device
 from imouse_farm.post.post_caption_store import (
     POST_COUNT,
-    device_storage_key,
     get_final_caption,
     get_gallery_coords,
     get_onscreen_text,
     post_media_stem,
+    text_key_for_device,
 )
 from imouse_farm.settings.device_settings import get_debug_skip_post
 from imouse_farm.utils.gallery import list_media_stems_for_posts, phone_gallery_folder
@@ -115,6 +116,10 @@ class WorkflowRunner:
         self._current_step_index = -1
         self._start_post_index = max(1, int(start_post_index))
         self._brand = str(brand or "labely").strip().lower()
+        self._tiktok_post_failure_recoveries = 0
+        self._iteration_completed_by_recovery = False
+        self._captions_auto_generated_posts: set[int] = set()
+        self._pending_white_background_after_restart = False
 
     @property
     def start_post_index(self) -> int:
@@ -185,6 +190,9 @@ class WorkflowRunner:
                     break
 
                 self._refresh_post_variables(iteration)
+                self._tiktok_post_failure_recoveries = 0
+                self._iteration_completed_by_recovery = False
+                self._captions_auto_generated_posts = set()
                 await self._log_activity(
                     "info",
                     "workflow",
@@ -196,8 +204,12 @@ class WorkflowRunner:
                         break
                     if await self._device_manager.is_workflow_paused(self._device_id):
                         break
+                    if self._iteration_completed_by_recovery:
+                        break
                     self._current_step_index = step_index
                     await self._execute_step(step)
+                    if self._iteration_completed_by_recovery:
+                        break
 
                 if self._workflow.name == "tiktok_post" and not self._step_failed:
                     from imouse_farm.post.account_profile_store import mark_post_completed
@@ -249,6 +261,7 @@ class WorkflowRunner:
             self._config.gallery.base_directory,
             device.user_name,
             device.phone_name,
+            brand=self._brand,
         )
         self._variables["phone_name"] = device.phone_name
         self._variables["device_slot"] = device.user_name
@@ -268,8 +281,12 @@ class WorkflowRunner:
     def _post_text_key(self) -> str:
         device = self._device_manager.get_device(self._device_id)
         if device:
-            return device_storage_key(device.device_id, device.user_name)
-        return self._device_id
+            return text_key_for_device(
+                device.device_id,
+                device.user_name,
+                brand=self._brand,
+            )
+        return text_key_for_device(self._device_id, brand=self._brand)
 
     def _refresh_post_variables(self, post_index: int) -> None:
         self._variables["post_index"] = post_index
@@ -281,6 +298,7 @@ class WorkflowRunner:
                 self._config.gallery.base_directory,
                 device.user_name,
                 device.phone_name,
+                brand=self._brand,
             )
             media_stems = list_media_stems_for_posts(
                 folder,
@@ -309,6 +327,57 @@ class WorkflowRunner:
             onscreen_len=len(onscreen),
             final_len=len(final_caption),
         )
+
+    async def _ensure_post_captions(self, post_index: int) -> None:
+        """Regenerate onscreen + final captions from gallery before typing."""
+        if self._workflow.name != "tiktok_post":
+            return
+        if not self._config.openai.enabled or not self._config.slideshow.auto_generate_captions:
+            return
+        if post_index in self._captions_auto_generated_posts:
+            return
+
+        text_key = self._post_text_key()
+        device = self._device_manager.get_device(self._device_id)
+        if not device:
+            raise RuntimeError("Device not found for caption auto-generation")
+
+        from imouse_farm.captions.service import (
+            default_onscreen_template_for_brand,
+            generate_captions_for_device,
+        )
+
+        template = default_onscreen_template_for_brand(
+            self._brand,
+            self._config.slideshow.default_onscreen_template,
+        )
+        await self._log_activity(
+            "info",
+            "workflow",
+            f"Post {post_index}: generating captions from gallery before typing",
+            brand=self._brand,
+        )
+        await generate_captions_for_device(
+            self._config,
+            device,
+            onscreen_template=template,
+            brand=self._brand,
+        )
+        self._captions_auto_generated_posts.add(post_index)
+        self._refresh_post_variables(post_index)
+
+        onscreen = get_onscreen_text(text_key, post_index, brand=self._brand).strip()
+        final = get_final_caption(text_key, post_index, brand=self._brand).strip()
+        if not onscreen:
+            raise RuntimeError(
+                f"Post {post_index}: onscreen text empty after auto-generation "
+                f"(check gallery files and OpenAI settings)"
+            )
+        if not final:
+            raise RuntimeError(
+                f"Post {post_index}: final caption empty after auto-generation "
+                f"(check gallery files and OpenAI settings)"
+            )
 
     def _filter_min_confidence(self, detections: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if not hasattr(self._vision, "min_confidence_for"):
@@ -506,7 +575,15 @@ class WorkflowRunner:
             return f"'{step.unless_detection}' is present"
         if step.when_post_index is not None:
             current = int(self._variables.get("post_index", 0))
-            if current != step.when_post_index:
+            if step.name in ("tap_white_background", "after_white_background"):
+                if current == step.when_post_index or self._pending_white_background_after_restart:
+                    pass
+                else:
+                    return (
+                        f"post {current}, white background only for post "
+                        f"{step.when_post_index} or after TikTok restart"
+                    )
+            elif current != step.when_post_index:
                 return f"post {current}, need post {step.when_post_index}"
         debug_skip = get_debug_skip_post(self._device_id)
         if step.when_debug_skip_post is True and not debug_skip:
@@ -527,11 +604,8 @@ class WorkflowRunner:
                 )
             return
 
-        if (
-            not step.name.startswith("_")
-            and is_tiktok_workflow(self._workflow.name)
-        ):
-            await self._try_dismiss_popups(step.name)
+        if is_tiktok_workflow(self._workflow.name):
+            await self._ensure_popups_cleared(step.name)
 
         if not step.name.startswith("_"):
             await self._log_activity(
@@ -547,29 +621,18 @@ class WorkflowRunner:
             await self._step_analyze(WorkflowStepConfig(type="analyze_screen", name="_auto_analyze"))
 
         try:
-            match step.type:
-                case "screenshot" | "capture_screen":
-                    await self._step_capture(step)
-                case "analyze" | "analyze_screen":
-                    await self._step_analyze(step)
-                case "determine_state":
-                    await self._step_determine_state(step)
-                case "check_ocr_state":
-                    await self._step_check_ocr_state(step)
-                case "check_popups" | "handle_popups":
-                    await self._step_check_popups(step)
-                case "execute_action":
-                    await self._step_action(step)
-                case "verify":
-                    await self._step_verify(step)
-                case "wait" | "wait_random":
-                    await self._step_wait(step)
-                case "wait_for_detection":
-                    await self._step_wait_for_detection(step)
-                case "ensure_tiktok_account":
-                    await self._step_ensure_tiktok_account(step)
-                case _:
-                    logger.warning("unknown_step_type", step_type=step.type, name=step.name)
+            await self._execute_step_body(step)
+            if (
+                step.name == "tap_white_background"
+                and self._pending_white_background_after_restart
+            ):
+                self._pending_white_background_after_restart = False
+                await self._log_activity(
+                    "info",
+                    "workflow",
+                    "White background tap done after TikTok restart",
+                    step=step.name,
+                )
         except Exception as exc:
             logger.error("step_failed", step=step.name, device_id=self._device_id, error=str(exc))
             await self._log_activity(
@@ -578,9 +641,38 @@ class WorkflowRunner:
                 f"Step failed: {step.name} — {exc}",
                 step_type=step.type,
             )
+            if await self._try_recover_tiktok_post(step, exc):
+                return
             await self._handle_failure(step, exc)
 
+    async def _execute_step_body(self, step: WorkflowStepConfig) -> None:
+        match step.type:
+            case "screenshot" | "capture_screen":
+                await self._step_capture(step)
+            case "analyze" | "analyze_screen":
+                await self._step_analyze(step)
+            case "determine_state":
+                await self._step_determine_state(step)
+            case "check_ocr_state":
+                await self._step_check_ocr_state(step)
+            case "check_popups" | "handle_popups":
+                await self._step_check_popups(step)
+            case "execute_action":
+                await self._step_action(step)
+            case "verify":
+                await self._step_verify(step)
+            case "wait" | "wait_random":
+                await self._step_wait(step)
+            case "wait_for_detection":
+                await self._step_wait_for_detection(step)
+            case "ensure_tiktok_account":
+                await self._step_ensure_tiktok_account(step)
+            case _:
+                logger.warning("unknown_step_type", step_type=step.type, name=step.name)
+
     async def _step_capture(self, step: WorkflowStepConfig) -> None:
+        if is_tiktok_workflow(self._workflow.name):
+            await self._ensure_popups_cleared(step.name or "capture")
         self._last_screenshot = await self._screenshots.capture(
             self._device_id, workflow_id=self._workflow.name
         )
@@ -663,6 +755,212 @@ class WorkflowRunner:
                 },
                 skip_post_action=True,
             )
+        )
+
+    def _step_index_by_name(self, name: str) -> int:
+        for index, step in enumerate(self._workflow.steps):
+            if step.name == name:
+                return index
+        raise RuntimeError(f"Step {name!r} not found in workflow {self._workflow.name}")
+
+    def _max_tiktok_post_failure_recoveries(self) -> int:
+        for step in self._workflow.steps:
+            if step.name == "wait_for_plus":
+                action = step.action or {}
+                return int(
+                    action.get("max_failure_recoveries")
+                    or action.get("max_app_restarts")
+                    or 5
+                )
+        return 5
+
+    async def _try_recover_tiktok_post(
+        self,
+        step: WorkflowStepConfig,
+        exc: Exception,
+    ) -> bool:
+        """Restart TikTok and resume from wait_for_plus after a failed post step."""
+        if self._workflow.name != "tiktok_post":
+            return False
+        if step.on_failure not in ("pause", "escalate"):
+            return False
+
+        max_recoveries = self._max_tiktok_post_failure_recoveries()
+        if self._tiktok_post_failure_recoveries >= max_recoveries:
+            await self._log_activity(
+                "error",
+                "workflow",
+                f"TikTok recovery exhausted ({max_recoveries}) after {step.name}: {exc}",
+                step=step.name,
+            )
+            return False
+
+        self._tiktok_post_failure_recoveries += 1
+        await self._log_activity(
+            "warn",
+            "workflow",
+            (
+                f"Step failed ({step.name}) — closing and reopening TikTok, "
+                f"then resuming from + button "
+                f"({self._tiktok_post_failure_recoveries}/{max_recoveries})"
+            ),
+            step=step.name,
+            error=str(exc),
+        )
+
+        try:
+            await self._restart_tiktok(parent_step=step.name)
+        except Exception as restart_exc:
+            await self._log_activity(
+                "error",
+                "workflow",
+                f"TikTok restart failed during recovery: {restart_exc}",
+                step=step.name,
+            )
+            try:
+                await self._reset_phone_recast_and_open_tiktok(parent_step=step.name)
+            except Exception as reset_exc:
+                await self._log_activity(
+                    "error",
+                    "workflow",
+                    f"Phone reset/recast failed during recovery: {reset_exc}",
+                    step=step.name,
+                )
+                return False
+            return await self._resume_tiktok_post_from_plus()
+
+        if await self._resume_tiktok_post_from_plus():
+            return True
+
+        await self._log_activity(
+            "warn",
+            "workflow",
+            "TikTok restart did not recover — resetting phone and recasting",
+            step=step.name,
+        )
+        try:
+            await self._reset_phone_recast_and_open_tiktok(parent_step=step.name)
+        except Exception as reset_exc:
+            await self._log_activity(
+                "error",
+                "workflow",
+                f"Phone reset/recast failed after TikTok restart: {reset_exc}",
+                step=step.name,
+            )
+            return False
+        return await self._resume_tiktok_post_from_plus()
+
+    async def _resume_tiktok_post_from_plus(self) -> bool:
+        """Re-run from wait_for_plus through end of current post iteration."""
+        self._step_failed = False
+        self._failure_message = ""
+        plus_idx = self._step_index_by_name("wait_for_plus")
+        for index in range(plus_idx, len(self._workflow.steps)):
+            if not self._running:
+                return False
+            if await self._device_manager.is_workflow_paused(self._device_id):
+                return False
+            recovery_step = self._workflow.steps[index]
+            self._current_step_index = index
+            await self._execute_step(recovery_step)
+            if self._iteration_completed_by_recovery:
+                return True
+            if self._step_failed:
+                return False
+
+        self._iteration_completed_by_recovery = True
+        return True
+
+    async def _open_tiktok_from_home(self, *, parent_step: str) -> None:
+        """Find TikTok on home and open it."""
+        step_name = f"{parent_step}_open_tiktok"
+        templates = expand_template_names(["tiktok"])
+        deadline = time.monotonic() + 30.0
+        while self._running and time.monotonic() < deadline:
+            await self._ensure_popups_cleared(step_name)
+            await self._step_capture(
+                WorkflowStepConfig(
+                    type="screenshot",
+                    name=f"{step_name}_home",
+                    templates=templates,
+                )
+            )
+            await self._step_analyze(
+                WorkflowStepConfig(
+                    type="analyze_screen",
+                    name=f"{step_name}_tiktok_icon",
+                    templates=templates,
+                )
+            )
+            if self._has_detection("tiktok"):
+                break
+            await asyncio.sleep(2.0)
+        else:
+            raise RuntimeError("TikTok icon not found on home screen")
+
+        await self._tap_detection_inline("tiktok")
+        await wait_for_tiktok_plus_visible(
+            self._device_manager.controller,
+            self._device_id,
+            device_manager=self._device_manager,
+            vision=self._vision,
+            templates_directory=self._config.analysis.templates_directory,
+            log_activity=lambda level, category, message, **details: self._log_activity(
+                level, category, message, step=step_name, **details
+            ),
+        )
+
+    async def _reset_phone_recast_and_open_tiktok(self, *, parent_step: str) -> None:
+        """Reboot phone, reconnect AirPlay, reopen TikTok, resume from +."""
+        await self._log_activity(
+            "warn",
+            "workflow",
+            "Resetting phone, reconnecting cast, and reopening TikTok",
+            step=parent_step,
+        )
+        await self._device_manager.reset_phone_and_recast(self._device_id)
+        await self._open_tiktok_from_home(parent_step=f"{parent_step}_phone_reset")
+        self._pending_white_background_after_restart = True
+        await self._log_activity(
+            "info",
+            "workflow",
+            "Phone reset complete — resuming from + button",
+            step=parent_step,
+        )
+
+    async def _restart_tiktok(self, *, parent_step: str) -> None:
+        """Force-quit TikTok (app switcher + swipe up ×5) and reopen from home."""
+        wf = self._workflow.name
+        step_name = f"{parent_step}_restart_tiktok"
+        await self._log_activity(
+            "warn",
+            "workflow",
+            "Closing and reopening TikTok (home → app switcher → swipe up ×5)",
+            step=parent_step,
+        )
+
+        for action_type, wait_s in (
+            (ActionType.HOME, 3.0),
+            (ActionType.KILL_APP, 3.0),
+            (ActionType.HOME, 3.0),
+        ):
+            ok = await self._execute_direct(
+                action_type,
+                {},
+                step_name=step_name,
+            )
+            if not ok:
+                raise RuntimeError(f"TikTok restart failed at {action_type.value}")
+            await self._apply_tiktok_touch_cooldown(action_type)
+            await asyncio.sleep(wait_s)
+
+        await self._open_tiktok_from_home(parent_step=parent_step)
+        self._pending_white_background_after_restart = True
+        await self._log_activity(
+            "info",
+            "workflow",
+            "Next post will run white-background tap (TikTok was restarted)",
+            step=parent_step,
         )
 
     async def _step_check_ocr_state(self, step: WorkflowStepConfig) -> None:
@@ -928,6 +1226,8 @@ class WorkflowRunner:
             )
 
     async def _step_analyze(self, step: WorkflowStepConfig) -> None:
+        if is_tiktok_workflow(self._workflow.name):
+            await self._ensure_popups_cleared(step.name or "analyze")
         if not self._last_screenshot:
             path = await self._screenshots.get_latest_path(self._device_id)
             if not path:
@@ -1092,9 +1392,10 @@ class WorkflowRunner:
             action_def = self._resolve_variables(result.dismiss_action)
             action_type = ActionType(action_def.get("type", "tap_detection"))
             params = {k: v for k, v in action_def.items() if k != "type"}
-            await self._actions.execute_direct(
-                self._device_id, action_type, params,
-                workflow_id=self._workflow.name, step_name=f"dismiss_{step.name}",
+            await self._execute_direct(
+                action_type,
+                params,
+                step_name=f"dismiss_{step.name}",
             )
             await self._step_capture(WorkflowStepConfig(type="screenshot", name="_post_dismiss"))
             await self._step_analyze(WorkflowStepConfig(type="analyze", name="_post_dismiss_analyze"))
@@ -1104,6 +1405,8 @@ class WorkflowRunner:
             post_index = int(self._variables.get("post_index", 0))
             if post_index >= 1:
                 self._refresh_post_variables(post_index)
+                if step.name in ("type_onscreen_text", "type_final_post_caption"):
+                    await self._ensure_post_captions(post_index)
                 await self._log_activity(
                     "info",
                     "workflow",
@@ -1207,9 +1510,10 @@ class WorkflowRunner:
                     step=step.name,
                 )
 
-        success = await self._actions.execute_direct(
-            self._device_id, action_type, params,
-            workflow_id=self._workflow.name, step_name=step.name,
+        success = await self._execute_direct(
+            action_type,
+            params,
+            step_name=step.name,
         )
         if not success:
             raise RuntimeError(f"Action failed: {step.name}")
@@ -1268,11 +1572,12 @@ class WorkflowRunner:
             log_activity=_log,
             device_manager=self._device_manager,
             templates_dir=self._config.analysis.templates_directory,
+            vision=self._vision,
             brand=self._brand,
         )
 
     async def _step_verify(self, step: WorkflowStepConfig) -> None:
-        await self._try_dismiss_popups(step.name)
+        await self._ensure_popups_cleared(step.name)
         if not self._last_analysis:
             raise RuntimeError("No analysis for verification")
         passed = self._vision.verify_condition(
@@ -1303,6 +1608,53 @@ class WorkflowRunner:
             await asyncio.sleep(POPUP_DISMISS_SETTLE_SECONDS)
         return dismissed
 
+    async def _ensure_popups_cleared(
+        self,
+        context: str,
+        *,
+        max_passes: int = 5,
+    ) -> int:
+        """Run the permission watcher until no popup is visible (TikTok only)."""
+        cleared = 0
+        for _ in range(max(1, max_passes)):
+            if not await self._try_dismiss_popups(context):
+                break
+            cleared += 1
+        if cleared >= max_passes:
+            await self._log_activity(
+                "warn",
+                "workflow",
+                f"Popup watcher still active after {max_passes} dismiss passes ({context})",
+            )
+        return cleared
+
+    async def _execute_direct(
+        self,
+        action_type: ActionType,
+        params: dict[str, Any],
+        *,
+        step_name: str,
+    ) -> bool:
+        """Execute a device action after clearing any visible popups."""
+        await self._ensure_popups_cleared(step_name)
+        if action_type in TIKTOK_TOUCH_COOLDOWN_ACTIONS:
+            tap_lock = self._device_manager.get_tap_lock(self._device_id)
+            async with tap_lock:
+                return await self._actions.execute_direct(
+                    self._device_id,
+                    action_type,
+                    params,
+                    workflow_id=self._workflow.name,
+                    step_name=step_name,
+                )
+        return await self._actions.execute_direct(
+            self._device_id,
+            action_type,
+            params,
+            workflow_id=self._workflow.name,
+            step_name=step_name,
+        )
+
     async def _sleep_with_popup_watch(self, seconds: float, context: str) -> None:
         if (
             seconds <= 0
@@ -1313,7 +1665,7 @@ class WorkflowRunner:
             return
         deadline = time.monotonic() + seconds
         while self._running and time.monotonic() < deadline:
-            await self._try_dismiss_popups(context)
+            await self._ensure_popups_cleared(context)
             if self._device_manager:
                 await self._device_manager.record_activity(self._device_id)
             remaining = deadline - time.monotonic()
@@ -1360,6 +1712,12 @@ class WorkflowRunner:
         samples_per_poll = max(1, int(action_cfg.get("samples_per_poll", 1)))
         deadline = time.monotonic() + timeout
         attempt = 0
+        restart_after = max(0, int(action_cfg.get("restart_app_after_attempts") or 0))
+        max_restarts = max(1, int(action_cfg.get("max_app_restarts") or 5))
+        attempts_since_restart = 0
+        restart_count = 0
+        phone_reset_used = False
+        tiktok_restart_enabled = restart_after > 0 and is_tiktok_workflow(self._workflow.name)
 
         await self._log_activity(
             "info",
@@ -1378,7 +1736,7 @@ class WorkflowRunner:
                 continue
 
             attempt += 1
-            await self._try_dismiss_popups(step.name)
+            await self._ensure_popups_cleared(step.name)
             if samples_per_poll > 1 or action_cfg.get("ocr_fallback_texts"):
                 hit = await self._sample_best_detection(
                     step, target, templates, action_cfg
@@ -1414,6 +1772,45 @@ class WorkflowRunner:
                     confidence=float(hit_dict.get("confidence", 0)) if hit_dict else None,
                 )
                 return
+
+            if tiktok_restart_enabled:
+                attempts_since_restart += 1
+                if attempts_since_restart >= restart_after and restart_count < max_restarts:
+                    await self._restart_tiktok(parent_step=step.name or target)
+                    restart_count += 1
+                    attempts_since_restart = 0
+                    await self._log_activity(
+                        "info",
+                        "workflow",
+                        f"TikTok reopened ({restart_count}/{max_restarts}) — waiting for {target} again",
+                        step=step.name,
+                        detection=target,
+                    )
+                elif (
+                    not phone_reset_used
+                    and restart_count >= max_restarts
+                    and is_tiktok_workflow(self._workflow.name)
+                ):
+                    phone_reset_used = True
+                    await self._log_activity(
+                        "warn",
+                        "workflow",
+                        f"TikTok restarts exhausted — resetting phone and recasting",
+                        step=step.name,
+                        detection=target,
+                    )
+                    await self._reset_phone_recast_and_open_tiktok(
+                        parent_step=step.name or target
+                    )
+                    restart_count = 0
+                    attempts_since_restart = 0
+                    await self._log_activity(
+                        "info",
+                        "workflow",
+                        f"Phone reset complete — waiting for {target} again",
+                        step=step.name,
+                        detection=target,
+                    )
 
             if time.monotonic() >= deadline:
                 raise RuntimeError(

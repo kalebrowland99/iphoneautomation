@@ -75,6 +75,7 @@ class DeviceManager:
         self._event_callbacks: list[EventCallback] = []
         self._reconnect_queue: set[str] = set()
         self._last_airplay_attempt: dict[str, datetime] = {}
+        self._tap_locks: dict[str, asyncio.Lock] = {}
 
     @property
     def controller(self) -> DeviceController:
@@ -86,6 +87,16 @@ class DeviceManager:
 
     def get_device(self, device_id: str) -> ManagedDevice | None:
         return self._devices.get(device_id)
+
+    def get_tap_lock(self, device_id: str) -> asyncio.Lock:
+        """Return the per-device tap lock (created on first access).
+
+        The workflow engine holds this lock during every touch action so the
+        permission watcher cannot tap at the same time.
+        """
+        if device_id not in self._tap_locks:
+            self._tap_locks[device_id] = asyncio.Lock()
+        return self._tap_locks[device_id]
 
     def on_event(self, callback: EventCallback) -> None:
         self._event_callbacks.append(callback)
@@ -369,6 +380,61 @@ class DeviceManager:
         device = self._devices.get(device_id)
         if device:
             device.workflow_paused = False
+
+    async def reset_phone_and_recast(
+        self,
+        device_id: str,
+        *,
+        boot_wait_seconds: float | None = None,
+        max_cast_attempts: int | None = None,
+        cast_retry_seconds: float | None = None,
+    ) -> None:
+        """Reboot phone, wait for boot, then reconnect AirPlay cast."""
+        boot_wait = float(
+            boot_wait_seconds
+            if boot_wait_seconds is not None
+            else self._config.diagnostics.phone_restart_boot_wait_seconds
+        )
+        attempts = max(1, int(
+            max_cast_attempts
+            if max_cast_attempts is not None
+            else self._config.batch.cast_connect_max_attempts
+        ))
+        retry_s = float(
+            cast_retry_seconds
+            if cast_retry_seconds is not None
+            else self._config.batch.cast_connect_retry_seconds
+        )
+
+        if not await self._controller.restart_device(device_id):
+            raise RuntimeError("Phone restart command failed")
+
+        await self._db.log_activity(
+            "warn",
+            "device",
+            f"Phone rebooting — waiting {int(boot_wait)}s before recast",
+            device_id,
+        )
+        await asyncio.sleep(boot_wait)
+
+        for attempt in range(1, attempts + 1):
+            await self.refresh_devices()
+            if await self.reconnect_airplay(device_id):
+                device = self._devices.get(device_id)
+                if device and device.is_online:
+                    await self._db.log_activity(
+                        "info",
+                        "device",
+                        f"Cast reconnected after phone reset (attempt {attempt}/{attempts})",
+                        device_id,
+                    )
+                    return
+            if attempt < attempts:
+                await asyncio.sleep(retry_s)
+
+        raise RuntimeError(
+            f"AirPlay reconnect failed after phone reset ({attempts} attempts)"
+        )
 
     async def record_activity(self, device_id: str) -> None:
         device = self._devices.get(device_id)
