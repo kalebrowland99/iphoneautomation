@@ -12,6 +12,7 @@ from imouse_farm.post.account_profile_store import (
     opposite_brand,
 )
 from imouse_farm.utils.logging import get_logger
+from imouse_farm.workflows.tiktok_plus_ready import wait_for_tiktok_plus_visible
 
 logger = get_logger(__name__)
 
@@ -27,12 +28,12 @@ async def ensure_tiktok_account(
     log_activity: LogFn | None = None,
     device_manager: Any | None = None,
     templates_dir: str = "config/templates",
+    vision: Any | None = None,
     brand: str = "labely",
     device_user_name: str = "",
     toggle_to_opposite: bool = False,
 ) -> bool:
     """Tap profile, switch account if needed, then tap home. Returns True if ready."""
-    _ = templates_dir
     target_handle = normalize_handle(tiktok_handle)
     if not target_handle:
         if log_activity:
@@ -68,6 +69,18 @@ async def ensure_tiktok_account(
             f"Checking TikTok account ({dest_handle}, {mode})",
         )
 
+    await wait_for_tiktok_plus_visible(
+        controller,
+        device_id,
+        device_manager=device_manager,
+        vision=vision,
+        templates_directory=templates_dir,
+        log_activity=log_activity,
+    )
+
+    if log_activity:
+        await log_activity("info", "workflow", "Settling 3s — home feed loading after + detected")
+    await _sleep(3.0)
     await controller.tap(device_id, navigation.profile_tab_x, navigation.profile_tab_y)
     await _sleep(2.0)
 

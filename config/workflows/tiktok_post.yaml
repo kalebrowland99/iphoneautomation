@@ -17,6 +17,10 @@ steps:
     duration_seconds: 90
     min_seconds: 2
     on_failure: pause
+    action:
+      restart_app_after_attempts: 3
+      max_app_restarts: 5
+      max_failure_recoveries: 5
 
   - type: screenshot
     name: fresh_plus_screen
@@ -318,7 +322,7 @@ steps:
       y1: 771
       x2: 55
       y2: 765
-      duration_ms: 850
+      duration_ms: 900
       move_ms: 10
       hold_ms: 0
     skip_post_action: true

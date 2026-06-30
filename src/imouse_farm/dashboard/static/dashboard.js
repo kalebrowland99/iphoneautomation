@@ -9,12 +9,11 @@ const BRAND_ID = window.__FARM__.brand;
         let activityEntries = [];
         let activityAutoScroll = true;
         let activityPaused = false;
-        let debugTab = 'prep';
         const DEBUG_STORAGE = {
             open: 'farmDebugPanelOpen',
-            tab: 'farmDebugTab',
             test: 'farmDebugTestId',
         };
+        let debugFlowStepIds = [];
         let postTextSaveTimers = {};
         let cachedPostTexts = [];
         let batchSelectedSlots = new Set();
@@ -26,6 +25,8 @@ let lastRunMessage = '';
 let runConsoleTimer = null;
 let currentSlideshowJob = null;
 let currentBatchStatus = { status: 'idle' };
+let slideshowConfig = { use_embedded_runner: true };
+let slideshowEmbedUrl = '';
 
 const RUN_STEPS = ['slideshow', 'ingest', 'captions', 'batch'];
 
@@ -76,6 +77,23 @@ function setRunStepActive(phase) {
     });
 }
 
+function syncRunControlButtons(extra = {}) {
+    const btnRun = document.getElementById('btn-run');
+    const btnKill = document.getElementById('btn-kill');
+    const embedStopBtn = document.getElementById('btn-slideshow-embed-stop');
+    const jobRunning = String(extra.slideshowJob?.status || currentSlideshowJob?.status || '').toLowerCase() === 'running';
+    const batchRunning = ['connecting', 'running', 'disconnecting'].includes(
+        String(extra.batchStatus?.status || currentBatchStatus?.status || '').toLowerCase(),
+    );
+    const busy = Boolean(extra.progressActive)
+        || jobRunning
+        || batchRunning
+        || Boolean(extra.orchestratorBusy);
+    if (btnRun) btnRun.disabled = busy;
+    if (btnKill) btnKill.disabled = !busy;
+    if (embedStopBtn) embedStopBtn.disabled = !busy;
+}
+
 function applyRunProgress(progress) {
     const p = progress || {};
     const pct = Math.max(0, Math.min(100, Number(p.progress) || 0));
@@ -83,16 +101,13 @@ function applyRunProgress(progress) {
     const pctEl = document.getElementById('run-pct');
     const phaseEl = document.getElementById('run-phase');
     const subtitle = document.getElementById('run-subtitle');
-    const btnRun = document.getElementById('btn-run');
-    const btnKill = document.getElementById('btn-kill');
     if (bar) bar.style.width = `${pct}%`;
     if (pctEl) pctEl.textContent = `${pct}%`;
     if (phaseEl) phaseEl.textContent = p.phase_label || 'Ready';
     if (subtitle) subtitle.textContent = p.message || 'Select phones and start a daily run.';
     setRunStepActive(p.phase || 'idle');
     const active = Boolean(p.active);
-    if (btnRun) btnRun.disabled = active;
-    if (btnKill) btnKill.disabled = !active && pct < 5;
+    syncRunControlButtons({ progressActive: active });
     const msg = String(p.message || '').trim();
     if (msg && msg !== lastRunMessage) {
         lastRunMessage = msg;
@@ -106,9 +121,27 @@ async function refreshRunConsole() {
         const q = slideshowJobId ? `?job_id=${encodeURIComponent(slideshowJobId)}` : '';
         const res = await api(`/run/status${q}`);
         currentBatchStatus = res.batch || currentBatchStatus;
+        if (res.slideshow_job_id) slideshowJobId = res.slideshow_job_id;
         currentSlideshowJob = res.slideshow_job || currentSlideshowJob;
         applyRunProgress(res.progress);
+        syncRunControlButtons({
+            progressActive: Boolean(res.progress?.active),
+            slideshowJob: currentSlideshowJob,
+            batchStatus: currentBatchStatus,
+            orchestratorBusy: res.slideshow_orchestrator_busy,
+        });
         if (res.batch) updateBatchUI(res.batch);
+        if (
+            slideshowConfig.use_embedded_runner
+            && currentSlideshowJob?.automation_url
+            && String(currentSlideshowJob.status || '').toLowerCase() === 'running'
+            && ['automation', 'ingesting'].includes(String(currentSlideshowJob.phase || '').toLowerCase())
+        ) {
+            showSlideshowEmbed(
+                currentSlideshowJob.automation_url,
+                currentSlideshowJob.message || 'Generating slideshows…',
+            );
+        }
     } catch (_) {}
 }
 
@@ -131,13 +164,82 @@ function stopRunConsolePoll() {
 async function refreshSlideshowConfig() {
     try {
         const cfg = await api('/slideshow/config');
+        slideshowConfig = cfg || slideshowConfig;
         const btn = document.getElementById('btn-run');
         if (btn && !cfg.enabled) btn.disabled = true;
     } catch (_) {}
 }
 
+function showSlideshowEmbed(url, statusText) {
+    const panel = document.getElementById('slideshow-embed-panel');
+    const frame = document.getElementById('slideshow-embed-frame');
+    const statusEl = document.getElementById('slideshow-embed-status');
+    const openLink = document.getElementById('slideshow-embed-open-tab');
+    if (!panel || !frame) return;
+    const nextUrl = String(url || '').trim();
+    if (!nextUrl) return;
+    const wasHidden = panel.classList.contains('hidden');
+    panel.classList.remove('hidden');
+    if (statusEl) statusEl.textContent = statusText || 'Generating slideshows…';
+    if (openLink) {
+        openLink.href = nextUrl;
+        openLink.classList.remove('hidden');
+    }
+    const urlChanged = slideshowEmbedUrl !== nextUrl;
+    if (urlChanged) {
+        slideshowEmbedUrl = nextUrl;
+        frame.src = nextUrl;
+    }
+    // Scroll only when the embed first opens or the URL changes — not on every status poll.
+    if (wasHidden || urlChanged) {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
+function openSlideshowTab(url) {
+    const nextUrl = String(url || slideshowEmbedUrl || '').trim();
+    if (!nextUrl) return null;
+    return window.open(nextUrl, '_blank', 'noopener,noreferrer');
+}
+
+function stopSlideshowEmbedGeneration() {
+    const frame = document.getElementById('slideshow-embed-frame');
+    const url = String(slideshowEmbedUrl || frame?.src || '').trim();
+    if (!frame?.contentWindow || !url || url === 'about:blank') return;
+    try {
+        const origin = new URL(url, window.location.href).origin;
+        frame.contentWindow.postMessage({ type: 'autoslideshow:stop' }, origin);
+    } catch (_) {}
+}
+
+function hideSlideshowEmbed() {
+    stopSlideshowEmbedGeneration();
+    const panel = document.getElementById('slideshow-embed-panel');
+    const frame = document.getElementById('slideshow-embed-frame');
+    const openLink = document.getElementById('slideshow-embed-open-tab');
+    if (panel) panel.classList.add('hidden');
+    if (frame) frame.src = 'about:blank';
+    if (openLink) openLink.classList.add('hidden');
+    slideshowEmbedUrl = '';
+}
+
+function syncSlideshowEmbedFromJob(job) {
+    if (!slideshowConfig.use_embedded_runner) return;
+    const phase = String(job?.phase || '').toLowerCase();
+    const status = String(job?.status || '').toLowerCase();
+    const url = String(job?.automation_url || '').trim();
+    if (url && (phase === 'automation' || phase === 'ingesting') && status === 'running') {
+        showSlideshowEmbed(url, job?.message || 'Generating slideshows…');
+        return;
+    }
+    if (status === 'completed' || status === 'failed' || phase === 'captions' || phase === 'batch' || phase === 'done') {
+        hideSlideshowEmbed();
+    }
+}
+
 function updateSlideshowUI(job) {
     currentSlideshowJob = job;
+    syncSlideshowEmbedFromJob(job);
     if (job?.message) appendRunLog(job.message, job.status === 'failed' ? 'error' : 'info', 'slideshow');
     void refreshRunConsole();
 }
@@ -168,7 +270,25 @@ function stopSlideshowPoll() {
             slideshowPollTimer = setInterval(tick, 4000);
         }
 
+        async function tileSplitWindows() {
+            try {
+                const res = await api('/window-layout/split', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ brand: BRAND_ID }),
+                });
+                if (res?.warnings?.length) {
+                    appendRunLog(res.warnings.join(' · '), 'warn', 'run');
+                } else if (res?.chrome?.placed && res?.imouse?.placed) {
+                    appendRunLog('Chrome and iMouseXP tiled 50/50.', 'info', 'run');
+                }
+            } catch (err) {
+                appendRunLog(`Window layout: ${err.message || err}`, 'warn', 'run');
+            }
+        }
+
         async function startDailyRun() {
+            void tileSplitWindows();
             const fromPost = getSelectedFromPost('batch-from-post');
             if (fromPost !== null) {
                 await startFarmBatch({ skipConfirm: true });
@@ -195,25 +315,53 @@ function stopSlideshowPoll() {
             body: JSON.stringify({ brand: BRAND_ID, slots, run_batch: true }),
         });
         updateSlideshowUI(res.job);
+        if (res.automation_url && slideshowConfig.use_embedded_runner) {
+            showSlideshowEmbed(res.automation_url, res.job?.message || 'Generating slideshows…');
+        }
         if (res.job?.id) {
             slideshowJobId = res.job.id;
             startSlideshowPoll(res.job.id);
         }
     } catch (err) {
         appendRunLog(err.message || String(err), 'error', 'run');
-        alert(err.message || String(err));
+        if (String(err.message || '').toLowerCase().includes('already running')) {
+            appendRunLog('Click Stop to cancel the stuck slideshow job, then run again.', 'warn', 'run');
+            await refreshRunConsole();
+        } else {
+            alert(err.message || String(err));
+        }
         updateSlideshowUI(null);
+        applyRunProgress({
+            phase: 'idle',
+            phase_label: 'Ready',
+            progress: 0,
+            message: 'Could not start run',
+            active: false,
+        });
     }
 }
 
 async function stopDailyRun() {
     appendRunLog('Stop requested', 'warn', 'run');
+    stopSlideshowEmbedGeneration();
     try {
-        if (slideshowJobId) await api(`/slideshow/jobs/${encodeURIComponent(slideshowJobId)}`).catch(() => {});
         await api('/batch/stop', { method: 'POST' });
-    } catch (_) {}
+    } catch (err) {
+        appendRunLog(`Stop failed: ${err.message || err}`, 'error', 'run');
+    }
     stopSlideshowPoll();
+    hideSlideshowEmbed();
     slideshowJobId = null;
+    currentSlideshowJob = null;
+    lastRunMessage = '';
+    applyRunProgress({
+        phase: 'idle',
+        phase_label: 'Stopped',
+        progress: 0,
+        message: 'Run stopped',
+        active: false,
+    });
+    syncRunControlButtons({});
     await refreshRunConsole();
     refreshFarmDevices({ quiet: true });
 }
@@ -300,6 +448,32 @@ async function stopDailyRun() {
                 renderFarmGrid();
             } catch (err) {
                 alert(`Failed to save account: ${err.message}`);
+            }
+        }
+
+        async function toggleWarmupSlot(slot, enabled) {
+            const profile = slotProfiles[`slot:${slot}`] || {};
+            const body = {
+                brand: BRAND_ID,
+                warmup_enabled: Boolean(enabled),
+            };
+            if (profile.tiktok_handle) {
+                body.tiktok_handle = profile.tiktok_handle;
+            }
+            try {
+                const res = await api(`/slots/${enc(slot)}/account-profile`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const updated = res.profile || {};
+                slotProfiles[`slot:${slot}`] = updated;
+                const d = slotToDevice[slot];
+                if (d) d.account_profile = updated;
+                renderFarmGrid();
+            } catch (err) {
+                alert(`Failed to save warmup setting: ${err.message}`);
+                renderFarmGrid();
             }
         }
 
@@ -473,6 +647,7 @@ async function stopDailyRun() {
                 const statusInfo = phoneStatusCell(d, online, pipe);
                 const profile = d?.account_profile || slotProfiles[`slot:${key}`] || null;
                 const handle = profile?.tiktok_handle || '';
+                const warmupEnabled = Boolean(profile?.warmup_enabled);
                 const runCell = lastRunCell(profile);
                 const classes = [
                     'phones-table-row',
@@ -500,6 +675,12 @@ async function stopDailyRun() {
                             <span class="badge ${statusInfo.badge}">${statusInfo.label}</span>
                             ${statusInfo.pipeHint}
                         </div>
+                    </td>
+                    <td class="phones-td phones-td-warmup" onclick="event.stopPropagation()">
+                        <input type="checkbox" class="phones-check" ${hasDevice ? '' : 'disabled'}
+                               ${warmupEnabled ? 'checked' : ''}
+                               onchange="toggleWarmupSlot('${key}', this.checked)"
+                               aria-label="Warmup before post for phone ${key}">
                     </td>
                     <td class="phones-td phones-td-run">${runCell}</td>
                 </tr>`);
@@ -554,6 +735,10 @@ async function stopDailyRun() {
         }
 
         function enc(id) { return encodeURIComponent(id); }
+
+        function brandQ() {
+            return `brand=${enc(BRAND_ID)}`;
+        }
 
         function showBanner(msg) {
             const el = document.getElementById('page-banner');
@@ -705,7 +890,7 @@ async function stopDailyRun() {
                     clearTimeout(postTextSaveTimers[key]);
                     delete postTextSaveTimers[key];
                 }
-                tasks.push(api(`/devices/${enc(deviceId)}/post-texts/${el.dataset.post}/${el.dataset.field}`, {
+                tasks.push(api(`/devices/${enc(deviceId)}/post-texts/${el.dataset.post}/${el.dataset.field}?${brandQ()}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ text: el.value }),
@@ -842,29 +1027,54 @@ async function stopDailyRun() {
         let debugTestRunning = false;
         let debugTestAbort = null;
 
+        function resetDebugRunButtons() {
+            const runBtn = document.getElementById('btn-debug-run');
+            const skipBtn = document.getElementById('btn-debug-run-skip-media');
+            const killBtn = document.getElementById('btn-debug-kill');
+            if (runBtn) {
+                runBtn.disabled = false;
+                runBtn.textContent = 'Run test';
+            }
+            if (skipBtn) {
+                skipBtn.disabled = false;
+                skipBtn.textContent = 'Run A→Z (skip media)';
+            }
+            if (killBtn) killBtn.disabled = true;
+        }
+
+        async function executeDebugStep(testId, skipMedia, signal) {
+            const skipQs = skipMedia ? '&skip_media=1' : '';
+            return api(`/devices/${enc(deviceId)}/debug/${enc(testId)}?brand=${enc(BRAND_ID)}${skipQs}`, {
+                method: 'POST',
+                signal,
+            });
+        }
+
         async function killDebugTest() {
             if (!deviceId) return;
             const killBtn = document.getElementById('btn-debug-kill');
-            const runBtn = document.getElementById('btn-debug-run');
             killBtn.disabled = true;
             if (debugTestAbort) {
                 debugTestAbort.abort();
             }
+            stopSlideshowEmbedGeneration();
             try {
+                await api('/batch/stop', { method: 'POST' });
                 await api(`/devices/${enc(deviceId)}/pipeline/stop`, { method: 'POST' });
+                stopSlideshowPoll();
+                hideSlideshowEmbed();
+                slideshowJobId = null;
                 refreshActivity();
             } catch (err) {
                 alert(`Kill failed: ${err.message}`);
             } finally {
                 debugTestRunning = false;
                 debugTestAbort = null;
-                runBtn.disabled = false;
-                runBtn.textContent = 'Run test';
-                killBtn.disabled = true;
+                resetDebugRunButtons();
             }
         }
 
-        async function runDebugTest() {
+        async function runDebugTest(skipMedia = false, runAll = false) {
             if (debugTestRunning) return;
             if (!deviceId) {
                 const hint = selectedSlot
@@ -879,26 +1089,110 @@ async function stopDailyRun() {
                 showBanner('Choose a debug test from the dropdown.');
                 return;
             }
+            if (runAll && !skipMedia) {
+                showBanner('Full A→Z is only available with skip media.');
+                return;
+            }
+            if (runAll && !debugFlowStepIds.length) {
+                showBanner('Pipeline steps not loaded yet — refresh the page.');
+                return;
+            }
+
             const btn = document.getElementById('btn-debug-run');
+            const skipBtn = document.getElementById('btn-debug-run-skip-media');
             const killBtn = document.getElementById('btn-debug-kill');
             const controller = new AbortController();
             debugTestAbort = controller;
-            const watchdog = setTimeout(() => controller.abort(), 10 * 60 * 1000);
             debugTestRunning = true;
             btn.disabled = true;
+            if (skipBtn) skipBtn.disabled = true;
             killBtn.disabled = false;
-            btn.textContent = 'Running…';
+
+            const startIdx = runAll ? debugFlowStepIds.indexOf(testId) : -1;
+            if (runAll && startIdx < 0) {
+                showBanner('Selected step is not in the A→Z pipeline.');
+                debugTestRunning = false;
+                debugTestAbort = null;
+                resetDebugRunButtons();
+                return;
+            }
+
+            const activeBtn = runAll ? skipBtn : (skipMedia ? skipBtn : btn);
+            if (activeBtn && !runAll) activeBtn.textContent = 'Running…';
+
+            const stepTimeoutMs = 10 * 60 * 1000;
+            let completedAll = false;
+
             try {
-                const res = await api(`/devices/${enc(deviceId)}/debug/${enc(testId)}?brand=${enc(BRAND_ID)}`, {
-                    method: 'POST',
-                    signal: controller.signal,
-                });
-                refreshActivity();
-                await refreshFarmDevices({ quiet: true });
-                if (res.success) {
-                    showBanner(res.message || 'Test completed');
-                } else {
-                    alert(res.message || 'Test failed');
+                const stepsToRun = runAll
+                    ? debugFlowStepIds.slice(startIdx)
+                    : [testId];
+
+                for (let i = 0; i < stepsToRun.length; i++) {
+                    if (controller.signal.aborted) break;
+
+                    const stepId = stepsToRun[i];
+                    select.value = stepId;
+                    localStorage.setItem(DEBUG_STORAGE.test, stepId);
+
+                    if (runAll && skipBtn) {
+                        const overall = startIdx + i + 1;
+                        skipBtn.textContent = `Running ${overall}/${debugFlowStepIds.length}…`;
+                    }
+
+                    const stepController = new AbortController();
+                    const onAbort = () => stepController.abort();
+                    controller.signal.addEventListener('abort', onAbort, { once: true });
+                    const stepWatchdog = setTimeout(() => stepController.abort(), stepTimeoutMs);
+
+                    let res;
+                    try {
+                        res = await executeDebugStep(stepId, skipMedia, stepController.signal);
+                    } finally {
+                        clearTimeout(stepWatchdog);
+                        controller.signal.removeEventListener('abort', onAbort);
+                    }
+
+                    refreshActivity();
+                    await refreshFarmDevices({ quiet: true });
+
+                    if (res.automation_url) {
+                        showSlideshowEmbed(res.automation_url, res.message || 'Generating slideshow…');
+                        const tab = openSlideshowTab(res.automation_url);
+                        if (res.job?.id) {
+                            slideshowJobId = res.job.id;
+                            startSlideshowPoll(res.job.id);
+                            startRunConsolePoll();
+                        }
+                        showBanner(
+                            tab
+                                ? 'Slideshow opened in a new tab — complete generation there (panel also embedded above).'
+                                : 'Slideshow panel opened above — allow pop-ups or use “Open in tab”.',
+                        );
+                        break;
+                    }
+
+                    if (!res.success) {
+                        alert(res.message || `Step failed: ${stepId}`);
+                        break;
+                    }
+
+                    if (i === stepsToRun.length - 1) {
+                        completedAll = runAll;
+                        if (runAll) {
+                            showBanner(`A→Z complete (skip media) — ${debugFlowStepIds.length} steps`);
+                        } else {
+                            advanceDebugStep();
+                            showBanner(res.message || 'Test completed — advanced to next step');
+                        }
+                    } else {
+                        const nextId = stepsToRun[i + 1];
+                        select.value = nextId;
+                        localStorage.setItem(DEBUG_STORAGE.test, nextId);
+                        if (runAll && !res.skipped) {
+                            await new Promise(resolve => setTimeout(resolve, 3000));
+                        }
+                    }
                 }
             } catch (err) {
                 if (err.name !== 'AbortError') {
@@ -908,14 +1202,13 @@ async function stopDailyRun() {
                         if (parsed.detail) msg = String(parsed.detail);
                     } catch (_) {}
                     alert(msg);
+                } else if (runAll && !completedAll) {
+                    showBanner('A→Z run stopped');
                 }
             } finally {
-                clearTimeout(watchdog);
                 debugTestRunning = false;
                 debugTestAbort = null;
-                btn.disabled = false;
-                btn.textContent = 'Run test';
-                killBtn.disabled = true;
+                resetDebugRunButtons();
             }
         }
 
@@ -954,22 +1247,37 @@ async function stopDailyRun() {
             waitForServerBack();
         }
 
+        function advanceDebugStep() {
+            const select = document.getElementById('debug-test-select');
+            if (!select || !debugFlowStepIds.length) return;
+            const idx = debugFlowStepIds.indexOf(select.value);
+            if (idx < 0 || idx >= debugFlowStepIds.length - 1) return;
+            select.value = debugFlowStepIds[idx + 1];
+            localStorage.setItem(DEBUG_STORAGE.test, select.value);
+        }
+
         async function loadDebugTests() {
             try {
-                const tests = await api(`/debug/tests?group=${encodeURIComponent(debugTab)}`);
+                const tests = await api('/debug/tests?group=flow');
                 const select = document.getElementById('debug-test-select');
                 if (!tests.length) {
-                    select.innerHTML = `<option value="">No ${debugTab} tests</option>`;
+                    debugFlowStepIds = [];
+                    select.innerHTML = '<option value="">No pipeline steps</option>';
                     return;
                 }
+                debugFlowStepIds = tests.map(t => t.id);
                 select.innerHTML = tests.map(t =>
                     `<option value="${escapeHtml(t.id)}">${escapeHtml(t.label)}</option>`
                 ).join('');
                 const savedTest = localStorage.getItem(DEBUG_STORAGE.test);
-                if (savedTest && [...select.options].some(o => o.value === savedTest)) {
+                if (savedTest && debugFlowStepIds.includes(savedTest)) {
                     select.value = savedTest;
+                } else {
+                    select.value = debugFlowStepIds[0];
+                    localStorage.setItem(DEBUG_STORAGE.test, select.value);
                 }
             } catch (err) {
+                debugFlowStepIds = [];
                 document.getElementById('debug-test-select').innerHTML =
                     '<option value="">Unavailable</option>';
             }
@@ -979,15 +1287,6 @@ async function stopDailyRun() {
             const panel = document.getElementById('debug-panel');
             if (panel && localStorage.getItem(DEBUG_STORAGE.open) === '1') {
                 panel.open = true;
-            }
-            const savedTab = localStorage.getItem(DEBUG_STORAGE.tab);
-            const validTabs = ['prep', 'account_switch', 'post', 'end'];
-            if (savedTab && validTabs.includes(savedTab)) {
-                debugTab = savedTab;
-                validTabs.forEach(t => {
-                    const btn = document.getElementById(`debug-tab-${t}`);
-                    if (btn) btn.classList.toggle('active', t === savedTab);
-                });
             }
         }
 
@@ -1009,22 +1308,13 @@ async function stopDailyRun() {
             }
         }
 
-        function setDebugTab(tab) {
-            debugTab = tab;
-            localStorage.setItem(DEBUG_STORAGE.tab, tab);
-            ['prep', 'account_switch', 'post', 'end'].forEach(t => {
-                document.getElementById(`debug-tab-${t}`).classList.toggle('active', t === tab);
-            });
-            loadDebugTests();
-        }
-
         async function loadCaptionAiSettings() {
             try {
-                const settings = await api('/caption-ai/settings');
+                const settings = await api(`/caption-ai/settings?${brandQ()}`);
                 const promptEl = document.getElementById('ai-prompt');
                 const tagsEl = document.getElementById('ai-hashtags');
                 if (promptEl && settings.prompt) promptEl.value = settings.prompt;
-                if (tagsEl && settings.hashtags) tagsEl.value = settings.hashtags;
+                if (tagsEl) tagsEl.value = settings.hashtags || '';
             } catch (_) {}
         }
 
@@ -1039,6 +1329,7 @@ async function stopDailyRun() {
                         body: JSON.stringify({
                             prompt: document.getElementById('ai-prompt')?.value || '',
                             hashtags: document.getElementById('ai-hashtags')?.value || '',
+                            brand: BRAND_ID,
                         }),
                     });
                 } catch (_) {}
@@ -1062,22 +1353,29 @@ async function stopDailyRun() {
                     body: JSON.stringify({
                         prompt: document.getElementById('ai-prompt')?.value || '',
                         hashtags: document.getElementById('ai-hashtags')?.value || '',
+                        brand: BRAND_ID,
                     }),
                 });
             } catch (_) {}
         }
 
+        function syncOnscreenTemplateOptions() {
+            const templateEl = document.getElementById('onscreen-template');
+            if (!templateEl) return;
+            [...templateEl.options].forEach(opt => {
+                const brand = opt.dataset.brand;
+                if (!brand) return;
+                opt.hidden = brand !== BRAND_ID;
+            });
+        }
+
         function updateBatchUI(status) {
             currentBatchStatus = status || currentBatchStatus;
-            const s = status.status || 'idle';
-            const running = ['connecting', 'running', 'disconnecting'].includes(s);
-            const btnRun = document.getElementById('btn-run');
-            const btnKill = document.getElementById('btn-kill');
-            if (running) {
-                if (btnRun) btnRun.disabled = true;
-                if (btnKill) btnKill.disabled = false;
-            }
-            setBatchPickerEnabled(!running);
+            syncRunControlButtons({
+                batchStatus: currentBatchStatus,
+                slideshowJob: currentSlideshowJob,
+            });
+            setBatchPickerEnabled(!['connecting', 'running', 'disconnecting'].includes(String(currentBatchStatus.status || '').toLowerCase()));
             void refreshRunConsole();
         }
 
@@ -1137,6 +1435,7 @@ async function stopDailyRun() {
                 prompt: document.getElementById('ai-prompt')?.value || '',
                 hashtags: document.getElementById('ai-hashtags')?.value || '',
                 onscreen_template: document.getElementById('onscreen-template')?.value || null,
+                brand: BRAND_ID,
             };
             if (statusEl) statusEl.textContent = 'Generating…';
             if (btnAll) btnAll.disabled = true;
@@ -1185,13 +1484,13 @@ async function stopDailyRun() {
 
         async function applyOnscreenTemplate() {
             const templateKey = document.getElementById('onscreen-template')?.value || '';
-            localStorage.setItem('onscreenTemplate', templateKey);
+            localStorage.setItem(`onscreenTemplate:${BRAND_ID}`, templateKey);
             if (!templateKey || !deviceId) return;
             try {
                 const res = await api(`/devices/${enc(deviceId)}/onscreen-template/apply`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ template_key: templateKey }),
+                    body: JSON.stringify({ template_key: templateKey, brand: BRAND_ID }),
                 });
                 for (const p of res.posts || []) {
                     const on = document.getElementById(`onscreen-${p.post}`);
@@ -1207,7 +1506,7 @@ async function stopDailyRun() {
             if (!deviceId) { showBanner('Select a device first'); return; }
             if (!confirm('Clear all captions for this device?')) return;
             try {
-                await api(`/devices/${enc(deviceId)}/post-texts/clear`, { method: 'POST' });
+                await api(`/devices/${enc(deviceId)}/post-texts/clear?${brandQ()}`, { method: 'POST' });
                 for (let i = 1; i <= 3; i++) {
                     const on = document.getElementById(`onscreen-${i}`);
                     const fin = document.getElementById(`final-${i}`);
@@ -1220,7 +1519,7 @@ async function stopDailyRun() {
         async function loadPostTexts() {
             if (!deviceId) return;
             try {
-                const res = await api(`/devices/${enc(deviceId)}/post-texts`);
+                const res = await api(`/devices/${enc(deviceId)}/post-texts?${brandQ()}`);
                 for (const p of res.posts || []) {
                     const title = document.querySelector(`.post-group[data-post="${p.post}"] .post-group-title`);
                     const file = p.media_file || p.placeholder || '';
@@ -1241,7 +1540,7 @@ async function stopDailyRun() {
                 const el = document.getElementById(`${field}-${postNum}`);
                 if (!el) return;
                 try {
-                    await api(`/devices/${enc(deviceId)}/post-texts/${postNum}/${field}`, {
+                    await api(`/devices/${enc(deviceId)}/post-texts/${postNum}/${field}?${brandQ()}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ text: el.value }),
@@ -1277,11 +1576,13 @@ async function stopDailyRun() {
             loadBatchSelection();
             bindPostTextInputs();
             bindCaptionAiInputs();
-            const savedTemplate = localStorage.getItem('onscreenTemplate') || '';
+            const defaultTemplate = BRAND_ID === 'valcoin' ? 'valcoin_receipt' : 'america_sick';
+            const savedTemplate = localStorage.getItem(`onscreenTemplate:${BRAND_ID}`) || defaultTemplate;
             const templateEl = document.getElementById('onscreen-template');
             if (templateEl && savedTemplate && [...templateEl.options].some(o => o.value === savedTemplate)) {
                 templateEl.value = savedTemplate;
             }
+            syncOnscreenTemplateOptions();
             try {
                 await loadCaptionAiSettings();
                 await loadDebugTests();

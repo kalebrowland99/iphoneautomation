@@ -610,14 +610,14 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "post-drag-trim": {
-        "label": "Post: Drag trim (320,771)→(55,765), 1.05s — after text scrub",
+        "label": "Post: Drag trim (320,771)→(55,765), 0.9s — after text scrub",
         "kind": "drag",
         "group": "post",
         "x1": 320,
         "y1": 771,
         "x2": 55,
         "y2": 765,
-        "duration_ms": 1050,
+        "duration_ms": 900,
         "move_ms": 10,
         "hold_ms": 0,
         "offline_hint": OFFLINE_HINT,
@@ -988,6 +988,9 @@ def _template_debug_tests(workflows_dir: str = "config/workflows") -> dict[str, 
         if name == "plus":
             tests[f"tap-{name}"]["tap_count"] = 2
             tests[f"tap-{name}"]["tap_interval_seconds"] = 0.5
+            tests[f"tap-{name}"]["poll_interval_seconds"] = 2
+            tests[f"tap-{name}"]["wait_timeout_seconds"] = 30
+            tests[f"tap-{name}"]["post_tap_delay_seconds"] = 3
         elif name == "aa":
             tests[f"tap-{name}"]["poll_interval_seconds"] = 2
             tests[f"tap-{name}"]["wait_timeout_seconds"] = 60
@@ -2856,6 +2859,17 @@ async def tap_detection(
             tap_params,
             step_name=f"debug_{test_id or detection}",
         )
+
+    post_tap_delay = float(spec.get("post_tap_delay_seconds", 0)) if spec else 0.0
+    if post_tap_delay > 0:
+        await app.db.log_activity(
+            "info",
+            "test",
+            f"Settling {post_tap_delay:.0f}s after tapping {detection}",
+            device_id,
+            {"test_id": test_id, "delay_seconds": post_tap_delay},
+        )
+        await asyncio.sleep(post_tap_delay)
 
     await app.screenshot_service.capture(device_id)
 
