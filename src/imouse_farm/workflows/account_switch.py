@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 from imouse_farm.config.models import TikTokNavigationConfig
@@ -69,57 +71,106 @@ async def ensure_tiktok_account(
             f"Checking TikTok account ({dest_handle}, {mode})",
         )
 
-    await wait_for_tiktok_plus_visible(
-        controller,
-        device_id,
-        device_manager=device_manager,
-        vision=vision,
-        templates_directory=templates_dir,
-        log_activity=log_activity,
-    )
+    max_attempts = 2
+    for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            # Previous attempt failed — kill TikTok, go home, reopen it, then retry.
+            if log_activity:
+                await log_activity(
+                    "info",
+                    "workflow",
+                    f"Account switch failed — killing TikTok and retrying (attempt {attempt}/{max_attempts})",
+                )
+            await _kill_and_reopen_tiktok(
+                controller, device_id, templates_dir, log_activity
+            )
 
-    if log_activity:
-        await log_activity("info", "workflow", "Settling 3s — home feed loading after + detected")
-    await _sleep(3.0)
-    await controller.tap(device_id, navigation.profile_tab_x, navigation.profile_tab_y)
-    await _sleep(2.0)
+        await wait_for_tiktok_plus_visible(
+            controller,
+            device_id,
+            device_manager=device_manager,
+            vision=vision,
+            templates_directory=templates_dir,
+            log_activity=log_activity,
+        )
 
-    rect = _search_rect(device_manager, device_id, navigation.account_name_search_rect_pct)
-    if await _screen_shows_handle(controller, device_id, dest_queries, rect):
         if log_activity:
-            await log_activity("info", "workflow", f"Already on {dest_handle}")
+            await log_activity("info", "workflow", "Settling 3s — home feed loading after + detected")
+        await _sleep(3.0)
+        await controller.tap(device_id, navigation.profile_tab_x, navigation.profile_tab_y)
+        await _sleep(2.0)
+
+        rect = _search_rect(device_manager, device_id, navigation.account_name_search_rect_pct)
+        if await _screen_shows_handle(controller, device_id, dest_queries, rect):
+            if log_activity:
+                await log_activity("info", "workflow", f"Already on {dest_handle}")
+            await controller.tap(device_id, navigation.home_tab_x, navigation.home_tab_y)
+            await _sleep(1.0)
+            return True
+
+        if log_activity:
+            await log_activity(
+                "info",
+                "workflow",
+                f"Switching to {dest_handle}",
+            )
+
+        switcher_ok = await _open_account_switcher(
+            controller, device_id, navigation, dest_queries
+        )
+        if not switcher_ok:
+            if attempt < max_attempts:
+                continue
+            raise RuntimeError(
+                "Could not open TikTok account switcher — tap failed at configured opener coordinates"
+            )
+
+        await _sleep(1.0)
+
+        if not await _tap_handle_in_list(controller, device_id, dest_queries):
+            if attempt < max_attempts:
+                continue
+            raise RuntimeError(
+                f"Could not find {dest_handle} in account dropdown via OCR"
+            )
+
+        await _sleep(2.0)
         await controller.tap(device_id, navigation.home_tab_x, navigation.home_tab_y)
         await _sleep(1.0)
+
+        if log_activity:
+            await log_activity("info", "workflow", f"Switched to {dest_handle} — on home tab")
         return True
 
-    if log_activity:
-        await log_activity(
-            "info",
-            "workflow",
-            f"Switching to {dest_handle}",
-        )
+    raise RuntimeError(f"Account switch to {dest_handle} failed after {max_attempts} attempts")
 
-    if not await _open_account_switcher(
-        controller, device_id, navigation, dest_queries
-    ):
-        raise RuntimeError(
-            "Could not open TikTok account switcher — tap failed at configured opener coordinates"
-        )
 
-    await _sleep(1.0)
+async def _kill_and_reopen_tiktok(
+    controller: Any,
+    device_id: str,
+    templates_dir: str,
+    log_activity: LogFn | None = None,
+) -> None:
+    """Kill TikTok via app switcher swipe, go home, then reopen from icon."""
+    await controller.kill_app(device_id)
+    await asyncio.sleep(1.5)
+    await controller.press_home(device_id)
+    await asyncio.sleep(1.0)
 
-    if not await _tap_handle_in_list(controller, device_id, dest_queries):
-        raise RuntimeError(
-            f"Could not find {dest_handle} in account dropdown via OCR"
-        )
-
-    await _sleep(2.0)
-    await controller.tap(device_id, navigation.home_tab_x, navigation.home_tab_y)
-    await _sleep(1.0)
-
-    if log_activity:
-        await log_activity("info", "workflow", f"Switched to {dest_handle} — on home tab")
-    return True
+    tiktok_template = Path(templates_dir) / "tiktok.jpg"
+    if tiktok_template.is_file():
+        hit = await controller.find_template_on_device(device_id, tiktok_template, 0.55)
+        if hit:
+            await controller.tap(device_id, int(hit["x"]), int(hit["y"]))
+            if log_activity:
+                await log_activity("info", "workflow", "Account switch retry — reopened TikTok")
+            await asyncio.sleep(2.5)
+        else:
+            if log_activity:
+                await log_activity("warn", "workflow", "Account switch retry — TikTok icon not found, waiting for + anyway")
+    else:
+        if log_activity:
+            await log_activity("warn", "workflow", "Account switch retry — no tiktok.jpg template, waiting for + anyway")
 
 
 async def _find_text_match(
