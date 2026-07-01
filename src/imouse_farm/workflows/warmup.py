@@ -182,9 +182,49 @@ async def run_tiktok_warmup(
         await log_activity(
             "info",
             "batch",
-            f"Warmup Day {day} complete ✓ — starting post pipeline",
+            f"Warmup Day {day} complete ✓",
             device_id,
         )
+
+    await _teardown_after_warmup(controller, device_id, app_config, log_activity)
+
+
+async def _teardown_after_warmup(
+    controller: Any,
+    device_id: str,
+    app_config: AppConfig,
+    log_activity: Any | None = None,
+) -> None:
+    """Home → open Shadowrocket → turn VPN off → home. Mirrors debug _warmup_steps_post_labely."""
+    from pathlib import Path
+
+    templates_dir = app_config.analysis.templates_directory
+    blue_path = Path(templates_dir) / "bluetoggle.jpg"
+
+    await controller.press_home(device_id)
+    await asyncio.sleep(1.5)
+
+    # Open Shadowrocket.
+    await controller.tap(device_id, SHADOWROCKET_ICON_X, SHADOWROCKET_ICON_Y)
+    await asyncio.sleep(2.0)
+
+    # Turn VPN off only if it's currently on (bluetoggle visible).
+    if blue_path.is_file():
+        vpn_on = await controller.find_template_on_device(
+            device_id, blue_path, threshold=TEMPLATE_THRESHOLD
+        )
+        if vpn_on:
+            await controller.tap(device_id, VPN_TOGGLE_X, VPN_TOGGLE_Y)
+            await asyncio.sleep(3.0)
+            if log_activity:
+                await log_activity("info", "batch", "Warmup: VPN turned off", device_id)
+        else:
+            if log_activity:
+                await log_activity("info", "batch", "Warmup: VPN already off", device_id)
+
+    await controller.press_home(device_id)
+    await asyncio.sleep(1.0)
+    logger.info("warmup_teardown_done", device_id=device_id)
 
 
 async def _open_tiktok_for_warmup(
