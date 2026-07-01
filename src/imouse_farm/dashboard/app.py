@@ -44,15 +44,20 @@ from imouse_farm.captions.service import (
 )
 from imouse_farm.post.account_profile_store import (
     brand_profile_key,
+    clear_cant_cast_imouse,
+    clear_prep_completed,
     get_brand_profile,
     get_profile,
     get_profile_for_device,
+    is_cant_cast_imouse,
     list_profiles,
     mark_run_failed,
     mark_run_started,
     mark_run_success,
+    set_cant_cast_imouse,
     set_profile,
 )
+from imouse_farm.post.brand_keys import device_storage_key as _device_storage_key
 from imouse_farm.post.post_caption_store import (
     POST_COUNT,
     clear_all_post_texts,
@@ -445,6 +450,25 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         await app_instance.slideshow_orchestrator.cancel_running_jobs()
         await app_instance.farm_batch.stop()
         return {"success": True, "status": app_instance.farm_batch.get_status()}
+
+    @app.post("/api/batch/reset-session")
+    async def reset_batch_session() -> dict[str, Any]:
+        """Clear prep_completed_at for all slots so the next run re-uploads videos fresh."""
+        devices = farm_devices_sorted(app_instance.device_manager)
+        cleared: list[str] = []
+        for device in devices:
+            base_key = _device_storage_key(device.device_id, device.user_name)
+            for brand in ("labely", "valcoin"):
+                clear_prep_completed(base_key, brand=brand)
+            cleared.append(str(device.user_name))
+        return {"success": True, "cleared_slots": cleared}
+
+    @app.post("/api/batch/clear-cant-cast/{slot}")
+    async def clear_cant_cast_slot(slot: str) -> dict[str, Any]:
+        """Remove the cant_cast_imouse tag from a slot so it will be attempted again."""
+        base_key = f"slot:{slot.lower()}"
+        clear_cant_cast_imouse(base_key)
+        return {"success": True, "slot": slot}
 
     @app.get("/api/debug/tests")
     async def get_debug_tests(group: str | None = None) -> list[dict[str, Any]]:

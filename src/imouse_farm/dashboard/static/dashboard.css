@@ -143,6 +143,23 @@
   white-space: nowrap;
 }
 
+.cant-cast-badge {
+  display: inline-block;
+  margin-top: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 9999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cant-cast-badge:hover {
+  background: #b91c1c;
+}
+
 .phones-handle-link {
   display: block;
   max-width: 6.5rem;

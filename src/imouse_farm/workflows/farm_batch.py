@@ -10,7 +10,13 @@ from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.permissions.watcher import PermissionWatcherManager
 from imouse_farm.post.post_caption_store import validate_post_texts, text_key_for_device
-from imouse_farm.post.account_profile_store import get_profile_for_device
+from imouse_farm.post.account_profile_store import (
+    get_profile_for_device,
+    is_prep_valid,
+    is_cant_cast_imouse,
+    set_cant_cast_imouse,
+)
+from imouse_farm.post.brand_keys import device_storage_key
 from imouse_farm.captions.service import (
     default_onscreen_template_for_brand,
     generate_captions_for_device,
@@ -191,10 +197,36 @@ class FarmBatchRunner:
                 for device in batch:
                     if self._stop_requested:
                         break
+                    base_key = device_storage_key(device.device_id, device.user_name)
+                    if is_cant_cast_imouse(base_key):
+                        logger.info(
+                            "batch_cast_skipped_tagged",
+                            device_id=device.device_id,
+                            slot=device.user_name,
+                        )
+                        await self._db.log_activity(
+                            "error",
+                            "batch",
+                            f"Phone {device.user_name}: skipped — tagged as cant cast iMouse",
+                            device.device_id,
+                            {"batch_index": batch_index},
+                        )
+                        self._status["failed"].append({
+                            "slot": device.user_name,
+                            "device_id": device.device_id,
+                            "reason": "cant_cast_imouse",
+                        })
+                        continue
                     ok = await self._ensure_cast(device.device_id)
                     if ok:
                         connected.append(device)
                     else:
+                        set_cant_cast_imouse(base_key)
+                        logger.info(
+                            "batch_cast_tagged_cant_cast",
+                            device_id=device.device_id,
+                            slot=device.user_name,
+                        )
                         self._status["failed"].append({
                             "slot": device.user_name,
                             "device_id": device.device_id,
@@ -203,7 +235,7 @@ class FarmBatchRunner:
                         await self._db.log_activity(
                             "error",
                             "batch",
-                            f"Phone {device.user_name}: cast connect failed",
+                            f"Phone {device.user_name}: cast connect failed — tagged as cant cast iMouse",
                             device.device_id,
                             {"batch_index": batch_index},
                         )
@@ -223,14 +255,32 @@ class FarmBatchRunner:
                     valcoin_profile = get_profile_for_device(
                         device.device_id, device.user_name, brand="valcoin"
                     )
-                    chain_valcoin = (
-                        brand == "labely"
-                        and from_post is None
-                        and self._config.chain_valcoin_after_labely
-                        and not valcoin_profile.get("warmup_enabled")
-                    )
                     profile = get_profile_for_device(
                         device.device_id, device.user_name, brand=brand
+                    )
+
+                    # Auto-resume: if the user stopped and restarted within 24h, skip
+                    # re-uploading videos that are already on the device.
+                    effective_from_post = from_post
+                    base_key = device_storage_key(device.device_id, device.user_name)
+                    if from_post is None and is_prep_valid(base_key, brand=brand):
+                        posts_done = int(profile.get("posts_completed", 0) or 0)
+                        if posts_done < 3:
+                            effective_from_post = posts_done + 1
+                            await self._db.log_activity(
+                                "info",
+                                "batch",
+                                f"Resuming from post {effective_from_post} "
+                                f"(prep already done, skipping re-upload)",
+                                device.device_id,
+                                {"from_post": effective_from_post, "posts_done": posts_done},
+                            )
+                        # posts_done == 3 means last run fully posted; run fresh
+                    chain_valcoin = (
+                        brand == "labely"
+                        and effective_from_post is None
+                        and self._config.chain_valcoin_after_labely
+                        and not valcoin_profile.get("warmup_enabled")
                     )
                     if profile.get("warmup_enabled"):
                         self._status["message"] = (
@@ -273,7 +323,7 @@ class FarmBatchRunner:
 
                     # Caption validation only needed when actually posting.
                     text_key = _post_text_key(device, brand)
-                    check_from = from_post if from_post is not None else 1
+                    check_from = effective_from_post if effective_from_post is not None else 1
                     missing = validate_post_texts(text_key, from_post=check_from, brand=brand)
                     if chain_valcoin:
                         valcoin_key = _post_text_key(device, "valcoin")
@@ -332,7 +382,7 @@ class FarmBatchRunner:
                     self._batch_done_events[device.device_id] = asyncio.Event()
                     started = await self._pipeline.start(
                         device.device_id,
-                        from_post=from_post,
+                        from_post=effective_from_post,
                         brand=brand,
                         chain_valcoin_after_labely=chain_valcoin,
                     )

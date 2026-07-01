@@ -19,12 +19,27 @@ from imouse_farm.post.brand_keys import (
 ACCOUNT_PROFILES_PATH = Path("data/account_profiles.json")
 VALID_STATUSES = frozenset({"idle", "running", "success", "failed"})
 _LEGACY_SLOT_RE = re.compile(r"^slot:\d+$")
+_24H_SECONDS = 86_400
 
 _store: dict[str, dict[str, Any]] = {}
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_within_24h(ts: str | None) -> bool:
+    """Return True if *ts* is a valid ISO timestamp recorded within the last 24 hours."""
+    if not ts:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(ts))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - dt).total_seconds()
+        return 0 <= age < _24H_SECONDS
+    except (ValueError, TypeError):
+        return False
 
 
 def _default_profile(brand: str = "labely") -> dict[str, Any]:
@@ -36,11 +51,14 @@ def _default_profile(brand: str = "labely") -> dict[str, Any]:
         "brand": b,
         "warmup_enabled": False,
         "warmup_days_completed": 0,
+        "last_warmup_at": None,
         "last_run_status": "idle",
         "posts_completed": 0,
         "posts_target": 3,
         "last_run_at": None,
         "last_error": "",
+        "prep_completed_at": None,
+        "cant_cast_imouse": False,
     }
 
 
@@ -70,6 +88,12 @@ def _load_store() -> None:
             else:
                 brand = _normalize_brand(value.get("brand", str_key.rsplit(":", 1)[-1]))
                 loaded[str_key] = _normalize_profile(value, brand)
+    # Any profile still marked "running" at load time was interrupted by a
+    # server restart — no run survives a reload, so mark them failed.
+    for profile in loaded.values():
+        if profile.get("last_run_status") == "running":
+            profile["last_run_status"] = "failed"
+            profile["last_error"] = "interrupted by server restart"
     _store = loaded
 
 
@@ -81,16 +105,22 @@ def _normalize_profile(data: dict[str, Any], brand: str) -> dict[str, Any]:
     status = str(data.get("last_run_status", "idle") or "idle").strip().lower()
     if status not in VALID_STATUSES:
         status = "idle"
+    # Migrate legacy bool prep_completed → prep_completed_at
+    prep_at = data.get("prep_completed_at") or (
+        _now_iso() if data.get("prep_completed") else None
+    )
     base.update({
         "tiktok_handle": handle,
         "brand": _normalize_brand(brand),
         "warmup_enabled": bool(data.get("warmup_enabled", False)),
         "warmup_days_completed": max(0, int(data.get("warmup_days_completed", 0) or 0)),
+        "last_warmup_at": data.get("last_warmup_at") or None,
         "last_run_status": status,
         "posts_completed": max(0, int(data.get("posts_completed", 0) or 0)),
         "posts_target": max(1, int(data.get("posts_target", 3) or 3)),
         "last_run_at": data.get("last_run_at"),
         "last_error": str(data.get("last_error", "") or ""),
+        "prep_completed_at": prep_at or None,
     })
     return base
 
@@ -184,14 +214,48 @@ def set_profile(device_key: str, *, brand: str = "labely", **fields: Any) -> dic
 
 
 def increment_warmup_days(device_id: str, user_name: str = "", *, brand: str = "labely") -> int:
-    """Increment warmup_days_completed for a device slot and return the new day count."""
+    """Increment warmup_days_completed only if >= 24 h have passed since the last warmup.
+
+    Always records the current time in last_warmup_at.
+    Returns the (possibly unchanged) day count.
+    """
     key = brand_profile_key(device_storage_key(device_id, user_name), brand)
     profile = get_profile(key, brand=brand)
-    new_day = int(profile.get("warmup_days_completed", 0) or 0) + 1
-    profile["warmup_days_completed"] = new_day
+    current_day = int(profile.get("warmup_days_completed", 0) or 0)
+    last_warmup_at = profile.get("last_warmup_at")
+    if not _is_within_24h(last_warmup_at):
+        # First warmup of the day — increment the counter.
+        current_day += 1
+        profile["warmup_days_completed"] = current_day
+    profile["last_warmup_at"] = _now_iso()
     _store[key] = profile
     _save_store()
-    return new_day
+    return current_day
+
+
+def is_prep_valid(device_key: str, *, brand: str = "labely") -> bool:
+    """Return True if prep was completed within the last 24 hours."""
+    key = brand_profile_key(device_key, brand)
+    profile = get_profile(key, brand=brand)
+    return _is_within_24h(profile.get("prep_completed_at"))
+
+
+def mark_prep_completed(device_key: str, *, brand: str = "labely") -> None:
+    """Record that tiktok_prep uploaded videos to the device — safe to skip on restart."""
+    key = brand_profile_key(device_key, brand)
+    profile = get_profile(key, brand=brand)
+    profile["prep_completed_at"] = _now_iso()
+    _store[key] = profile
+    _save_store()
+
+
+def clear_prep_completed(device_key: str, *, brand: str = "labely") -> None:
+    """Invalidate the prep-done flag so the next run re-uploads videos."""
+    key = brand_profile_key(device_key, brand)
+    profile = get_profile(key, brand=brand)
+    profile["prep_completed_at"] = None
+    _store[key] = profile
+    _save_store()
 
 
 def mark_run_started(device_key: str, *, brand: str = "labely") -> None:
@@ -201,6 +265,8 @@ def mark_run_started(device_key: str, *, brand: str = "labely") -> None:
     profile["posts_completed"] = 0
     profile["last_error"] = ""
     profile["last_run_at"] = _now_iso()
+    # Preserve prep_completed — if videos were already uploaded before this run
+    # started (e.g. a restart), the flag stays True so the next batch can skip prep.
     _store[key] = profile
     _save_store()
 
@@ -227,6 +293,7 @@ def mark_run_success(
         profile["posts_completed"] = max(0, int(posts_completed))
     profile["last_run_at"] = _now_iso()
     profile["last_error"] = ""
+    profile["prep_completed_at"] = None  # full run done; next run should upload fresh videos
     _store[key] = profile
     _save_store()
 
@@ -255,6 +322,44 @@ def mark_run_idle(device_key: str, *, brand: str = "labely") -> None:
     profile["last_run_status"] = "idle"
     _store[key] = profile
     _save_store()
+
+
+# ── Device-level cast tag (not brand-specific) ────────────────────────────────
+
+def set_cant_cast_imouse(base_key: str) -> None:
+    """Mark a device slot as unable to cast. Persists across runs until cleared."""
+    changed = False
+    for brand in VALID_BRANDS:
+        key = brand_profile_key(base_key, brand)
+        if key in _store:
+            _store[key]["cant_cast_imouse"] = True
+            changed = True
+    if not changed:
+        # Ensure at least one profile exists with the flag set.
+        for brand in VALID_BRANDS:
+            key = brand_profile_key(base_key, brand)
+            profile = get_profile(key, brand=brand)
+            profile["cant_cast_imouse"] = True
+            _store[key] = profile
+    _save_store()
+
+
+def clear_cant_cast_imouse(base_key: str) -> None:
+    """Clear the cant_cast_imouse tag so the device will be attempted again."""
+    for brand in VALID_BRANDS:
+        key = brand_profile_key(base_key, brand)
+        if key in _store:
+            _store[key]["cant_cast_imouse"] = False
+    _save_store()
+
+
+def is_cant_cast_imouse(base_key: str) -> bool:
+    """Return True if ANY brand profile for this slot has cant_cast_imouse=True."""
+    for brand in VALID_BRANDS:
+        key = brand_profile_key(base_key, brand)
+        if _store.get(key, {}).get("cant_cast_imouse"):
+            return True
+    return False
 
 
 _load_store()

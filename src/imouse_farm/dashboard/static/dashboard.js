@@ -649,6 +649,7 @@ async function stopDailyRun() {
                 const handle = profile?.tiktok_handle || '';
                 const warmupEnabled = Boolean(profile?.warmup_enabled);
                 const warmupDays = parseInt(profile?.warmup_days_completed || 0, 10);
+                const cantCast = Boolean(profile?.cant_cast_imouse);
                 const runCell = lastRunCell(profile);
                 const classes = [
                     'phones-table-row',
@@ -670,6 +671,7 @@ async function stopDailyRun() {
                     <td class="phones-td phones-td-handle">
                         ${tiktokHandleCell(handle)}
                         ${BRAND_ID !== 'labely' ? `<span class="warmup-day-badge">${warmupDays > 0 ? `Day ${warmupDays} Warmup ✓` : 'Day 0 Warmup'}</span>` : ''}
+                        ${cantCast ? `<span class="cant-cast-badge" title="Click to clear tag" onclick="event.stopPropagation(); clearCantCast('${key}')">⚠ cant cast iMouse</span>` : ''}
                     </td>
                     <td class="phones-td">
                         <div class="phones-status-cell">
@@ -1437,6 +1439,24 @@ async function stopDailyRun() {
                 updateBatchUI(res.status || {});
                 refreshFarmDevices({ quiet: true });
             } catch (err) { alert(`Kill failed: ${err.message}`); }
+        }
+
+        async function resetSession() {
+            try {
+                const res = await api('/batch/reset-session', { method: 'POST' });
+                const slots = (res.cleared_slots || []).join(', ') || 'none';
+                appendRunLog(`Session reset — next run will re-upload videos (slots: ${slots})`, 'info', 'batch');
+                refreshFarmDevices({ quiet: true });
+            } catch (err) { alert(`Reset failed: ${err.message}`); }
+        }
+
+        async function clearCantCast(slot) {
+            if (!confirm(`Clear "cant cast iMouse" tag for slot ${slot}? It will be attempted again on the next run.`)) return;
+            try {
+                await api(`/batch/clear-cant-cast/${encodeURIComponent(slot)}`, { method: 'POST' });
+                appendRunLog(`Cleared cant cast tag for slot ${slot}`, 'info', 'batch');
+                refreshFarmDevices({ quiet: true });
+            } catch (err) { alert(`Clear failed: ${err.message}`); }
         }
 
         async function generateAiCaptions(allPhones = true) {
