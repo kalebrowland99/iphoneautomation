@@ -64,7 +64,7 @@ function parseDataUrl(dataUrl) {
   return { mimeType: m[1].trim().split(";")[0], base64: m[2].trim() };
 }
 
-/** FisherΓÇôYates shuffle (returns a new array). */
+/** Fisher–Yates shuffle (returns a new array). */
 function shuffleArray(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -78,7 +78,7 @@ const PRESET_COLORS = [
   "#e03030","#e05c20","#d4a017","#1a8a3a","#1a5cbf","#7c22cc","#000000","#ffffff",
 ];
 
-// ΓöÇΓöÇ Grail brand tiers (higher tier = picked more often) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+// ── Grail brand tiers (higher tier = picked more often) ──────────────────────
 const BRAND_TIERS = {
   1: ["Kapital","Visvim","Issey Miyake","Yohji Yamamoto","Comme des Gar├ºons","Junya Watanabe","Undercover","Number Nine","Hysteric Glamour","Neighborhood","WTAPS","LGB","If Six Was Nine","Kiko Kostadinov"],
   2: ["Chrome Hearts","Rick Owens","Balenciaga","Louis Vuitton","Dior","Saint Laurent","Givenchy","Prada","Maison Margiela","Bottega Veneta","Celine","Gucci","Vetements","Amiri","Palm Angels","1017 ALYX 9SM","Acne Studios","Helmut Lang","Raf Simons"],
@@ -104,21 +104,21 @@ function buildWeightedPool(items) {
 }
 
 const DEFAULT_BRAND_LIST = [
-  // Tier 1 ΓÇö Japanese Archive
+  // Tier 1 — Japanese Archive
   "Kapital","Visvim","Issey Miyake","Yohji Yamamoto","Comme des Gar├ºons",
   "Junya Watanabe","Undercover","Number Nine","Hysteric Glamour",
   "Neighborhood","WTAPS","Kiko Kostadinov",
-  // Tier 2 ΓÇö High Fashion
+  // Tier 2 — High Fashion
   "Chrome Hearts","Rick Owens","Balenciaga","Louis Vuitton","Dior",
   "Saint Laurent","Prada","Maison Margiela","Bottega Veneta","Gucci",
   "Vetements","Amiri","Helmut Lang","Raf Simons","Acne Studios",
-  // Tier 3 ΓÇö Vintage Workwear
+  // Tier 3 — Vintage Workwear
   "vintage Carhartt","vintage Levi's","vintage Dickies","vintage Wrangler",
   "vintage Carhartt jacket","Levi's 501 made in USA",
-  // Tier 4 ΓÇö Streetwear
+  // Tier 4 — Streetwear
   "Supreme","Stussy","BAPE","Off-White","Palace","Fear of God",
   "Billionaire Boys Club","Arc'teryx","Patagonia","The North Face",
-  // Tier 5 ΓÇö Sneakers / Merch
+  // Tier 5 — Sneakers / Merch
   "vintage Nike","Air Jordan vintage","vintage Adidas","Yeezy",
   "vintage New Balance","vintage Salomon","vintage Converse",
   "vintage Metallica band tee","vintage Nirvana band tee",
@@ -126,7 +126,7 @@ const DEFAULT_BRAND_LIST = [
   "Naruto anime tee","vintage Vivienne Westwood",
 ].join("\n");
 
-// Minimal slot factory ΓÇö used for batch generation (avoids circular import with page.js)
+// Minimal slot factory — used for batch generation (avoids circular import with page.js)
 const freshSlot = (i) => ({
   imageUrl: null, prompt: "",
   itemName: `Item ${i + 1}`, spentPrice: "", soldPrice: "",
@@ -239,7 +239,7 @@ function triggerZipDownload(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-/** ISO BMFF / MP4 ΓÇö `ftyp` box at byte offset 4. */
+/** ISO BMFF / MP4 — `ftyp` box at byte offset 4. */
 function isMp4Bytes(bytes) {
   return (
     bytes.length >= 12
@@ -319,7 +319,7 @@ const LABELY_DB_BATCH_COUNT = 6;
 /** Default target for large iPhone packs; export itself scales to the saved gallery. */
 const GALLERY_IPHONE_DEVICE_COUNT = 20;
 
-/** Valcoin gallery export: 6 batches ├ù 20 unique slideshows = 120 (same iPhone ZIP layout as Labely food DB). */
+/** Valcoin gallery export: 6 batches × 20 unique slideshows = 120 (same iPhone ZIP layout as Labely food DB). */
 const VALCOIN_IPHONE_SLIDESHOWS_PER_BATCH = 20;
 const VALCOIN_IPHONE_PACK_TOTAL = LABELY_DB_BATCH_COUNT * VALCOIN_IPHONE_SLIDESHOWS_PER_BATCH;
 
@@ -478,7 +478,7 @@ const waitForImagesDecoded = async (root) => {
   );
 };
 
-// Scale preview DOM ΓåÆ 1080px wide export without forcing canvasWidth/height (breaks img paint in foreignObject on some browsers).
+// Scale preview DOM → 1080px wide export without forcing canvasWidth/height (breaks img paint in foreignObject on some browsers).
 const EXPORT_CAPTURE_PIXEL_RATIO = 1080 / Math.round(1080 * DISPLAY_SCALE);
 
 export default function ConfigPanel({
@@ -597,10 +597,10 @@ export default function ConfigPanel({
   ];
 
   const DEFAULT_PROMPT = isValcoin
-    ? "A single valuable US quarter coin on a wooden table, photographed like a real iPhone photo shot on 0.5├ù (ultra-wide). The coin should be a real existing valuable variety (random pick), natural room lighting, no hands, no text overlays, no other coins, no props. Composition: the coin should appear smaller in the frame (not filling the shot) with lots of surrounding table visible. Lens/look: subtle ultra-wide edge stretch and mild barrel distortion like iPhone 0.5├ù. Quality: intentionally a bit worse/rough ΓÇö slightly blurry/soft focus like a quick snap, less sharp, mild motion blur or missed focus is okay. Color: iPhone-like but a bit bland/flat (slightly desaturated, lower contrast), not cinematic. Texture: visible sensor grain and minor compression artifacts. Include realistic imperfections: light dust, tiny lint specks, faint fingerprints/smudges, small nicks, micro-scratches, slight wear/toning, and minor surface blemishes."
+    ? "A single valuable US quarter coin on a wooden table, photographed like a real iPhone photo shot on 0.5× (ultra-wide). The coin should be a real existing valuable variety (random pick), natural room lighting, no hands, no text overlays, no other coins, no props. Composition: the coin should appear smaller in the frame (not filling the shot) with lots of surrounding table visible. Lens/look: subtle ultra-wide edge stretch and mild barrel distortion like iPhone 0.5×. Quality: intentionally a bit worse/rough — slightly blurry/soft focus like a quick snap, less sharp, mild motion blur or missed focus is okay. Color: iPhone-like but a bit bland/flat (slightly desaturated, lower contrast), not cinematic. Texture: visible sensor grain and minor compression artifacts. Include realistic imperfections: light dust, tiny lint specks, faint fingerprints/smudges, small nicks, micro-scratches, slight wear/toning, and minor surface blemishes."
     : isLabely
-    ? "Labely uses your uploaded photos only ΓÇö this prompt is not used to generate images. You can leave it or add notes for yourself."
-    : "POV into a blue thrift shopping cart (buggy) full of tossed secondhand clothes ΓÇö garments may lie upside-down or sideways; bottom hems/waistbands should look softly folded or cuffed (no people, no hands). XXL hero piece: faded washed-out colors only, cotton lint balls, stray dog hair, slight print/color imperfections. Concrete floor and aisles behind, fluorescent light, shallow DOF, no overlays.";
+    ? "Labely uses your uploaded photos only — this prompt is not used to generate images. You can leave it or add notes for yourself."
+    : "POV into a blue thrift shopping cart (buggy) full of tossed secondhand clothes — garments may lie upside-down or sideways; bottom hems/waistbands should look softly folded or cuffed (no people, no hands). XXL hero piece: faded washed-out colors only, cotton lint balls, stray dog hair, slight print/color imperfections. Concrete floor and aisles behind, fluorescent light, shallow DOF, no overlays.";
 
   const [imageModel, setImageModelRaw] = useState("gpt-image-1"); // "gpt-image-1" | "gemini"
   const setImageModel = (v) => { setImageModelRaw(v); localStorage.setItem("ts_image_model", v); };
@@ -658,7 +658,7 @@ export default function ConfigPanel({
     }
   }, [mounted, isValcoin, brand.appId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Parsed brand items (non-empty lines) ΓÇö fall back to defaults when empty
+  // Parsed brand items (non-empty lines) — fall back to defaults when empty
   const brandItems = (() => {
     if (isLabely) {
       const raw =
@@ -675,7 +675,7 @@ export default function ConfigPanel({
   const getCaptureOptions = (bgColor, fontEmbedCSS) => ({
     backgroundColor: bgColor,
     pixelRatio: EXPORT_CAPTURE_PIXEL_RATIO,
-    // html-to-image re-fetches every http(s) img when cacheBust is on ΓåÆ CORS failures.
+    // html-to-image re-fetches every http(s) img when cacheBust is on → CORS failures.
     cacheBust: false,
     includeQueryParams: false,
     ...(fontEmbedCSS ? { fontEmbedCSS } : {}),
@@ -915,13 +915,13 @@ export default function ConfigPanel({
     let phase = "";
     if (isExporting) {
       percent = typeof exportProgress === "number" ? exportProgress : 0;
-      phase = exportStatus || "ExportingΓÇª";
+      phase = exportStatus || "Exporting…";
     } else if (genAllProgress) {
       const t = Math.max(1, Number(genAllProgress.total) || 1);
       percent = Math.round(((Number(genAllProgress.done) || 0) / t) * 100);
-      phase = genAllProgress.phase || "WorkingΓÇª";
+      phase = genAllProgress.phase || "Working…";
     } else {
-      phase = generatingSlot === "all" ? "Preparing batchΓÇª" : "WorkingΓÇª";
+      phase = generatingSlot === "all" ? "Preparing batch…" : "Working…";
     }
     setGlobalJob({
       percent: Math.min(100, Math.max(0, percent)),
@@ -938,7 +938,7 @@ export default function ConfigPanel({
   }, [generatingSlot, genAllProgress, isExporting, exportProgress, exportStatus, farmUpload?.jobId]);
 
   /**
-   * Valcoin: Wikimedia Commons US coin photos only ΓÇö never AI-generated images.
+   * Valcoin: Wikimedia Commons US coin photos only — never AI-generated images.
    * Pass `excludeSourceUrls` to avoid returning a coin already used in the
    * current slideshow (keeps the 6-coin collage visually distinct).
    * @param {Set<string> | string[] | undefined} excludeSourceUrls
@@ -1030,46 +1030,46 @@ If the subject is an object (like germ-x, a mask, receipt piles, shipping labels
       const SHARED_RULES_INTRO = iphoneRetailPhotoImperfectionPrompt("thrift");
 
       const SHARED_RULES_NO_HANDS_MID = `
-No hands or people rule (critical): Do not show human hands, arms, fingers, wrists, or any partial limbs. Do not show people in the foreground or midground. Do not show gloves that imply a hand inside. The product must never be held or carried. If distant background shoppers are visible, they must be tiny and incidental ΓÇö still in focus with the rest of the scene (no extra blur on people); show no discernible hands or arms.
+No hands or people rule (critical): Do not show human hands, arms, fingers, wrists, or any partial limbs. Do not show people in the foreground or midground. Do not show gloves that imply a hand inside. The product must never be held or carried. If distant background shoppers are visible, they must be tiny and incidental — still in focus with the rest of the scene (no extra blur on people); show no discernible hands or arms.
 
-Clothing-only: The hero item must always be an article of clothing or wearable garment (jeans, jacket, hoodie, tee, coat, sweater, pants, shorts, dress, etc.) ΓÇö never furniture, housewares, bags-as-prop-only, or non-apparel hard goods.
+Clothing-only: The hero item must always be an article of clothing or wearable garment (jeans, jacket, hoodie, tee, coat, sweater, pants, shorts, dress, etc.) — never furniture, housewares, bags-as-prop-only, or non-apparel hard goods.
 
 Shopping-cart "buggy" composition (critical):
-Use a slightly high POV looking down into a bright blue plastic retail shopping cart (thrift-store buggy) with the classic diamond-lattice grid pattern on the basket sides. Fill the cart with a messy, chaotic pile of secondhand clothes ΓÇö thrown in carelessly: overlapping layers, wadded fabric, random folds, denim mixed with knits and prints. Individual garments may be oriented any way in the pile ΓÇö upside down, inside-out, sideways, or crumpled ΓÇö as long as the hero piece is identifiable. The bottom / hem / waistband area of visible garments should consistently read as softly folded, cuffed, or rolled (never a stiff factory-flat presentation). The featured brand garment must read clearly in the heap with other anonymous thrift garments around it. The pile must look tossed-in and uncurated ΓÇö never a neat stack, never a boutique flat-lay.
+Use a slightly high POV looking down into a bright blue plastic retail shopping cart (thrift-store buggy) with the classic diamond-lattice grid pattern on the basket sides. Fill the cart with a messy, chaotic pile of secondhand clothes — thrown in carelessly: overlapping layers, wadded fabric, random folds, denim mixed with knits and prints. Individual garments may be oriented any way in the pile — upside down, inside-out, sideways, or crumpled — as long as the hero piece is identifiable. The bottom / hem / waistband area of visible garments should consistently read as softly folded, cuffed, or rolled (never a stiff factory-flat presentation). The featured brand garment must read clearly in the heap with other anonymous thrift garments around it. The pile must look tossed-in and uncurated — never a neat stack, never a boutique flat-lay.
 
 The subject must behave according to real-world physics. Fabric drape, weight, shadows, and contact between garments must look natural.
 
-The camera should feel like a casual phone snapshot aimed down into the cart ΓÇö the whole scene sharp: pile, cart, floor, and store background all clearly defined (same deep-focus rule as above).`.trim();
+The camera should feel like a casual phone snapshot aimed down into the cart — the whole scene sharp: pile, cart, floor, and store background all clearly defined (same deep-focus rule as above).`.trim();
 
       const SHARED_RULES_POSE_FIRST_MID = `
-Pose format ΓÇö slide 1 only: Hands and arms are allowed on this slide only. Show a natural in-thrift-store shot where the item may be held or presented by hands (anatomy must look real). Do not show full faces ΓÇö keep the frame focused on the product and hands. This exception does not apply to any other slide.
+Pose format — slide 1 only: Hands and arms are allowed on this slide only. Show a natural in-thrift-store shot where the item may be held or presented by hands (anatomy must look real). Do not show full faces — keep the frame focused on the product and hands. This exception does not apply to any other slide.
 
 Handling rule:
 For most items (clothing, shoes, accessories, small objects, etc.), the item may be held by a human hand in a physically believable way. The hand should grip the object where a person would naturally hold it, with fingers and thumb stabilizing it. The object must appear fully supported with correct balance and weight.
 
-Clothing rule: If the item is a jacket, hoodie, shirt, pants, coat, or any garment that would hang on a hanger, the person may be holding it by the coat hanger ΓÇö fingers around the hook or neck, garment hanging with natural drape. The hanger should look like a standard thrift wire or plastic hanger.
+Clothing rule: If the item is a jacket, hoodie, shirt, pants, coat, or any garment that would hang on a hanger, the person may be holding it by the coat hanger — fingers around the hook or neck, garment hanging with natural drape. The hanger should look like a standard thrift wire or plastic hanger.
 
-Clothing-only: the hero item must be a garment by the requested brand ΓÇö not furniture or non-apparel.
+Clothing-only: the hero item must be a garment by the requested brand — not furniture or non-apparel.
 
 Footwear: If the brand piece is shoes, they may sit on top of or within the clothing pile in the cart.
 
-The camera perspective should look like a first-person smartphone photo when the item is handheld, as if a shopper lifted the item to inspect it. The item and the store interior behind it must both stay sharp ΓÇö same deep-focus requirement; no background blur.
+The camera perspective should look like a first-person smartphone photo when the item is handheld, as if a shopper lifted the item to inspect it. The item and the store interior behind it must both stay sharp — same deep-focus requirement; no background blur.
 
 The subject must behave according to real-world physics. Gravity, orientation, contact points, shadows, and balance should all appear natural.`.trim();
 
       const SHARED_RULES_APPAREL_AUTHENTICITY = `
-Garment authenticity (clothing only): Size the hero piece as XXL adult ΓÇö visibly oversized, relaxed boxy fit, roomy sleeves and torso length where appropriate. Hem / bottom edge treatment: the lower edge of the garment (whichever end is visible given orientation) should always appear softly folded, cuffed, or stacked ΓÇö never a razor-sharp pressed hem. Color palette: prefer faded, washed-out, sun-softened tones ΓÇö avoid saturated brand-new dyes. Surface detail (vary subtly across generations): small cotton lint balls (pilled specs), a few stray dog or pet hairs caught in the pile, minor color unevenness or slight print imperfections on graphics (slightly misregistered ink, hairline cracks in screen prints, gently worn lettering ΓÇö still recognizable as the real brand graphic, not fake text). Include wrinkled fabric, uneven hems, stretched collars, softened cotton, worn denim, casual imperfect resale condition. Other garments in the pile stay anonymous with a non-coordinated mix. Avoid pristine catalog styling.`.trim();
+Garment authenticity (clothing only): Size the hero piece as XXL adult — visibly oversized, relaxed boxy fit, roomy sleeves and torso length where appropriate. Hem / bottom edge treatment: the lower edge of the garment (whichever end is visible given orientation) should always appear softly folded, cuffed, or stacked — never a razor-sharp pressed hem. Color palette: prefer faded, washed-out, sun-softened tones — avoid saturated brand-new dyes. Surface detail (vary subtly across generations): small cotton lint balls (pilled specs), a few stray dog or pet hairs caught in the pile, minor color unevenness or slight print imperfections on graphics (slightly misregistered ink, hairline cracks in screen prints, gently worn lettering — still recognizable as the real brand graphic, not fake text). Include wrinkled fabric, uneven hems, stretched collars, softened cotton, worn denim, casual imperfect resale condition. Other garments in the pile stay anonymous with a non-coordinated mix. Avoid pristine catalog styling.`.trim();
 
       const SHARED_RULES_OUTRO = `
-Background: inside a Goodwill or similar thrift store ΓÇö polished concrete floor, fluorescent overhead lighting, distant racks (e.g. media, housewares), glass display cases, and typical resale-aisle clutter visible behind the cart. The cart and messy clothing pile stay the hero of the frame.
+Background: inside a Goodwill or similar thrift store — polished concrete floor, fluorescent overhead lighting, distant racks (e.g. media, housewares), glass display cases, and typical resale-aisle clutter visible behind the cart. The cart and messy clothing pile stay the hero of the frame.
 
 Lighting should match typical thrift store lighting: bright overhead fluorescent retail lighting inside a large indoor store with a slightly warehouse-style layout.
 
 Maintain realistic perspective, scale, lighting direction, shadows, and reflections so the object appears physically integrated into the environment.
 
-The final result should look like a natural thrifting discovery photo taken casually inside a Goodwill or secondhand store with an iPhone ΓÇö full-scene sharpness, natural iPhone color (not oversaturated), optional subtle lens smear from bright lights as described above.
+The final result should look like a natural thrifting discovery photo taken casually inside a Goodwill or secondhand store with an iPhone — full-scene sharpness, natural iPhone color (not oversaturated), optional subtle lens smear from bright lights as described above.
 
-Text and logo rendering rule: Graphics and logos physically printed or embroidered on the garment should look authentically thrift-worn ΓÇö often slightly faded, with occasional subtle print flaws (minor cracking, soft edges, slight color variation) consistent with the authenticity rules above. The design must still read as the real brand artwork, not invented typography.
+Text and logo rendering rule: Graphics and logos physically printed or embroidered on the garment should look authentically thrift-worn — often slightly faded, with occasional subtle print flaws (minor cracking, soft edges, slight color variation) consistent with the authenticity rules above. The design must still read as the real brand artwork, not invented typography.
 
 Do NOT add any external overlays: no captions, subtitles, price tags, watermarks, floating labels, or any text that is not physically part of the item itself.`.trim();
 
@@ -1084,14 +1084,14 @@ ${SHARED_RULES_OUTRO}`;
       let fullPrompt;
       if (referenceInline) {
         fullPrompt = posePersonFirstSlide
-          ? `Match the uploaded pose reference: same body pose, arm position, camera angle, distance, and framing. Replace only the main garment with a specific, real, well-known clothing item by ${brandName} ΓÇö choose an iconic apparel piece this brand actually made. Keep the scene, lighting, and how the item is held aligned with the reference.\n\n${SHARED_RULES}`
+          ? `Match the uploaded pose reference: same body pose, arm position, camera angle, distance, and framing. Replace only the main garment with a specific, real, well-known clothing item by ${brandName} — choose an iconic apparel piece this brand actually made. Keep the scene, lighting, and how the item is held aligned with the reference.\n\n${SHARED_RULES}`
           : `Use the uploaded pose image for camera angle and framing. Replace the hero with a specific, real clothing item by ${brandName}. Do not copy people, hands, arms, or faces. No hands in the output.\n\n${SHARED_RULES}`;
       } else if (matchingRefs.length > 0) {
         fullPrompt = posePersonFirstSlide
-          ? `Use the uploaded reference as the main subject; preserve pose and hands if shown. Replace the hero garment with a specific, real, well-known clothing item by ${brandName} ΓÇö iconic apparel this brand actually made. Keep setting, lighting, and composition similar to the reference photo.\n\n${SHARED_RULES}`
-          : `Match the uploaded reference image closely: same blue plastic shopping cart, messy thrown-in clothing pile, POV angle, and thrift-store background. Replace the main visible hero garment with a specific, real, well-known clothing item by ${brandName} ΓÇö choose an iconic apparel piece this brand actually made and is known for. Keep the chaotic tossed-in pile; garments may be upside down or sideways; hems should look softly folded per the rules ΓÇö not catalog-flat. If the reference shows hands or people, omit them ΓÇö no hands or arms in the output.\n\n${SHARED_RULES}`;
+          ? `Use the uploaded reference as the main subject; preserve pose and hands if shown. Replace the hero garment with a specific, real, well-known clothing item by ${brandName} — iconic apparel this brand actually made. Keep setting, lighting, and composition similar to the reference photo.\n\n${SHARED_RULES}`
+          : `Match the uploaded reference image closely: same blue plastic shopping cart, messy thrown-in clothing pile, POV angle, and thrift-store background. Replace the main visible hero garment with a specific, real, well-known clothing item by ${brandName} — choose an iconic apparel piece this brand actually made and is known for. Keep the chaotic tossed-in pile; garments may be upside down or sideways; hems should look softly folded per the rules — not catalog-flat. If the reference shows hands or people, omit them — no hands or arms in the output.\n\n${SHARED_RULES}`;
       } else {
-        fullPrompt = `Generate a hero garment: a specific, real, well-known clothing item by ${brandName} ΓÇö choose an iconic apparel piece this brand actually made and is known for. Show it in the messy blue thrift buggy as described in the rules.\n\n${SHARED_RULES}`;
+        fullPrompt = `Generate a hero garment: a specific, real, well-known clothing item by ${brandName} — choose an iconic apparel piece this brand actually made and is known for. Show it in the messy blue thrift buggy as described in the rules.\n\n${SHARED_RULES}`;
       }
 
       const refFile = referenceInline
@@ -1100,7 +1100,7 @@ ${SHARED_RULES_OUTRO}`;
           ? matchingRefs[Math.floor(Math.random() * matchingRefs.length)]
           : null);
 
-      // Proxy through /api/generate-image ΓÇö server reads file from disk, no self-fetch, no stack overflow
+      // Proxy through /api/generate-image — server reads file from disk, no self-fetch, no stack overflow
       const res = await fetch("/api/generate-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1150,7 +1150,7 @@ ${SHARED_RULES_OUTRO}`;
     }
   };
 
-  /** Scan tour slide 0 ΓÇö prefer API shelf intro, else AI shelf/carousel scene. */
+  /** Scan tour slide 0 — prefer API shelf intro, else AI shelf/carousel scene. */
   const resolveLabelyShelfIntroUrl = async (ly, { includeShelfIntro, useSelfieForSlot = false }) => {
     if (!includeShelfIntro || !ly?.name) return null;
     if (ly.shelfIntroDataUrl) return ly.shelfIntroDataUrl;
@@ -1181,7 +1181,7 @@ ${SHARED_RULES_OUTRO}`;
     }
   };
 
-  /** Re-run vision on preview slots 0ΓÇô5 so Labely copy matches batch photos after shuffle/reorder. */
+  /** Re-run vision on preview slots 0–5 so Labely copy matches batch photos after shuffle/reorder. */
   const runLabelyVisionForPreviewSlots = async (batchUrls) => {
     if (!isLabely || config.labelyAiProducts) return;
     abortRef.current?.abort();
@@ -1213,7 +1213,7 @@ ${SHARED_RULES_OUTRO}`;
     }
   };
 
-  /** No photo ΓÇö GPT picks a real retail SKU + score + analysis (real ingredients) + optional pack image (same as POST /api/labely with no body image). */
+  /** No photo — GPT picks a real retail SKU + score + analysis (real ingredients) + optional pack image (same as POST /api/labely with no body image). */
   const fillLabelyFromAi = async (seedHint, errorSlotIdx = null, opts = {}) => {
     const useSelfieImage = opts.useSelfieImage === true;
     try {
@@ -1257,7 +1257,7 @@ ${SHARED_RULES_OUTRO}`;
     }
   };
 
-  /** Row index across all shows: 0ΓÇª(qty├ùslotsPerShowΓêÆ1). Rows 0ΓÇô5 mirror live preview slots. */
+  /** Row index across all shows: 0…(qty×slotsPerShow−1). Rows 0–5 mirror live preview slots. */
   const runLabelySlotWithDataUrl = async (globalIdx, dataUrl, labelyHints = {}) => {
     if (config.labelyAiProducts) return;
     if (!dataUrl || typeof dataUrl !== "string") return;
@@ -1503,7 +1503,7 @@ ${SHARED_RULES_OUTRO}`;
     abortRef.current = null;
   };
 
-  // ΓöÇΓöÇ AI: generate iMessage thread for imessageMom format ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // ── AI: generate iMessage thread for imessageMom format ─────────────────────
   const generateImessageThread = async (itemName, soldPrice) => {
     try {
       const res = await fetch("/api/generate-text", {
@@ -1563,7 +1563,7 @@ ${SHARED_RULES_OUTRO}`;
         || (slotCfg.slots?.[i]?.prompt ?? "").trim()
         || (slotCfg.slots?.[i]?.itemName ?? "").trim();
       if (!p) continue;
-      setExportStatus(valcoinSlots ? `Loading coin photo ${i + 1}/3ΓÇª` : `Generating starter pack image ${i + 1}/3ΓÇª`);
+      setExportStatus(valcoinSlots ? `Loading coin photo ${i + 1}/3…` : `Generating starter pack image ${i + 1}/3…`);
       if (valcoinSlots) {
         const numista = await fetchValcoinNumistaSlot();
         if (numista) updateSlot(i, { imageUrl: numista.dataUrl });
@@ -1576,8 +1576,8 @@ ${SHARED_RULES_OUTRO}`;
 
   // (removed POV format; starterPack covers POV vibe now)
 
-  // ΓöÇΓöÇ GPT-4 Vision: generate item title from image ΓöÇΓöÇ
-  // ΓöÇΓöÇ Grail Identifier: returns { title, price } from image ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  // ── GPT-4 Vision: generate item title from image ──
+  // ── Grail Identifier: returns { title, price } from image ───────────────────
   const autoTitleFromImage = async (imageUrl) => {
     try {
       const res = await fetch("/api/generate-image", {
@@ -1598,7 +1598,7 @@ ${SHARED_RULES_OUTRO}`;
     } catch { return null; }
   };
 
-  // ΓöÇΓöÇ Random thrift spent price + 40-50% markup sold price ΓöÇΓöÇ
+  // ── Random thrift spent price + 40-50% markup sold price ──
   const autoRandomPrices = () => {
     const THRIFT_PRICES = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 18, 20, 22, 25];
     const spent = THRIFT_PRICES[Math.floor(Math.random() * THRIFT_PRICES.length)];
@@ -1648,7 +1648,7 @@ ${SHARED_RULES_OUTRO}`;
 
   /**
    * Fill a Valcoin slot from a coin title (Wikimedia file title or brand-list
-   * hint) ΓÇö never from vision on the photo. Raw titles are simplified via AI,
+   * hint) — never from vision on the photo. Raw titles are simplified via AI,
    * then prices come from coinPrices(simplified title).
    */
   const buildValcoinSlotPatch = async (catalogTitle, slot, imageUrl) => {
@@ -1668,7 +1668,7 @@ ${SHARED_RULES_OUTRO}`;
     };
   };
 
-  // ΓöÇΓöÇ Auto-generate 2 slightly-varied sold listing rows ΓöÇΓöÇ
+  // ── Auto-generate 2 slightly-varied sold listing rows ──
   const autoSoldListings = (itemName, soldPrice) => {
     const PREFIXES = ["Pre-owned ", "Used ", "Vintage ", "Authentic "];
     const SUFFIXES = [" - Great Condition", " - Gently Used", " (Pre-loved)", " - Excellent"];
@@ -1683,7 +1683,7 @@ ${SHARED_RULES_OUTRO}`;
     return [makeRow(0), makeRow(1)];
   };
 
-  // ΓöÇΓöÇ Per-slot: auto-title button ΓöÇΓöÇ
+  // ── Per-slot: auto-title button ──
   const handleAutoTitle = async (index) => {
     const slot = config.slots[index];
     if (!slot.imageUrl) { setAiErrors((p) => ({ ...p, [`title_${index}`]: "Upload an image first." })); return; }
@@ -1795,10 +1795,10 @@ ${SHARED_RULES_OUTRO}`;
       /** Labely Brave URLs already picked in this slideshow (sync exclude for deferred slot writes). */
       const currentSlideshowBraveUrls = [];
       const currentSlideshowBraveHashes = [];
-      /** Labely ├ù3 AI + scan tour: merge all slot patches in one commit (avoids lost updates mid-loop). */
+      /** Labely ×3 AI + scan tour: merge all slot patches in one commit (avoids lost updates mid-loop). */
       const tourAiDeferredWrites = [];
       const valcoinUsedSourceUrls = isValcoin ? new Set() : null;
-      setGenAllProgress({ total, done: 0, current: activeSlots[0].i, phase: `Starting ${total} image${total > 1 ? "s" : ""}ΓÇª`, slotsDone });
+      setGenAllProgress({ total, done: 0, current: activeSlots[0].i, phase: `Starting ${total} image${total > 1 ? "s" : ""}…`, slotsDone });
 
       for (let idx = 0; idx < activeSlots.length; idx++) {
         await waitWhilePaused();
@@ -1825,7 +1825,7 @@ ${SHARED_RULES_OUTRO}`;
 
         // Each slot gets its own unique brand item from the deduplicated shuffled list
         const brandItem = shuffledUnique.length > 0 ? shuffledUnique[idx] : null;
-        const brandLabel = brandItem ? ` ΓÇö "${brandItem}"` : "";
+        const brandLabel = brandItem ? ` — "${brandItem}"` : "";
 
         const hint = isValcoin ? pickValuableUSCoin() : brandItem;
         const p = hint ? `${prompt}\n\nSpecific item to depict: ${hint}.` : prompt;
@@ -1836,8 +1836,8 @@ ${SHARED_RULES_OUTRO}`;
             done: slotsDone.size,
             current: i,
             phase: config.labelyAiProducts
-              ? `Labely product ${stepLabel}${brandLabel}ΓÇª`
-              : `Labely analysis ${stepLabel}ΓÇª`,
+              ? `Labely product ${stepLabel}${brandLabel}…`
+              : `Labely analysis ${stepLabel}…`,
             slotsDone: new Set(slotsDone),
           });
           let ly;
@@ -1908,8 +1908,8 @@ ${SHARED_RULES_OUTRO}`;
             done: slotsDone.size,
             current: i,
             phase: isValcoin
-              ? `Random coin photo ${stepLabel}${brandLabel}ΓÇª`
-              : `Generating image ${stepLabel}${brandLabel}ΓÇª`,
+              ? `Random coin photo ${stepLabel}${brandLabel}…`
+              : `Generating image ${stepLabel}${brandLabel}…`,
             slotsDone: new Set(slotsDone),
           });
 
@@ -1937,7 +1937,7 @@ ${SHARED_RULES_OUTRO}`;
             const priceUpdates = (!slot.spentPrice && !slot.soldPrice) ? autoRandomPrices() : {};
             updateSlot(i, { imageUrl: url, ...priceUpdates });
 
-            setGenAllProgress({ total, done: slotsDone.size, current: i, phase: `Analyzing item ${stepLabel}ΓÇª`, slotsDone: new Set(slotsDone) });
+            setGenAllProgress({ total, done: slotsDone.size, current: i, phase: `Analyzing item ${stepLabel}…`, slotsDone: new Set(slotsDone) });
             const grail = await autoTitleFromImage(url);
             if (grail?.title) {
               const resolvedPrice = grail.price ?? priceUpdates.soldPrice ?? slot.soldPrice;
@@ -1980,15 +1980,15 @@ ${SHARED_RULES_OUTRO}`;
         tourAiDeferredWrites.length > 0 &&
         tourAiDeferredWrites.some(({ patch }) => !String(patch.imageUrl || "").trim());
       const summary = failedCount > 0
-        ? `Done ΓÇö ${doneCount} succeeded, ${failedCount} failed`
+        ? `Done — ${doneCount} succeeded, ${failedCount} failed`
         : missingPackShots
-          ? "All done ΓÇö text & scores saved, but no product photos. Check BRAVE_SEARCH_API_KEY in .env.local and your food list."
-        : "All done! Γ£ô";
+          ? "All done — text & scores saved, but no product photos. Check BRAVE_SEARCH_API_KEY in .env.local and your food list."
+        : "All done! ✓";
       setGenAllProgress((p) => p ? { ...p, phase: summary, done: doneCount } : null);
       setTimeout(() => setGenAllProgress(null), missingPackShots ? 12000 : 4000);
     } catch (err) {
       console.error("Generate 1 slideshow failed:", err);
-      setGenAllProgress((p) => p ? { ...p, phase: "Generation failed ΓÇö check console for details." } : null);
+      setGenAllProgress((p) => p ? { ...p, phase: "Generation failed — check console for details." } : null);
       setTimeout(() => setGenAllProgress(null), 5000);
     } finally {
       setGeneratingSlot(null);
@@ -1996,8 +1996,8 @@ ${SHARED_RULES_OUTRO}`;
     }
   };
 
-  // ΓöÇΓöÇ Batch generation: produce N complete slideshows sequentially ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-  /** Data URLs in play order: show 1 slots 1ΓÇª6 (or 1 for iMessage mom), then show 2, ΓÇª Row count = length. */
+  // ── Batch generation: produce N complete slideshows sequentially ─────────────
+  /** Data URLs in play order: show 1 slots 1…6 (or 1 for iMessage mom), then show 2, … Row count = length. */
   const [bulkDropHover, setBulkDropHover] = useState(false);
   const bulkFileInputRef = useRef(null);
 
@@ -2191,7 +2191,7 @@ ${SHARED_RULES_OUTRO}`;
             total: slotCount,
             done: si,
             current: si,
-            phase: `Show ${showIndex + 1}/${totalShows} ┬╖ Product ${si + 1}/${slotCount}${brandItem ? ` ΓÇö "${brandItem}"` : ""}ΓÇª`,
+            phase: `Show ${showIndex + 1}/${totalShows} · Product ${si + 1}/${slotCount}${brandItem ? ` — "${brandItem}"` : ""}…`,
             slotsDone: new Set(Array.from({ length: si }, (_, k) => k)),
           });
           const includeShelfIntro = si === 0 && isLabelyScanTourFormat(config);
@@ -2265,7 +2265,7 @@ ${SHARED_RULES_OUTRO}`;
           total: slotCount,
           done: si,
           current: si,
-          phase: `Show ${showIndex + 1}/${totalShows} ┬╖ Photo ${si + 1}/${slotCount}${pre ? "" : " (skipped ΓÇö no queued image)"}ΓÇª`,
+          phase: `Show ${showIndex + 1}/${totalShows} · Photo ${si + 1}/${slotCount}${pre ? "" : " (skipped — no queued image)"}…`,
           slotsDone: new Set(Array.from({ length: si }, (_, k) => k)),
         });
         if (!pre) continue;
@@ -2327,7 +2327,7 @@ ${SHARED_RULES_OUTRO}`;
           total: slotCount,
           done: si,
           current: si,
-          phase: `Show ${showIndex + 1}/${totalShows} ┬╖ Random US coin photo ${si + 1}/${slotCount}ΓÇª`,
+          phase: `Show ${showIndex + 1}/${totalShows} · Random US coin photo ${si + 1}/${slotCount}…`,
           slotsDone: new Set(Array.from({ length: si }, (_, k) => k)),
         });
         let url = null;
@@ -2384,10 +2384,10 @@ ${SHARED_RULES_OUTRO}`;
         done: si,
         current: si,
         phase: pre
-          ? `Show ${showIndex + 1}/${totalShows} ┬╖ Upload ${si + 1}/${slotCount}ΓÇª`
+          ? `Show ${showIndex + 1}/${totalShows} · Upload ${si + 1}/${slotCount}…`
           : isValcoin
-            ? `Show ${showIndex + 1}/${totalShows} ┬╖ Random coin photo ${si + 1}/${slotCount}ΓÇª`
-            : `Show ${showIndex + 1}/${totalShows} ┬╖ Image ${si + 1}/${slotCount}${brandItem ? ` ΓÇö "${brandItem}"` : ""}ΓÇª`,
+            ? `Show ${showIndex + 1}/${totalShows} · Random coin photo ${si + 1}/${slotCount}…`
+            : `Show ${showIndex + 1}/${totalShows} · Image ${si + 1}/${slotCount}${brandItem ? ` — "${brandItem}"` : ""}…`,
         slotsDone: new Set(Array.from({ length: si }, (_, k) => k)),
       });
       const hintGen = isValcoin ? (brandItem ?? pickValuableUSCoin()) : brandItem;
@@ -2420,7 +2420,7 @@ ${SHARED_RULES_OUTRO}`;
             total: slotCount,
             done: si,
             current: si,
-            phase: `Show ${showIndex + 1}/${totalShows} ┬╖ Analyzing item ${si + 1}/${slotCount}ΓÇª`,
+            phase: `Show ${showIndex + 1}/${totalShows} · Analyzing item ${si + 1}/${slotCount}…`,
             slotsDone: new Set(Array.from({ length: si }, (_, k) => k)),
           });
           const grail = await autoTitleFromImage(url);
@@ -2484,8 +2484,8 @@ ${SHARED_RULES_OUTRO}`;
       if (labelyUseBraveImages && plans.length > 0) {
         setGenAllProgress({
           phase: labelyBraveReusePhotos
-            ? "Resolving Brave photos (once per product name)ΓÇª"
-            : "Resolving unhealthy foods from BraveΓÇª",
+            ? "Resolving Brave photos (once per product name)…"
+            : "Resolving unhealthy foods from Brave…",
           done: 0,
         });
         const sharedMatches = {};
@@ -2580,8 +2580,8 @@ ${SHARED_RULES_OUTRO}`;
             ? {
                 ...p,
                 phase: isFarmAutomation
-                  ? `Γ£ô ${generatedShows.length} saved. Uploading to farmΓÇª`
-                  : `Γ£ô ${generatedShows.length} slideshow${generatedShows.length > 1 ? "s" : ""} saved. Auto-exporting iPhone ZIPsΓÇª`,
+                  ? `✓ ${generatedShows.length} saved. Uploading to farm…`
+                  : `✓ ${generatedShows.length} slideshow${generatedShows.length > 1 ? "s" : ""} saved. Auto-exporting iPhone ZIPs…`,
                 done: 6,
               }
             : null
@@ -2605,7 +2605,7 @@ ${SHARED_RULES_OUTRO}`;
       } catch (err) {
         console.error("Generate batch failed:", err);
         if (farmUpload?.jobId) markFarmJobFailed(err?.message || String(err), farmUpload.jobId);
-        setGenAllProgress((p) => p ? { ...p, phase: "Batch failed ΓÇö check console for details." } : null);
+        setGenAllProgress((p) => p ? { ...p, phase: "Batch failed — check console for details." } : null);
         setTimeout(() => setGenAllProgress(null), 5000);
       } finally {
         setGeneratingSlot(null);
@@ -2647,7 +2647,7 @@ ${SHARED_RULES_OUTRO}`;
         }
         if (!cancelGenRef.current) {
           setGenAllProgress((p) => p
-            ? { ...p, phase: `Γ£ô ${generatedShows.length} slideshow${generatedShows.length > 1 ? "s" : ""} saved. Auto-exporting iPhone ZIPsΓÇª`, done: 6 }
+            ? { ...p, phase: `✓ ${generatedShows.length} slideshow${generatedShows.length > 1 ? "s" : ""} saved. Auto-exporting iPhone ZIPs…`, done: 6 }
             : null
           );
           const restoreConfig = {
@@ -2665,7 +2665,7 @@ ${SHARED_RULES_OUTRO}`;
       } catch (err) {
         console.error("Valcoin iPhone pack batch failed:", err);
         if (farmUpload?.jobId) markFarmJobFailed(err?.message || String(err), farmUpload.jobId);
-        setGenAllProgress((p) => p ? { ...p, phase: "Batch failed ΓÇö check console for details." } : null);
+        setGenAllProgress((p) => p ? { ...p, phase: "Batch failed — check console for details." } : null);
         setTimeout(() => setGenAllProgress(null), 5000);
       } finally {
         setGeneratingSlot(null);
@@ -2675,9 +2675,9 @@ ${SHARED_RULES_OUTRO}`;
     }
 
     if (isLabely) {
-      // AI products mode ΓÇö no manual uploads required
+      // AI products mode — no manual uploads required
     } else if (!isValcoin && brandItems.length === 0 && !batchImageDataUrls.some(Boolean)) {
-      alert("Add brand items for AI images, or queue batch uploads ΓÇö or both (uploads fill first, AI fills gaps).");
+      alert("Add brand items for AI images, or queue batch uploads — or both (uploads fill first, AI fills gaps).");
       return;
     }
     setGeneratingSlot("all");
@@ -2700,7 +2700,7 @@ ${SHARED_RULES_OUTRO}`;
       }
       if (isFarmAutomation && generatedShows.length > 0 && !cancelGenRef.current) {
         setGenAllProgress((p) => p
-          ? { ...p, phase: `Γ£ô ${generatedShows.length} saved. Uploading to farmΓÇª`, done: 6 }
+          ? { ...p, phase: `✓ ${generatedShows.length} saved. Uploading to farm…`, done: 6 }
           : null
         );
         const restoreConfig = {
@@ -2710,19 +2710,19 @@ ${SHARED_RULES_OUTRO}`;
         await exportShowsToFarm(generatedShows, restoreConfig, { auto: true });
       } else {
         const phase = cancelGenRef.current
-          ? `Stopped ΓÇö ${savedCount} saved before cancel.`
+          ? `Stopped — ${savedCount} saved before cancel.`
           : savedCount === numSlideshows
-            ? `Γ£ô ${savedCount} slideshow${savedCount > 1 ? "s" : ""} saved to gallery!`
+            ? `✓ ${savedCount} slideshow${savedCount > 1 ? "s" : ""} saved to gallery!`
             : savedCount > 0
               ? `ΓÜá Saved ${savedCount}/${numSlideshows}. Others had no coin photo loaded (Wikimedia API hiccup).`
-              : "Γ£ù Nothing saved ΓÇö no coin photos loaded. Wikimedia Commons may be temporarily unavailable.";
+              : "✗ Nothing saved — no coin photos loaded. Wikimedia Commons may be temporarily unavailable.";
         setGenAllProgress((p) => (p ? { ...p, phase, done: 6 } : null));
         setTimeout(() => setGenAllProgress(null), savedCount === numSlideshows ? 4000 : 8000);
       }
     } catch (err) {
       console.error("Generate batch failed:", err);
       if (farmUpload?.jobId) markFarmJobFailed(err?.message || String(err), farmUpload.jobId);
-      setGenAllProgress((p) => p ? { ...p, phase: "Batch failed ΓÇö check console for details." } : null);
+      setGenAllProgress((p) => p ? { ...p, phase: "Batch failed — check console for details." } : null);
       setTimeout(() => setGenAllProgress(null), 5000);
     } finally {
       setGeneratingSlot(null);
@@ -2738,8 +2738,8 @@ ${SHARED_RULES_OUTRO}`;
       const state = getFarmJobAutoRunState(jobId);
       setFarmJobStatus(
         state === "started"
-          ? "This job already ran in this browser tab ΓÇö refresh will not restart it. Start a new job from the farm dashboard."
-          : `Farm job already ${state || "finished"} in this tab ΓÇö start a new job from the farm dashboard.`,
+          ? "This job already ran in this browser tab — refresh will not restart it. Start a new job from the farm dashboard."
+          : `Farm job already ${state || "finished"} in this tab — start a new job from the farm dashboard.`,
       );
       return;
     }
@@ -2754,20 +2754,20 @@ ${SHARED_RULES_OUTRO}`;
         const status = String(remote?.status || "").toLowerCase();
         if (status === "completed") {
           markFarmJobDone(jobId);
-          setFarmJobStatus("Farm job is completed ΓÇö not starting automation again.");
+          setFarmJobStatus("Farm job is completed — not starting automation again.");
           return;
         }
         if (status === "failed") {
           markFarmJobAutoRunCancelled(jobId);
-          setFarmJobStatus("Farm job failed on the server ΓÇö start a new job from the farm dashboard.");
+          setFarmJobStatus("Farm job failed on the server — start a new job from the farm dashboard.");
           return;
         }
       } catch {
-        /* farm unreachable ΓÇö still allow embedded runner to proceed */
+        /* farm unreachable — still allow embedded runner to proceed */
       }
 
       if (cancelled) return;
-      setFarmJobStatus("Starting slideshow batchΓÇª");
+      setFarmJobStatus("Starting slideshow batch…");
       timer = window.setTimeout(() => {
         void handleGenerateBatch();
       }, 800);
@@ -2779,7 +2779,7 @@ ${SHARED_RULES_OUTRO}`;
     };
   }, [autoRunBatch, farmUpload?.jobId]);
 
-  // ΓöÇΓöÇ Video export: capture each slide, then animate ΓöÇΓöÇ
+  // ── Video export: capture each slide, then animate ──
   const encodeWorkspaceVideoToBlob = async (exportCfg) => {
     setExportProgress(0);
     await waitWhilePaused();
@@ -2787,7 +2787,7 @@ ${SHARED_RULES_OUTRO}`;
 
     let cfg = exportCfg;
     if (needsExportImageInlining(cfg)) {
-      setExportStatus("Preparing images for exportΓÇª");
+      setExportStatus("Preparing images for export…");
       cfg = await ensureExportImageUrls(cfg);
       flushSync(() => setConfig((prev) => ({ ...prev, slots: cfg.slots })));
       await waitForPreviewPaint();
@@ -2798,15 +2798,15 @@ ${SHARED_RULES_OUTRO}`;
     }
 
     if ((cfg.outputFormat ?? "standard") === "starterPack") {
-      setExportStatus("Generating starter pack textΓÇª");
+      setExportStatus("Generating starter pack text…");
       const sp = await ensureStarterPackAutofill();
       await waitWhilePaused();
       if (cancelGenRef.current) return null;
-      setExportStatus("Generating starter pack imagesΓÇª");
+      setExportStatus("Generating starter pack images…");
       await ensureStarterPackImages(sp?.imagePrompts ?? sp?.items, cfg);
       await waitWhilePaused();
       if (cancelGenRef.current) return null;
-      setExportStatus("Capturing slidesΓÇª");
+      setExportStatus("Capturing slides…");
     }
 
     const slidesCount = getTotalSlides(cfg);
@@ -2926,7 +2926,7 @@ ${SHARED_RULES_OUTRO}`;
       }
 
       setExportProgress(Math.round((i + 1) / slidesCount * 40));
-      setExportStatus(`Captured slide ${i + 1} of ${slidesCount}ΓÇª`);
+      setExportStatus(`Captured slide ${i + 1} of ${slidesCount}…`);
     }
 
     // Filter to slides that have at least one captured frame
@@ -2935,20 +2935,20 @@ ${SHARED_RULES_OUTRO}`;
       .filter(({ snapshots }) => snapshots.length > 0);
 
     if (validSlides.length === 0) {
-      setExportStatus("Export failed ΓÇö no frames captured.");
+      setExportStatus("Export failed — no frames captured.");
       return null;
     }
 
     await waitWhilePaused();
     if (cancelGenRef.current) return null;
 
-    // ΓöÇΓöÇ PHASE 2: Encode with native WebCodecs + mp4-muxer (no WASM, no CDN) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
-    setExportStatus("Preparing encoderΓÇª");
+    // ── PHASE 2: Encode with native WebCodecs + mp4-muxer (no WASM, no CDN) ──────
+    setExportStatus("Preparing encoder…");
     setExportProgress(42);
 
     // WebCodecs availability check
     if (typeof VideoEncoder === "undefined") {
-      setExportStatus("WebCodecs not available ΓÇö please use Chrome or Safari 16+.");
+      setExportStatus("WebCodecs not available — please use Chrome or Safari 16+.");
       return null;
     }
 
@@ -2977,20 +2977,20 @@ ${SHARED_RULES_OUTRO}`;
       if (i < validSlides.length - 1) totalFrames += transitionFrames;
     }
 
-    // Scale canvas: renders each frame at exact 1080├ù1920
+    // Scale canvas: renders each frame at exact 1080×1920
     const scaleCanvas = document.createElement("canvas");
     scaleCanvas.width  = OUT_W;
     scaleCanvas.height = OUT_H;
     const sctx = scaleCanvas.getContext("2d");
 
-    // ΓöÇΓöÇ Optional audio: fetch, decode, prepare ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── Optional audio: fetch, decode, prepare ─────────────────────────────
     let decodedAudio = null;   // AudioBuffer | null
     let audioSampleRate = 44100;
     let audioChannels = 2;
 
     if (cfg.useRandomAudio && typeof AudioEncoder !== "undefined") {
       try {
-        setExportStatus("Loading audioΓÇª");
+        setExportStatus("Loading audio…");
         const { files: audioFiles } = await fetch("/api/audio").then((r) => r.json());
         if (audioFiles?.length > 0) {
           const pick = audioFiles[Math.floor(Math.random() * audioFiles.length)];
@@ -3036,7 +3036,7 @@ ${SHARED_RULES_OUTRO}`;
       latencyMode:  "quality",
     });
 
-    // ΓöÇΓöÇ Encode every frame ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── Encode every frame ────────────────────────────────────────────────────
     let pts = 0;           // presentation timestamp in microseconds
     let encoded = 0;
 
@@ -3082,11 +3082,12 @@ ${SHARED_RULES_OUTRO}`;
         if (encoded % 20 === 0) {
           await new Promise((r) => setTimeout(r, 0));
           setExportProgress(42 + Math.round((encoded / totalFrames) * 55));
-          setExportStatus(`Encoding frame ${encoded} / ${totalFrames}ΓÇª`);
+          setExportStatus(`Encoding frame ${encoded} / ${totalFrames}…`);
         }
-        // Throttle if the encoder queue is building up
-        while (encoder.encodeQueueSize > 12) {
-          await new Promise((r) => setTimeout(r, 5));
+        // Throttle if the encoder queue is building up — keep it tight to
+        // avoid memory pressure accumulating across multiple videos.
+        while (encoder.encodeQueueSize > 4) {
+          await new Promise((r) => setTimeout(r, 10));
           if (cancelGenRef.current) {
             try { encoder.close(); } catch {}
             setExportStatus("Export cancelled.");
@@ -3095,7 +3096,7 @@ ${SHARED_RULES_OUTRO}`;
         }
       }
 
-      // Transition phase ΓÇö iPhone cubic ease-out swipe
+      // Transition phase — iPhone cubic ease-out swipe
       if (si < validSlides.length - 1) {
         const nxtSnaps = validSlides[si + 1].snapshots;
         const curCv = slideRepresentativeCanvas(curSnaps);
@@ -3136,7 +3137,7 @@ ${SHARED_RULES_OUTRO}`;
       return null;
     }
 
-    setExportStatus("Finalizing MP4ΓÇª");
+    setExportStatus("Finalizing MP4…");
     setExportProgress(97);
     await encoder.flush();
 
@@ -3146,10 +3147,10 @@ ${SHARED_RULES_OUTRO}`;
       return null;
     }
 
-    // ΓöÇΓöÇ Encode audio track (if loaded) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    // ── Encode audio track (if loaded) ────────────────────────────────────
     if (decodedAudio) {
       try {
-        setExportStatus("Encoding audioΓÇª");
+        setExportStatus("Encoding audio…");
         const totalVideoDurationSec = (pts) / 1_000_000;
         const totalAudioSamples = Math.ceil(totalVideoDurationSec * audioSampleRate);
         const CHUNK = 4096;
@@ -3181,7 +3182,7 @@ ${SHARED_RULES_OUTRO}`;
             return null;
           }
           const size = Math.min(CHUNK, totalAudioSamples - audioOffset);
-          // Build planar float32 buffer: [ch0 samples ΓÇª ch1 samples ΓÇª]
+          // Build planar float32 buffer: [ch0 samples … ch1 samples …]
           const buf = new Float32Array(size * audioChannels);
           for (let ch = 0; ch < audioChannels; ch++) {
             for (let i = 0; i < size; i++) {
@@ -3216,7 +3217,7 @@ ${SHARED_RULES_OUTRO}`;
     cancelGenRef.current = false;
     setIsExporting(true);
     setExportProgress(0);
-    setExportStatus("Capturing slidesΓÇª");
+    setExportStatus("Capturing slides…");
     try {
       const blob = await encodeWorkspaceVideoToBlob(config);
       if (blob) {
@@ -3262,7 +3263,7 @@ ${SHARED_RULES_OUTRO}`;
           console.warn("No farm slot mapped for slideshow", i + 1);
           continue;
         }
-        setExportStatus(`${statusPrefix}Encoding MP4 ${i + 1} / ${shows.length} (phone ${farmSlot} video ${videoOnPhone})ΓÇª`);
+        setExportStatus(`${statusPrefix}Encoding MP4 ${i + 1} / ${shows.length} (phone ${farmSlot} video ${videoOnPhone})…`);
         const exportCfg = galleryShowToExportConfig(restoreConfig, show);
         flushSync(() => setConfig(exportCfg));
         flushSync(() => setCurrentSlide(0));
@@ -3272,13 +3273,13 @@ ${SHARED_RULES_OUTRO}`;
         if (!blob) continue;
         const arr = new Uint8Array(await blob.arrayBuffer());
         if (isPngBytes(arr) || !isMp4Bytes(arr)) {
-          setExportStatus(`Skipped video ${i + 1} ΓÇö invalid MP4 payload.`);
+          setExportStatus(`Skipped video ${i + 1} — invalid MP4 payload.`);
           continue;
         }
         const filename = farmGalleryMp4Filename(farmSlot, videoOnPhone, show);
         const clearSlot = videoOnPhone === 1;
         uploadedSlots.add(String(farmSlot));
-        setFarmJobStatus(`Uploading ${filename} ΓåÆ slot ${farmSlot}ΓÇª`);
+        setFarmJobStatus(`Uploading ${filename} → slot ${farmSlot}…`);
         await uploadMp4ToFarm({
           farmUrl: activeFarm.farmUrl,
           jobId: activeFarm.jobId,
@@ -3357,7 +3358,7 @@ ${SHARED_RULES_OUTRO}`;
       cancelGenRef.current = false;
       setIsExporting(true);
       setExportProgress(0);
-      setExportStatus(`${auto ? "Auto-export: " : ""}Encoding ${totalJobs} MP4 videos into ${zipPlans.length} ZIPsΓÇª`);
+      setExportStatus(`${auto ? "Auto-export: " : ""}Encoding ${totalJobs} MP4 videos into ${zipPlans.length} ZIPs…`);
       try {
         const { zipSync } = await import("fflate");
         let downloadedZipCount = 0;
@@ -3376,7 +3377,7 @@ ${SHARED_RULES_OUTRO}`;
               ? zipRelPath
               : `${zipRelPath}.mp4`;
             const statusPrefix = auto ? "Auto-export: " : farmMode ? "Farm upload: " : "";
-            setExportStatus(`${statusPrefix}iPhone ${plan.iphoneNumber}: encoding MP4 ${i + 1} / ${plan.jobs.length}ΓÇª`);
+            setExportStatus(`${statusPrefix}iPhone ${plan.iphoneNumber}: encoding MP4 ${i + 1} / ${plan.jobs.length}…`);
             const exportCfg = galleryShowToExportConfig(restoreConfig, show);
             flushSync(() => setConfig(exportCfg));
             flushSync(() => setCurrentSlide(0));
@@ -3387,10 +3388,10 @@ ${SHARED_RULES_OUTRO}`;
               const arr = new Uint8Array(await blob.arrayBuffer());
               if (isPngBytes(arr)) {
                 console.error("Refusing PNG bytes in MP4 ZIP entry", mp4Path);
-                setExportStatus(`Skipped ${mp4Path} ΓÇö got PNG instead of MP4 (stale build or encoder bug). Hard-refresh and retry.`);
+                setExportStatus(`Skipped ${mp4Path} — got PNG instead of MP4 (stale build or encoder bug). Hard-refresh and retry.`);
               } else if (!isMp4Bytes(arr)) {
                 console.error("Invalid MP4 payload for ZIP entry", mp4Path, arr.slice(0, 16));
-                setExportStatus(`Skipped ${mp4Path} ΓÇö file is not a valid MP4. Use Chrome or Safari 16+.`);
+                setExportStatus(`Skipped ${mp4Path} — file is not a valid MP4. Use Chrome or Safari 16+.`);
               } else if (farmMode) {
                 if (!farmSlot) {
                   console.warn("No farm slot mapped for iPhone pack", plan.iphoneNumber);
@@ -3398,7 +3399,7 @@ ${SHARED_RULES_OUTRO}`;
                   const filename = String(mp4Path || "").split("/").pop() || "slideshow.mp4";
                   const clearSlot = !uploadedSlots.has(farmSlot);
                   uploadedSlots.add(farmSlot);
-                  setFarmJobStatus(`Uploading ${filename} ΓåÆ slot ${farmSlot}ΓÇª`);
+                  setFarmJobStatus(`Uploading ${filename} → slot ${farmSlot}…`);
                   await uploadMp4ToFarm({
                     farmUrl: activeFarm.farmUrl,
                     jobId: activeFarm.jobId,
@@ -3426,7 +3427,7 @@ ${SHARED_RULES_OUTRO}`;
 
           if (Object.keys(zipEntries).length === 0) continue;
 
-          setExportStatus(`${auto ? "Auto-export: " : ""}Building MP4 ZIP ${plan.iphoneNumber} / ${zipPlans.length}ΓÇª`);
+          setExportStatus(`${auto ? "Auto-export: " : ""}Building MP4 ZIP ${plan.iphoneNumber} / ${zipPlans.length}…`);
           const zipData = zipSync(zipEntries, { level: 1 });
           const blob = new Blob([zipData], { type: "application/zip" });
           triggerZipDownload(blob, `${zipFilePrefix}${String(plan.iphoneNumber).padStart(2, "0")}-${randomExportHex(10)}.zip`);
@@ -3440,7 +3441,7 @@ ${SHARED_RULES_OUTRO}`;
             setExportStatus(msg);
             markFarmJobFailed(msg, activeFarm.jobId);
           } else {
-            setFarmJobStatus("Starting farm batchΓÇª");
+            setFarmJobStatus("Starting farm batch…");
             await notifyAutomationDone({
               farmUrl: activeFarm.farmUrl,
               jobId: activeFarm.jobId,
@@ -3456,8 +3457,8 @@ ${SHARED_RULES_OUTRO}`;
         if (downloadedZipCount === 0) {
           setExportStatus(
             encodedMp4Count === 0
-              ? "No MP4 videos encoded ΓÇö use Chrome or Safari 16+ with WebCodecs, then run export again."
-              : "Nothing encoded ΓÇö ZIP export cancelled.",
+              ? "No MP4 videos encoded — use Chrome or Safari 16+ with WebCodecs, then run export again."
+              : "Nothing encoded — ZIP export cancelled.",
           );
         } else {
           setExportProgress(100);
@@ -3469,7 +3470,7 @@ ${SHARED_RULES_OUTRO}`;
         if (activeFarm?.farmUrl && activeFarm?.jobId) {
           markFarmJobFailed(e?.message || String(e), activeFarm.jobId);
         }
-        setExportStatus("iPhone ZIP export failed ΓÇö see console.");
+        setExportStatus("iPhone ZIP export failed — see console.");
         return false;
       } finally {
         flushSync(() => setConfig(restoreConfig));
@@ -3506,13 +3507,13 @@ ${SHARED_RULES_OUTRO}`;
     cancelGenRef.current = false;
     setIsExporting(true);
     setExportProgress(0);
-    setExportStatus("Preparing batch exportΓÇª");
+    setExportStatus("Preparing batch export…");
     try {
       for (let i = 0; i < videos.length; i++) {
         await waitWhilePaused();
         if (cancelGenRef.current) break;
         const show = videos[i];
-        setExportStatus(`Exporting video ${i + 1} of ${videos.length}ΓÇª`);
+        setExportStatus(`Exporting video ${i + 1} of ${videos.length}…`);
         const exportCfg = galleryShowToExportConfig(restoreConfig, show);
         flushSync(() => setConfig(exportCfg));
         flushSync(() => setCurrentSlide(0));
@@ -3533,7 +3534,7 @@ ${SHARED_RULES_OUTRO}`;
       }
     } catch (e) {
       console.error(e);
-      setExportStatus("Batch video export failed ΓÇö see console.");
+      setExportStatus("Batch video export failed — see console.");
     } finally {
       flushSync(() => setConfig(restoreConfig));
       flushSync(() => setCurrentSlide(0));
@@ -3552,16 +3553,16 @@ ${SHARED_RULES_OUTRO}`;
     setExportProgress(20);
     try {
       if (needsExportImageInlining(config)) {
-        setExportStatus("Preparing images for exportΓÇª");
+        setExportStatus("Preparing images for export…");
         const cfg = await ensureExportImageUrls(config);
         flushSync(() => setConfig((prev) => ({ ...prev, slots: cfg.slots })));
         await waitForPreviewPaint();
         await waitForImagesDecoded(el);
       }
       if ((config.outputFormat ?? "standard") === "starterPack") {
-        setExportStatus("Generating starter pack textΓÇª");
+        setExportStatus("Generating starter pack text…");
         const sp = await ensureStarterPackAutofill();
-        setExportStatus("Generating starter pack imagesΓÇª");
+        setExportStatus("Generating starter pack images…");
         await ensureStarterPackImages(sp?.imagePrompts ?? sp?.items);
       }
       const fontEmbedCSS = await getFontEmbedCSS(el);
@@ -3621,7 +3622,7 @@ ${SHARED_RULES_OUTRO}`;
     await waitForPreviewPaint();
 
     if (needsExportImageInlining(cfg)) {
-      setExportStatus(`${statusPrefix}Preparing images for exportΓÇª`);
+      setExportStatus(`${statusPrefix}Preparing images for export…`);
       cfg = await ensureExportImageUrls(cfg);
       flushSync(() => setConfig(cfg));
       await waitForPreviewPaint();
@@ -3629,11 +3630,11 @@ ${SHARED_RULES_OUTRO}`;
     }
 
     if ((cfg.outputFormat ?? "standard") === "starterPack") {
-      setExportStatus(`${statusPrefix}Generating starter pack textΓÇª`);
+      setExportStatus(`${statusPrefix}Generating starter pack text…`);
       const sp = await ensureStarterPackAutofill();
-      setExportStatus(`${statusPrefix}Generating starter pack imagesΓÇª`);
+      setExportStatus(`${statusPrefix}Generating starter pack images…`);
       await ensureStarterPackImages(sp?.imagePrompts ?? sp?.items, cfg);
-      setExportStatus(`${statusPrefix}Capturing slidesΓÇª`);
+      setExportStatus(`${statusPrefix}Capturing slides…`);
     }
 
     const slidesCount = getTotalSlides(cfg);
@@ -3695,11 +3696,11 @@ ${SHARED_RULES_OUTRO}`;
       }
 
       setExportProgress(Math.round(progressBase + ((i + 1) / slidesCount) * progressSpan));
-      setExportStatus(`${statusPrefix}Captured ${i + 1} / ${slidesCount}ΓÇª`);
+      setExportStatus(`${statusPrefix}Captured ${i + 1} / ${slidesCount}…`);
     }
   };
 
-  /** Manual export only (Export ΓåÆ ΓÇ£All slides ΓåÆ ZIP (PNG)ΓÇ¥). Never used after batch generate. */
+  /** Manual export only (Export → “All slides → ZIP (PNG)”). Never used after batch generate. */
   const exportIphonePngZipPlans = async (shows, restoreConfig) => {
     const zipPlan = tryBuildIphoneBatchZipPlan(shows);
     if (zipPlan?.error) {
@@ -3716,7 +3717,7 @@ ${SHARED_RULES_OUTRO}`;
     cancelGenRef.current = false;
     setIsExporting(true);
     setExportProgress(0);
-    setExportStatus(`Exporting PNG folders for ${zipPlans.length} iPhonesΓÇª`);
+    setExportStatus(`Exporting PNG folders for ${zipPlans.length} iPhones…`);
 
     try {
       const { zipSync } = await import("fflate");
@@ -3734,12 +3735,12 @@ ${SHARED_RULES_OUTRO}`;
           const { zipRelPath, show } = plan.jobs[i];
           const showDir = `${iphoneDir}/${slideshowFolderName(i, show, zipRelPath)}`;
           const exportCfg = galleryShowToExportConfig(restoreConfig, show);
-          setExportStatus(`iPhone ${plan.iphoneNumber}: capturing slideshow ${i + 1} / ${plan.jobs.length}ΓÇª`);
+          setExportStatus(`iPhone ${plan.iphoneNumber}: capturing slideshow ${i + 1} / ${plan.jobs.length}…`);
           await capturePngEntriesForConfig(exportCfg, {
             pngEntries: zipEntries,
             usedZipEntryNames,
             baseDir: showDir,
-            statusPrefix: `iPhone ${plan.iphoneNumber} ┬╖ Slideshow ${i + 1}: `,
+            statusPrefix: `iPhone ${plan.iphoneNumber} · Slideshow ${i + 1}: `,
             progressBase: Math.round((completedJobs / totalJobs) * 85),
             progressSpan: Math.max(1, 85 / totalJobs),
           });
@@ -3750,7 +3751,7 @@ ${SHARED_RULES_OUTRO}`;
         if (cancelGenRef.current) break;
         if (Object.keys(zipEntries).length === 0) continue;
 
-        setExportStatus(`Building PNG ZIP ${plan.iphoneNumber} / ${zipPlans.length}ΓÇª`);
+        setExportStatus(`Building PNG ZIP ${plan.iphoneNumber} / ${zipPlans.length}…`);
         const zipData = zipSync(zipEntries, { level: 1 });
         const blob = new Blob([zipData], { type: "application/zip" });
         triggerZipDownload(blob, `${zipFilePrefix}${String(plan.iphoneNumber).padStart(2, "0")}-${randomExportHex(10)}.zip`);
@@ -3759,7 +3760,7 @@ ${SHARED_RULES_OUTRO}`;
       }
 
       if (downloadedZipCount === 0) {
-        setExportStatus("Nothing exported ΓÇö PNG ZIP export cancelled.");
+        setExportStatus("Nothing exported — PNG ZIP export cancelled.");
       } else {
         setExportProgress(100);
         setExportStatus(`Done! Downloaded ${downloadedZipCount} iPhone PNG ZIPs.`);
@@ -3767,7 +3768,7 @@ ${SHARED_RULES_OUTRO}`;
       return downloadedZipCount > 0;
     } catch (e) {
       console.error(e);
-      setExportStatus("iPhone PNG ZIP export failed ΓÇö see console.");
+      setExportStatus("iPhone PNG ZIP export failed — see console.");
       return true;
     } finally {
       flushSync(() => setConfig(restoreConfig));
@@ -3793,7 +3794,7 @@ ${SHARED_RULES_OUTRO}`;
 
     setIsExporting(true);
     setExportProgress(0);
-    setExportStatus("Capturing slidesΓÇª");
+    setExportStatus("Capturing slides…");
 
     const pngEntries = {};
     const usedZipEntryNames = new Set();
@@ -3805,7 +3806,7 @@ ${SHARED_RULES_OUTRO}`;
       return;
     }
 
-    setExportStatus("Building ZIPΓÇª");
+    setExportStatus("Building ZIP…");
     setExportProgress(90);
 
     const { zipSync } = await import("fflate");
@@ -3829,7 +3830,7 @@ ${SHARED_RULES_OUTRO}`;
   };
 
   // Register the per-slide refresh handler so VideoPreview can trigger generation
-  // No deps ΓÇö runs after every render to keep the latest closure registered
+  // No deps — runs after every render to keep the latest closure registered
   useEffect(() => {
     registerRefreshSlide?.((slideIdx) => {
       const fmt = config.outputFormat ?? "standard";
@@ -3860,14 +3861,14 @@ ${SHARED_RULES_OUTRO}`;
           <div className="callout px-3 py-2.5 text-[11px]">
             <div className="font-semibold text-foreground">Grocery intro + scan</div>
             <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-              {`Shelf intro, scan beam, then ${scanTourSlotCount(config)} Labely slides per video. Farm runs use the auto food plan (3 types ├ù unique Brave photos).`}
+              {`Shelf intro, scan beam, then ${scanTourSlotCount(config)} Labely slides per video. Farm runs use the auto food plan (3 types × unique Brave photos).`}
             </p>
           </div>
         ) : isValcoin ? (
           <div className="callout px-3 py-2.5 text-[11px]">
-            <div className="font-semibold text-foreground">6-coin collage ΓåÆ scan ├ù6 ΓåÆ Valcoin slide-up</div>
+            <div className="font-semibold text-foreground">6-coin collage → scan ×6 → Valcoin slide-up</div>
             <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-              {`Opens on a 6-coin collage, then each coin gets a scan animation and the Valcoin app slides up ΓÇö same slide-up choreography as Labely. Coin photos come from Wikimedia Commons (public domain). Batch generate builds ${VALCOIN_IPHONE_PACK_TOTAL} slideshows (6 batches ├ù ${VALCOIN_IPHONE_SLIDESHOWS_PER_BATCH}) and auto-exports ${GALLERY_IPHONE_DEVICE_COUNT} iPhone ZIPs (${LABELY_DB_BATCH_COUNT} videos each), same folder layout as Labely.`}
+              {`Opens on a 6-coin collage, then each coin gets a scan animation and the Valcoin app slides up — same slide-up choreography as Labely. Coin photos come from Wikimedia Commons (public domain). Batch generate builds ${VALCOIN_IPHONE_PACK_TOTAL} slideshows (6 batches × ${VALCOIN_IPHONE_SLIDESHOWS_PER_BATCH}) and auto-exports ${GALLERY_IPHONE_DEVICE_COUNT} iPhone ZIPs (${LABELY_DB_BATCH_COUNT} videos each), same folder layout as Labely.`}
             </p>
           </div>
         ) : (
@@ -3875,9 +3876,9 @@ ${SHARED_RULES_OUTRO}`;
           {[
             { id: "standard", label: "Standard", sub: "Collage, then reveal + app per item" },
             { id: "appOnly", label: "App only", sub: "Collage, then app screenshots only (no reveal)" },
-            { id: "imessageMom", label: "iMessage mom", sub: `iMessage ΓåÆ Voicemail ΓåÆ ${brand.appName} (3 slides, slot 1 only)` },
+            { id: "imessageMom", label: "iMessage mom", sub: `iMessage → Voicemail → ${brand.appName} (3 slides, slot 1 only)` },
             { id: "posePerson", label: "Pose person", sub: "Six full-frame shots; hands OK on slide 1 only" },
-            { id: "starterPack", label: "Starter pack", sub: `POV: you thrift full time ΓÇö 3 struggles + ${brand.appName} (5 sec)` },
+            { id: "starterPack", label: "Starter pack", sub: `POV: you thrift full time — 3 struggles + ${brand.appName} (5 sec)` },
           ].map(({ id, label, sub }) => (
             <button
               key={id}
@@ -3896,22 +3897,22 @@ ${SHARED_RULES_OUTRO}`;
         </div>
         )}
 
-        {/* ΓöÇΓöÇ Starter Pack config ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ */}
+        {/* ── Starter Pack config ───────────────────────────────────────── */}
         {!isLabely && !isValcoin && (config.outputFormat ?? "standard") === "starterPack" && (
           <div className="callout p-3 flex flex-col gap-2">
             <div className="text-muted-foreground text-xs font-semibold">Starter Pack</div>
             <p className="text-muted-foreground/70 text-[10px] leading-relaxed">
               Headline stays static. Each of the 3 items + {brand.appName} dissolves in over 5 seconds.
-              Use the image slots below to generate/upload photos for items 1ΓÇô3.
+              Use the image slots below to generate/upload photos for items 1–3.
             </p>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={async () => {
                   setIsExporting(true);
-                  setExportStatus("Generating starter pack textΓÇª");
+                  setExportStatus("Generating starter pack text…");
                   const sp = await ensureStarterPackAutofill();
-                  setExportStatus("Generating starter pack imagesΓÇª");
+                  setExportStatus("Generating starter pack images…");
                   await ensureStarterPackImages(sp?.imagePrompts ?? sp?.items);
                   setIsExporting(false);
                   setExportStatus("");
@@ -3953,7 +3954,7 @@ ${SHARED_RULES_OUTRO}`;
         <div className="bg-muted/50 border border-border rounded-xl p-3">
           <div className="text-muted-foreground text-xs font-semibold mb-1">Pose format (optional)</div>
           <p className="text-muted-foreground/70 text-[10px] mb-2 leading-relaxed">
-            Upload your own reference photos. The model matches pose and framing, then swaps in each item. Images are cycled by slot (1ΓåÆ2ΓåÆ3ΓÇªΓåÆ1). With <span className="text-muted-foreground">Pose person</span> selected, hands/arms are only allowed on the first generated slide; other slides stay hands-free.
+            Upload your own reference photos. The model matches pose and framing, then swaps in each item. Images are cycled by slot (1→2→3…→1). With <span className="text-muted-foreground">Pose person</span> selected, hands/arms are only allowed on the first generated slide; other slides stay hands-free.
           </p>
           <input
             type="file"
@@ -3996,7 +3997,7 @@ ${SHARED_RULES_OUTRO}`;
 
       </div>
 
-      {/* ΓöÇΓöÇ iMessage Mom (Thrifty) ΓöÇΓöÇ */}
+      {/* ── iMessage Mom (Thrifty) ── */}
       {!isLabely && !isValcoin ? (
       <Section title="iMessage Mom" icon="≡ƒÆ¼">
         <div>
@@ -4022,8 +4023,8 @@ ${SHARED_RULES_OUTRO}`;
       </Section>
       ) : null}
 
-      {/* ΓöÇΓöÇ AI GENERATION (Thrifty/Labely) / Numista (Valcoin) ΓöÇΓöÇ */}
-      <Section title={isValcoin ? "Coin photos" : "AI Generation"} icon={isValcoin ? "≡ƒ¬Ö" : "Γ£¿"}>
+      {/* ── AI GENERATION (Thrifty/Labely) / Numista (Valcoin) ── */}
+      <Section title={isValcoin ? "Coin photos" : "AI Generation"} icon={isValcoin ? "🪙" : "✨"}>
         {!isLabely && !isValcoin && (
         <div className="flex gap-2 mb-3">
           {[
@@ -4051,7 +4052,7 @@ ${SHARED_RULES_OUTRO}`;
                 {imageModel === id && <span className="w-2 h-2 rounded-full bg-current inline-block" />}
                 {label}
               </span>
-              <span className={`block text-[10px] mt-0.5 font-normal ${imageModel === id ? "opacity-70" : "opacity-40"}`}>{sub} ┬╖ low quality</span>
+              <span className={`block text-[10px] mt-0.5 font-normal ${imageModel === id ? "opacity-70" : "opacity-40"}`}>{sub} · low quality</span>
             </button>
             );
           })}
@@ -4064,7 +4065,7 @@ ${SHARED_RULES_OUTRO}`;
             {isLabely
               ? "Brave pack photos + GPT ingredient analysis. Shelf intro is AI-generated per video. Foods come from the built-in farm plan, not a manual list."
               : isValcoin
-                ? "Free public-domain coin photos from Wikimedia Commons ΓÇö no API key required, no AI coin images."
+                ? "Free public-domain coin photos from Wikimedia Commons — no API key required, no AI coin images."
                 : "This deployment uses the Vercel environment variables for image generation and auto-title, so teammates can use the app without entering API keys here."}
           </div>
         </div>
@@ -4073,7 +4074,7 @@ ${SHARED_RULES_OUTRO}`;
           <div className="adv-section mt-3">
             <Label className="!mb-1">Farm food plan</Label>
             <p className="text-muted-foreground/70 text-[10px] mb-2 leading-relaxed">
-              Each phone gets 3 videos ΓÇö one genre per video (e.g. chips, cereal, soda). All 3 scan slides in a video use brands from that same genre. Genres rotate daily from {`unhealthyAmericanFoods.js`}. Brave photos reuse per product name across phones.
+              Each phone gets 3 videos — one genre per video (e.g. chips, cereal, soda). All 3 scan slides in a video use brands from that same genre. Genres rotate daily from {`unhealthyAmericanFoods.js`}. Brave photos reuse per product name across phones.
             </p>
             {isLabely && config.labelyUseBraveImages !== false ? (
               <BraveSearchUsageBar enabled className="mb-2" />
@@ -4082,7 +4083,7 @@ ${SHARED_RULES_OUTRO}`;
               <ul className="text-[11px] text-foreground space-y-1 mb-2">
                 {farmVideoGenrePlan.map(({ video, genre }) => (
                   <li key={video}>
-                    <span className="text-muted-foreground">Video {video} ┬╖</span> {genre}
+                    <span className="text-muted-foreground">Video {video} ·</span> {genre}
                   </li>
                 ))}
               </ul>
@@ -4104,8 +4105,8 @@ ${SHARED_RULES_OUTRO}`;
                 </strong>{" "}
                 Brave searches
                 {labelyBraveReusePhotos && farmUniqueProductCount
-                  ? ` (${farmUniqueProductCount} unique products ΓÇö same photo when a name repeats)`
-                  : ` (${numSlideshows} videos ├ù ${config.labelyScanSlotCount || 3} scans)`}
+                  ? ` (${farmUniqueProductCount} unique products — same photo when a name repeats)`
+                  : ` (${numSlideshows} videos × ${config.labelyScanSlotCount || 3} scans)`}
                 .
               </p>
             ) : null}
@@ -4120,12 +4121,12 @@ ${SHARED_RULES_OUTRO}`;
         }`}>
           <span>{referenceImages === null ? "ΓÅ│" : referenceImages.length > 0 ? "≡ƒû╝∩╕Å" : "≡ƒôé"}</span>
           {referenceImages === null ? (
-            <span>Loading reference photosΓÇª</span>
+            <span>Loading reference photos…</span>
           ) : referenceImages.length > 0 ? (
             <span>
               <strong>{referenceImages.length}</strong> reference photo{referenceImages.length > 1 ? "s" : ""} in{" "}
               <code className="text-muted-foreground">{referencesDirLabel}</code>
-              {" "}ΓÇö used as the style reference for AI generations.
+              {" "}— used as the style reference for AI generations.
             </span>
           ) : (
             <span>
@@ -4179,7 +4180,7 @@ ${SHARED_RULES_OUTRO}`;
             ) : (
               <span className="text-[11px] font-semibold text-foreground">
                 {effectiveNumSlideshows} total
-                {isValcoinIphonePackBatchMode ? ` ┬╖ ${LABELY_DB_BATCH_COUNT}├ù${VALCOIN_IPHONE_SLIDESHOWS_PER_BATCH} iPhone pack` : ""}
+                {isValcoinIphonePackBatchMode ? ` · ${LABELY_DB_BATCH_COUNT}×${VALCOIN_IPHONE_SLIDESHOWS_PER_BATCH} iPhone pack` : ""}
               </span>
             )}
           </div>
@@ -4191,7 +4192,7 @@ ${SHARED_RULES_OUTRO}`;
             }
             className="btn-primary w-full disabled:opacity-40"
           >
-            {generatingSlot === "all" ? "GeneratingΓÇª" : `Generate ${effectiveNumSlideshows} slideshow${effectiveNumSlideshows > 1 ? "s" : ""}`}
+            {generatingSlot === "all" ? "Generating…" : `Generate ${effectiveNumSlideshows} slideshow${effectiveNumSlideshows > 1 ? "s" : ""}`}
           </button>
           {!isLabely && !isValcoin ? (
           <p className="mt-1.5 text-center text-[10px] text-muted-foreground/60">
@@ -4199,7 +4200,7 @@ ${SHARED_RULES_OUTRO}`;
               const isMom = (config.outputFormat ?? "standard") === "imessageMom";
               const imgs = isMom ? 1 : 6;
               const cost = imageModel === "gpt-image-1" ? 0.015 * imgs : 0.07 * imgs;
-              return `Est. $${(effectiveNumSlideshows * cost).toFixed(2)} ┬╖ each saved to the gallery on the right`;
+              return `Est. $${(effectiveNumSlideshows * cost).toFixed(2)} · each saved to the gallery on the right`;
             })()}
           </p>
           ) : null}
@@ -4247,7 +4248,7 @@ ${SHARED_RULES_OUTRO}`;
         )}
       </Section>
 
-      {/* ΓöÇΓöÇ VIDEO SETTINGS ΓöÇΓöÇ */}
+      {/* ── VIDEO SETTINGS ── */}
       <Section title="Video Settings" icon="≡ƒÄ¼">
         <div className="flex items-center gap-3">
           <Label className="shrink-0">Slide duration</Label>
@@ -4258,14 +4259,14 @@ ${SHARED_RULES_OUTRO}`;
         </div>
       </Section>
 
-      {/* ΓöÇΓöÇ EXPORT ΓöÇΓöÇ */}
+      {/* ── EXPORT ── */}
       <div className="space-y-2 pb-8">
         <h3 className="text-muted-foreground text-xs uppercase tracking-widest font-bold mb-3">Export</h3>
 
         {(isExporting || exportStatus) && (
           <div className="mb-3">
             <div className="flex justify-between text-xs text-muted-foreground mb-1">
-              <span>{exportStatus || "ExportingΓÇª"}</span>
+              <span>{exportStatus || "Exporting…"}</span>
               <span>{exportProgress}%</span>
             </div>
             <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
@@ -4280,18 +4281,18 @@ ${SHARED_RULES_OUTRO}`;
           disabled={isExporting}
           className="btn-primary w-full disabled:opacity-40"
         >
-          {isExporting ? "ExportingΓÇª" : "Export MP4"}
+          {isExporting ? "Exporting…" : "Export MP4"}
         </button>
 
         <p className="text-center text-xs text-muted-foreground/60">
-          {totalSlides} slides ┬╖ {(config.slideDuration * totalSlides).toFixed(0)}s+ ┬╖ 1080├ù1920
+          {totalSlides} slides · {(config.slideDuration * totalSlides).toFixed(0)}s+ · 1080×1920
         </p>
       </div>
     </div>
   );
 }
 
-// ΓöÇΓöÇ Shared UI ΓöÇΓöÇ
+// ── Shared UI ──
 function Section({ title, icon, children }) {
   return (
     <div>
