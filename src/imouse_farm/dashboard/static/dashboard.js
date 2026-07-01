@@ -648,6 +648,7 @@ async function stopDailyRun() {
                 const profile = d?.account_profile || slotProfiles[`slot:${key}`] || null;
                 const handle = profile?.tiktok_handle || '';
                 const warmupEnabled = Boolean(profile?.warmup_enabled);
+                const warmupDays = parseInt(profile?.warmup_days_completed || 0, 10);
                 const runCell = lastRunCell(profile);
                 const classes = [
                     'phones-table-row',
@@ -668,6 +669,7 @@ async function stopDailyRun() {
                     <td class="phones-td phones-td-slot">${key}</td>
                     <td class="phones-td phones-td-handle">
                         ${tiktokHandleCell(handle)}
+                        ${BRAND_ID !== 'labely' ? `<span class="warmup-day-badge">${warmupDays > 0 ? `Day ${warmupDays} Warmup ✓` : 'Day 0 Warmup'}</span>` : ''}
                     </td>
                     <td class="phones-td">
                         <div class="phones-status-cell">
@@ -1256,9 +1258,12 @@ async function stopDailyRun() {
             localStorage.setItem(DEBUG_STORAGE.test, select.value);
         }
 
-        async function loadDebugTests() {
+        let currentDebugFlow = localStorage.getItem('debugFlow') || 'flow';
+
+        async function loadDebugTests(group) {
+            const flowGroup = group || currentDebugFlow || 'flow';
             try {
-                const tests = await api('/debug/tests?group=flow');
+                const tests = await api(`/debug/tests?group=${enc(flowGroup)}`);
                 const select = document.getElementById('debug-test-select');
                 if (!tests.length) {
                     debugFlowStepIds = [];
@@ -1283,11 +1288,22 @@ async function stopDailyRun() {
             }
         }
 
+        function switchDebugFlow(value) {
+            currentDebugFlow = value;
+            localStorage.setItem('debugFlow', value);
+            loadDebugTests(value);
+        }
+
         function restoreDebugPanel() {
             const panel = document.getElementById('debug-panel');
             if (panel && localStorage.getItem(DEBUG_STORAGE.open) === '1') {
                 panel.open = true;
             }
+            const savedFlow = localStorage.getItem('debugFlow') || 'flow';
+            currentDebugFlow = savedFlow;
+            document.querySelectorAll('input[name="debug-flow-select"]').forEach(r => {
+                r.checked = r.value === savedFlow;
+            });
         }
 
         function bindDebugPanel() {

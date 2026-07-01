@@ -2,6 +2,7 @@
 
 from imouse_farm.actions.permission_prompts import (
     analyze_popup_screen,
+    is_tiktok_live_feed_dialog,
     delete_match_is_stable,
     delete_sheet_is_visible,
     filter_delete_confirm_matches,
@@ -27,12 +28,19 @@ def test_analyze_popup_screen_tiktok_email() -> None:
     assert "Not Now" in result["button_labels"]
 
 
+def test_analyze_popup_screen_tiktok_save_login() -> None:
+    result = analyze_popup_screen("Save login for next time?\nNot now")
+    assert result["dialog"] == "tiktok_save_login"
+    assert result["watcher_action"] == "tap_not_now"
+    assert "Not now" in result["button_labels"]
+
+
 def test_analyze_popup_screen_tiktok_post_notify() -> None:
     result = analyze_popup_screen("Get notified of post interactions?")
     assert result["dialog"] == "tiktok_post_notify"
     assert result["watcher_action"] == "tap_coord"
-    assert result["tap_x"] == 196
-    assert result["tap_y"] == 193
+    assert result["tap_x"] == 203
+    assert result["tap_y"] == 63
 
 
 def test_analyze_popup_screen_tiktok_continue_editing() -> None:
@@ -44,12 +52,57 @@ def test_analyze_popup_screen_tiktok_continue_editing() -> None:
     assert result["swipe_ey"] == 0
 
 
+def test_is_tiktok_live_feed_dialog() -> None:
+    assert is_tiktok_live_feed_dialog("LIVE now\nTap to watch LIVE")
+    assert is_tiktok_live_feed_dialog("Tap to watch LIVE")
+    assert is_tiktok_live_feed_dialog("LIVENOW overlay")
+    assert not is_tiktok_live_feed_dialog("For You\nFollowing")
+
+
+def test_analyze_popup_screen_tiktok_live_feed() -> None:
+    result = analyze_popup_screen("LIVE now\nTap to watch LIVE")
+    assert result["dialog"] == "tiktok_live_feed"
+    assert result["watcher_action"] == "swipe_up_random"
+
+
 def test_analyze_popup_screen_tiktok_post_notify_get_notified_button() -> None:
     result = analyze_popup_screen("Get notified\nNot now")
     assert result["dialog"] == "tiktok_post_notify"
     assert result["watcher_action"] == "tap_coord"
 
     assert analyze_popup_screen("Get notified")["dialog"] == "tiktok_post_notify"
+
+
+def test_analyze_popup_screen_ios_passkeys_passcode() -> None:
+    result = analyze_popup_screen(
+        "Passkeys require a passcode and work best with Touch ID"
+    )
+    assert result["dialog"] == "ios_passkeys_passcode"
+    assert result["watcher_action"] == "tap_coord"
+    assert result["tap_x"] == 563
+    assert result["tap_y"] == 592
+
+
+def test_analyze_popup_screen_tiktok_viewer_history() -> None:
+    result = analyze_popup_screen("Viewer history turned on\nSave")
+    assert result["dialog"] == "tiktok_viewer_history"
+    assert result["watcher_action"] == "tap_save_white"
+    assert "Save" in result["button_labels"]
+
+
+def test_analyze_popup_screen_tiktok_avatar_style() -> None:
+    result = analyze_popup_screen("Your avatar, your style")
+    assert result["dialog"] == "tiktok_avatar_style"
+    assert result["watcher_action"] == "tap_coord"
+    assert result["tap_x"] == 563
+    assert result["tap_y"] == 92
+
+
+def test_analyze_popup_screen_tiktok_virtual_items_policies() -> None:
+    result = analyze_popup_screen("Virtual Items and Rewards Policies update\nGot it")
+    assert result["dialog"] == "tiktok_virtual_items_policies"
+    assert result["watcher_action"] == "tap_got_it"
+    assert "Got it" in result["button_labels"]
 
 
 def test_analyze_popup_screen_ios_permission_allow() -> None:

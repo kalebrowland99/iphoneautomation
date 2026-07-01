@@ -142,3 +142,46 @@ async def test_wait_for_detection_scans_popups_each_poll() -> None:
         await runner._step_wait_for_detection(step)
 
     assert runner._try_dismiss_popups.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_wait_for_detection_restarts_tiktok_after_failed_polls() -> None:
+    runner = _make_runner()
+    runner._workflow = WorkflowConfig(name="tiktok_post", steps=[])
+    runner._running = True
+    runner._device_manager.is_workflow_paused = AsyncMock(return_value=False)
+    runner._step_capture = AsyncMock()
+    runner._log_activity = AsyncMock()
+    runner._try_dismiss_popups = AsyncMock(return_value=False)
+    runner._restart_tiktok = AsyncMock()
+
+    calls = {"n": 0}
+
+    async def fake_analyze(step: WorkflowStepConfig) -> None:
+        calls["n"] += 1
+        runner._last_analysis = VisionAnalysis(
+            device_id="dev-1",
+            screenshot_path="x.png",
+            detections=[],
+            provider="test",
+        )
+        runner._has_recent_analysis = True
+
+    runner._step_analyze = fake_analyze
+    runner._has_detection = MagicMock(side_effect=lambda name: calls["n"] > 4)
+
+    step = WorkflowStepConfig(
+        type="wait_for_detection",
+        name="wait_for_plus",
+        templates=["plus"],
+        when_detection="plus",
+        duration_seconds=60,
+        min_seconds=0.01,
+        action={"restart_app_after_attempts": 3, "max_app_restarts": 2},
+    )
+
+    with patch("imouse_farm.workflows.engine.asyncio.sleep", new_callable=AsyncMock):
+        await runner._step_wait_for_detection(step)
+
+    runner._restart_tiktok.assert_awaited_once()
+    assert calls["n"] >= 4

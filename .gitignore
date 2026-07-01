@@ -23,3 +23,8 @@ gallery/
 logs/
 data/screenshots/
 *.log
+
+# Slideshow UI (Next.js)
+slideshow-ui/node_modules/
+slideshow-ui/.next/
+slideshow-ui/.env.local

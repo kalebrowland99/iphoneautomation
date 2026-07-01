@@ -1,0 +1,43 @@
+# Files here are NOT indexed/embedded by Cursor (keeps the index small & fast)
+# but stay readable by the agent. Heavy deps, build output, runtime data & binaries.
+
+# JS/Next dependencies & build output
+node_modules/
+slideshow-ui/node_modules/
+slideshow-ui/.next/
+slideshow-ui/out/
+.next/
+out/
+
+# Python env & tool caches
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tools/
+
+# Runtime data & media (large, not source)
+data/
+gallery/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Lockfiles & large generated binaries
+**/package-lock.json
+**/*.wasm
+slideshow-ui/public/ffmpeg/
+
+# Bundled media/assets (not useful to index)
+**/*.heic
+**/*.HEIC
+**/*.mp3
+**/*.wav
+**/*.mp4
+**/*.mov
+**/*.webp
+**/*.WEBP

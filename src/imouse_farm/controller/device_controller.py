@@ -184,6 +184,19 @@ class DeviceController:
                 return False
         return await self._run_sync(_disconnect)
 
+    async def restart_device(self, device_id: str) -> bool:
+        """Reboot the physical phone via iMouseXP (device_restart)."""
+
+        def _restart() -> bool:
+            try:
+                return self._ok(self._api.device_restart(self._ids(device_id)))
+            except Exception as exc:
+                logger.warning("device_restart_failed", device_id=device_id, error=str(exc))
+                return False
+
+        logger.info("action_device_restart", device_id=device_id)
+        return await self._run_sync(_restart)
+
     async def connect_all_airplay(self) -> bool:
         def _connect_all() -> bool:
             try:

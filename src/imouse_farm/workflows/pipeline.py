@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
+from imouse_farm.permissions.watcher import PermissionWatcherManager
 from imouse_farm.post.post_caption_store import POST_COUNT
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.workflows.engine import WorkflowEngine
@@ -34,6 +35,7 @@ TIKTOK_LABELY_THEN_VALCOIN_STEPS: list[PipelineStep] = [
     _step("tiktok_prep", "labely"),
     _step("tiktok_account_switch", "labely"),
     _step("tiktok_post", "labely"),
+    _step("tiktok_valcoin_prep", "valcoin"),
     _step("tiktok_account_switch", "valcoin"),
     _step("tiktok_post", "valcoin"),
     _step("tiktok_end", "valcoin"),
@@ -95,10 +97,13 @@ class WorkflowPipeline:
         workflow_engine: WorkflowEngine,
         device_manager: DeviceManager,
         db: DatabaseRepository,
+        *,
+        permission_watchers: PermissionWatcherManager | None = None,
     ) -> None:
         self._engine = workflow_engine
         self._dm = device_manager
         self._db = db
+        self._permission_watchers = permission_watchers
         self._pipelines: dict[str, dict[str, Any]] = {}
         self._event_callbacks: list[EventCallback] = []
         self._engine.on_event(self._on_workflow_event)
@@ -152,6 +157,9 @@ class WorkflowPipeline:
         if from_post is not None and not (1 <= from_post <= POST_COUNT):
             return False
 
+        if self._permission_watchers:
+            await self._permission_watchers.ensure_watching(device_id)
+
         run_brand = str(brand or "labely").strip().lower()
         steps = _build_steps(
             from_post=from_post,
@@ -176,7 +184,7 @@ class WorkflowPipeline:
         workflow_names = [s["workflow"] for s in steps]
         if from_post is None:
             if chain_valcoin_after_labely and run_brand == "labely":
-                label = "Labely + ValCoin run (prep → Labely posts → ValCoin posts → end)"
+                label = "Labely + ValCoin run (prep → Labely posts → clear → ValCoin upload → ValCoin posts → end)"
             else:
                 label = f"Full run ({' → '.join(workflow_names)})"
         else:

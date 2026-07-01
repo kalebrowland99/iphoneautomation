@@ -12,6 +12,7 @@ from imouse_farm.actions.pre_touch_reset import (
     pre_touch_mouse_reset,
     request_needs_pre_touch_reset,
 )
+from imouse_farm.actions.vpn_shadowrocket import ensure_vpn_off_before_album
 from imouse_farm.actions.queue import ActionQueue, QueuedAction
 from pathlib import Path
 
@@ -745,6 +746,10 @@ class ActionEngine:
             case ActionType.KILL_APP:
                 return await ctrl.kill_app(device_id)
             case ActionType.ALBUM_CLEAR:
+                if not params.get("skip_vpn_off"):
+                    await ensure_vpn_off_before_album(
+                        ctrl, self._config, self._device_manager, device_id
+                    )
                 self._block_album_when_vpn_on(device_id, "Album clear")
                 clear_kw: dict[str, Any] = {
                     "timeout_ms": int(params.get("timeout_ms", 60000)),
@@ -763,6 +768,10 @@ class ActionEngine:
                     clear_kw["max_rounds"] = int(params["max_rounds"])
                 return await ctrl.album_clear(device_id, **clear_kw)
             case ActionType.ALBUM_UPLOAD:
+                if not params.get("skip_vpn_off"):
+                    await ensure_vpn_off_before_album(
+                        ctrl, self._config, self._device_manager, device_id
+                    )
                 self._block_album_when_vpn_on(device_id, "Album upload")
                 from imouse_farm.utils.gallery import list_media_files
 

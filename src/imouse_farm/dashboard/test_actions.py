@@ -56,6 +56,7 @@ from imouse_farm.actions.vpn_shadowrocket import (
 )
 from imouse_farm.dashboard.flow_debug import (
     FLOW_DEBUG_STEPS,
+    FLOW_DEBUG_WARMUP_STEPS,
     flow_step_letter,
     resolve_flow_debug_test_id,
 )
@@ -1007,6 +1008,20 @@ def _template_debug_tests(workflows_dir: str = "config/workflows") -> dict[str, 
     return tests
 
 
+WARMUP_DEBUG_TESTS: dict[str, DebugTest] = {
+    "warmup-run": {
+        "label": "Warmup: Run 2min ValCoin feed scroll (debug)",
+        "kind": "warmup_run",
+        "group": "warmup",
+        "brand": "valcoin",
+        "duration_seconds": 120,
+        "skip_setup": True,
+        "hint": "TikTok must already be open on ValCoin account. Scrolls feed for 60s.",
+        "offline_hint": OFFLINE_HINT,
+    },
+}
+
+
 def get_debug_registry(workflows_dir: str = "config/workflows") -> dict[str, DebugTest]:
     registry = _template_debug_tests(workflows_dir)
     registry.update(MANUAL_DEBUG_TESTS)
@@ -1015,6 +1030,7 @@ def get_debug_registry(workflows_dir: str = "config/workflows") -> dict[str, Deb
     registry.update(TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS)
     registry.update(TIKTOK_VALCOIN_PREP_DEBUG_TESTS)
     registry.update(SLIDESHOW_DEBUG_TESTS)
+    registry.update(WARMUP_DEBUG_TESTS)
     return registry
 
 
@@ -1058,6 +1074,23 @@ def list_debug_tests(group: str | None = None) -> list[dict[str, str]]:
                     "test_id": test_id,
                     "label": f"{flow_step_letter(idx)}. {short}",
                     "group": "flow",
+                    "step": str(idx + 1),
+                }
+            )
+        return items
+    if key == "warmup_flow":
+        items = []
+        for idx, (short, test_id) in enumerate(FLOW_DEBUG_WARMUP_STEPS):
+            spec = registry.get(test_id)
+            if not spec:
+                continue
+            flow_id = f"warmup:{idx + 1:03d}:{test_id}"
+            items.append(
+                {
+                    "id": flow_id,
+                    "test_id": test_id,
+                    "label": f"{flow_step_letter(idx)}. {short}",
+                    "group": "warmup_flow",
                     "step": str(idx + 1),
                 }
             )
@@ -1218,6 +1251,9 @@ async def run_debug_test(
         return await home_debug(app, device_id, test_id, spec)
     if kind == "detect_ocr":
         return await detect_ocr_debug(app, device_id, test_id, spec)
+    if kind == "warmup_run":
+        warmup_brand = str(spec.get("brand") or brand)
+        return await warmup_run_debug(app, device_id, test_id, spec, brand=warmup_brand)
     if kind == "tiktok_popup_scan":
         return await tiktok_popup_scan_debug(app, device_id, test_id, spec)
     if kind == "account_switch_step":
@@ -2889,6 +2925,40 @@ async def tap_detection(
         "y": int(hit["y"]),
         "confidence": float(hit.get("confidence", 0)),
     }
+
+
+async def warmup_run_debug(
+    app: Any,
+    device_id: str,
+    test_id: str,
+    spec: DebugTest,
+    *,
+    brand: str = "valcoin",
+) -> dict[str, Any]:
+    """Run the warmup scroll for the device (TikTok must already be open on correct account)."""
+    from imouse_farm.workflows.warmup import run_tiktok_warmup
+
+    device = await _require_online_device(app, device_id, spec)
+    duration_override = float(spec["duration_seconds"]) if "duration_seconds" in spec else None
+    skip_setup = bool(spec.get("skip_setup", False))
+
+    async def _log(level: str, category: str, message: str, *_args: Any, **_kw: Any) -> None:
+        await app.db.log_activity(level, category, message, device_id, {"test_id": test_id})
+
+    try:
+        await run_tiktok_warmup(
+            app.device_manager.controller,
+            device,
+            brand=brand,
+            app_config=app.config,
+            device_manager=app.device_manager,
+            log_activity=_log,
+            duration_override=duration_override,
+            skip_setup=skip_setup,
+        )
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}
+    return {"success": True, "message": f"Warmup complete for {device_id}"}
 
 
 async def tap_vpntoggle(app: Any, device_id: str) -> dict[str, Any]:

@@ -112,6 +112,21 @@
                 </div>
             </section>
 
+            <section id="slideshow-embed-panel" class="hidden mb-8 rounded-3xl border overflow-hidden shadow-sm bg-background">
+                <div class="flex items-center justify-between px-4 py-2 border-b bg-muted/30">
+                    <div>
+                        <h2 class="text-sm font-semibold">Slideshow generation</h2>
+                        <p id="slideshow-embed-status" class="text-xs text-muted-foreground">Waiting to start…</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <a id="slideshow-embed-open-tab" class="btn-ghost text-xs hidden" href="#" target="_blank" rel="noopener noreferrer">Open in tab</a>
+                        <button type="button" id="btn-slideshow-embed-stop" class="btn-ghost btn-kill text-xs" onclick="stopDailyRun()" disabled>Stop</button>
+                        <button type="button" class="btn-ghost text-xs" onclick="hideSlideshowEmbed()">Hide</button>
+                    </div>
+                </div>
+                <iframe id="slideshow-embed-frame" title="Slideshow automation" class="w-full bg-black" style="height:72vh;border:0;" allow="local-network-access"></iframe>
+            </section>
+
             <div class="grid lg:grid-cols-5 gap-5 md:gap-6 items-start">
                 <!-- Phone selection -->
                 <div class="lg:col-span-2 rounded-3xl border p-4 md:p-5 shadow-sm bg-background">
@@ -135,6 +150,7 @@
                                     <th class="phones-th phones-th-slot" scope="col">#</th>
                                     <th class="phones-th" scope="col">__APP_NAME__ Handle</th>
                                     <th class="phones-th" scope="col">Status</th>
+                                    <th class="phones-th phones-th-warmup" scope="col">Warmup</th>
                                     <th class="phones-th" scope="col">Last run</th>
                                 </tr>
                             </thead>
@@ -175,14 +191,15 @@
                         </div>
                         <div class="field">
                             <label for="ai-hashtags">Hashtags</label>
-                            <input type="text" id="ai-hashtags" placeholder="#food #health">
+                            <input type="text" id="ai-hashtags" placeholder="#______ #toxic_____ #toxinfree #groceryshopping #cleaningredients">
                         </div>
                         <div class="field">
                             <label for="onscreen-template">Onscreen template</label>
                             <select id="onscreen-template" onchange="applyOnscreenTemplate()">
                                 <option value="">Custom</option>
-                                <option value="toxic_walmart">Toxic · Walmart</option>
-                                <option value="america_sick">America Is Sick</option>
+                                <option value="toxic_walmart" data-brand="labely">Toxic · Walmart</option>
+                                <option value="america_sick" data-brand="labely">America Is Sick</option>
+                                <option value="valcoin_receipt" data-brand="valcoin">ValCoin · Real Cost</option>
                             </select>
                         </div>
                         <div class="btn-row">
@@ -240,20 +257,19 @@
                                     <button type="button" class="btn-ghost" id="btn-restart-server" onclick="restartServer()">Restart server</button>
                                 </div>
                                 <div class="field">
-                                    <label>Debug step</label>
-                                    <div class="debug-tab-bar">
-                                        <button type="button" id="debug-tab-prep" class="btn-ghost active" onclick="setDebugTab('prep')">Prep</button>
-                                        <button type="button" id="debug-tab-account_switch" class="btn-ghost" onclick="setDebugTab('account_switch')">Account</button>
-                                        <button type="button" id="debug-tab-post" class="btn-ghost" onclick="setDebugTab('post')">Post</button>
-                                        <button type="button" id="debug-tab-end" class="btn-ghost" onclick="setDebugTab('end')">End</button>
+                                    <label>Debug flow</label>
+                                    <div class="segmented-control">
+                                        <label class="segment"><input type="radio" name="debug-flow-select" value="flow" checked onchange="switchDebugFlow(this.value)"><span>Full (Labely + ValCoin)</span></label>
+                                        <label class="segment"><input type="radio" name="debug-flow-select" value="warmup_flow" onchange="switchDebugFlow(this.value)"><span>Labely + Warmup</span></label>
                                     </div>
                                 </div>
                                 <div class="field">
-                                    <label for="debug-test-select">Test</label>
+                                    <label for="debug-test-select">Pipeline step (A→Z)</label>
                                     <select id="debug-test-select"></select>
                                 </div>
                                 <div class="btn-row">
-                                    <button type="button" class="btn-ghost btn-primary-outline" id="btn-debug-run" onclick="runDebugTest()">Run test</button>
+                                    <button type="button" class="btn-ghost btn-primary-outline" id="btn-debug-run" onclick="runDebugTest(false, false)">Run test</button>
+                                    <button type="button" class="btn-ghost" id="btn-debug-run-skip-media" onclick="runDebugTest(true, true)" title="Run all steps from the selected letter through the end; skips gallery clear/upload, generate, and TikTok publish">Run A→Z (skip media)</button>
                                     <button type="button" class="btn-ghost btn-kill" id="btn-debug-kill" onclick="killDebugTest()" disabled>Stop test</button>
                                     <button type="button" class="btn-ghost" onclick="captureScreen()">Screenshot</button>
                                 </div>

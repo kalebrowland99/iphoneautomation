@@ -44,8 +44,9 @@ async def test_start_labely_chains_valcoin_after_three_posts() -> None:
 
     engine.start_workflow.assert_awaited_once_with("tiktok_prep", "dev-1", brand="labely")
     assert len(pipe._pipelines["dev-1"]["steps"]) == len(TIKTOK_LABELY_THEN_VALCOIN_STEPS)
-    assert pipe._pipelines["dev-1"]["steps"][3]["brand"] == "valcoin"
-    assert pipe._pipelines["dev-1"]["steps"][3]["workflow"] == "tiktok_account_switch"
+    assert pipe._pipelines["dev-1"]["steps"][4]["brand"] == "valcoin"
+    assert pipe._pipelines["dev-1"]["steps"][4]["workflow"] == "tiktok_account_switch"
+    assert pipe._pipelines["dev-1"]["steps"][3]["workflow"] == "tiktok_valcoin_prep"
 
 
 @pytest.mark.asyncio

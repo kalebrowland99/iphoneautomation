@@ -1,0 +1,188 @@
+name: tiktok_valcoin_prep
+description: >
+  After Labely posts: open Shadowrocket, tap (511, 172) to turn VPN off, clear/upload ValCoin
+  gallery, tap (511, 172) again to turn VPN on, open TikTok. Phones start VPN off; one tap toggles on.
+
+loop: false
+
+steps:
+  # ── 1. Turn VPN off before album API (still on from Labely prep/posts) ─
+  - type: execute_action
+    name: go_home_before_vpn_off
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: settle_before_vpn_off
+    duration_seconds: 0.5
+
+  - type: execute_action
+    name: open_shadowrocket_off
+    on_failure: pause
+    action:
+      type: tap
+      x: 376
+      y: 1013
+    skip_post_action: true
+
+  - type: wait
+    name: shadowrocket_open_off
+    duration_seconds: 2
+
+  - type: execute_action
+    name: tap_vpn_off_coord
+    on_failure: pause
+    action:
+      type: tap
+      x: 511
+      y: 172
+    skip_post_action: true
+
+  - type: wait
+    name: after_vpn_off_coord
+    duration_seconds: 3
+
+  - type: execute_action
+    name: go_home_after_vpn_off
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: after_vpn_off_home
+    duration_seconds: 2
+
+  # ── 2. Clear Labely videos + upload ValCoin gallery ─────────────────
+  - type: execute_action
+    name: clear_album
+    on_failure: pause
+    action:
+      type: album_clear
+      skip_vpn_off: true
+      timeout_ms: 60000
+      sheet_appear_timeout_seconds: 18
+      round_active_timeout_seconds: 60
+      sheet_poll_interval_seconds: 5
+    skip_post_action: true
+
+  - type: wait
+    name: after_clear
+    duration_seconds: 3
+
+  - type: execute_action
+    name: upload_gallery
+    on_failure: pause
+    action:
+      type: album_upload
+      skip_vpn_off: true
+      folder: ${gallery_folder}
+      timeout_ms: 300000
+    skip_post_action: true
+
+  - type: wait
+    name: upload_progress
+    duration_seconds: 10
+
+  - type: execute_action
+    name: tap_allow_upload
+    action:
+      type: tap_ocr
+      texts: ["Always Allow", "Allow Full Access", "Allow Access to All Photos", "Allow Paste", "Allow"]
+      optional: true
+      wait_timeout_seconds: 10
+      poll_interval_seconds: 1.5
+    skip_post_action: true
+
+  - type: wait
+    name: upload_settle
+    duration_seconds: 5
+
+  # ── 3. Turn VPN on before TikTok — one tap at (511, 172) ───────────
+  - type: execute_action
+    name: go_home_before_vpn
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: settle_home_vpn
+    duration_seconds: 0.5
+
+  - type: execute_action
+    name: open_shadowrocket
+    on_failure: pause
+    action:
+      type: tap
+      x: 376
+      y: 1013
+    skip_post_action: true
+
+  - type: wait
+    name: shadowrocket_open
+    duration_seconds: 2
+
+  - type: execute_action
+    name: tap_vpn_toggle_coord
+    on_failure: pause
+    action:
+      type: tap
+      x: 511
+      y: 172
+    skip_post_action: true
+
+  - type: wait
+    name: after_vpn_toggle_coord
+    duration_seconds: 5
+
+  - type: execute_action
+    name: go_home_after_vpn
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: after_vpn_home
+    duration_seconds: 2
+
+  # ── 4. Open TikTok for ValCoin account switch + posts ───────────────
+  - type: execute_action
+    name: go_home_for_tiktok
+    action:
+      type: home
+    skip_post_action: true
+
+  - type: wait
+    name: settle_for_tiktok
+    duration_seconds: 3
+
+  - type: wait_for_detection
+    name: wait_for_tiktok_icon
+    templates: [tiktok]
+    when_detection: tiktok
+    duration_seconds: 60
+    min_seconds: 2
+    on_failure: pause
+
+  - type: screenshot
+    name: fresh_tiktok_screen
+    templates: [tiktok]
+
+  - type: analyze_screen
+    name: fresh_tiktok_analyze
+    templates: [tiktok]
+
+  - type: verify
+    name: confirm_tiktok_before_tap
+    condition: template_match
+    template: tiktok
+    on_failure: pause
+
+  - type: execute_action
+    name: open_tiktok
+    requires_analysis: true
+    on_failure: pause
+    action:
+      type: tap_detection
+      detection: tiktok
+    skip_post_action: true

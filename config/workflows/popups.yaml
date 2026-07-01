@@ -78,8 +78,22 @@ popups:
       contain: true
       optional: false
 
+  tiktok_save_login:
+    description: "Save login for next time — always tap Not now"
+    pause_workflow: false
+    ocr_keywords:
+      - "Save login for next time"
+      - "save login for next time"
+      - "save login for next"
+    dismiss_action:
+      type: tap_ocr
+      texts: ["Not Now", "NOT NOW", "Not now"]
+      threshold: 0.65
+      contain: true
+      optional: false
+
   tiktok_post_notify:
-    description: "TikTok post interactions notification — tap dismiss (196, 193)"
+    description: "TikTok post interactions notification — tap dismiss above center (203, 63)"
     pause_workflow: false
     ocr_keywords:
       - "Get notified of post interactions"
@@ -88,5 +102,5 @@ popups:
       - "Get notified"
     dismiss_action:
       type: tap
-      x: 196
-      y: 193
+      x: 203
+      y: 63

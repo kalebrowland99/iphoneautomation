@@ -1,0 +1,44 @@
+{
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/**": true,
+    "**/.next/**": true,
+    "**/.venv/**": true,
+    "**/venv/**": true,
+    "**/.tools/**": true,
+    "**/.pytest_cache/**": true,
+    "**/.mypy_cache/**": true,
+    "**/.ruff_cache/**": true,
+    "**/__pycache__/**": true,
+    "**/data/**": true,
+    "**/gallery/**": true,
+    "**/logs/**": true,
+    "**/slideshow-ui/public/ffmpeg/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/.venv": true,
+    "**/venv": true,
+    "**/.tools": true,
+    "**/.pytest_cache": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true,
+    "**/__pycache__": true,
+    "**/data": true,
+    "**/gallery": true,
+    "**/logs": true,
+    "**/package-lock.json": true,
+    "**/slideshow-ui/public/ffmpeg": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true,
+    "**/.ruff_cache": true,
+    "**/.mypy_cache": true,
+    "**/*.db-wal": true,
+    "**/*.db-shm": true
+  }
+}

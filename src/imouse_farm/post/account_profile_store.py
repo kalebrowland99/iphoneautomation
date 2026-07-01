@@ -8,10 +8,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from imouse_farm.post.post_caption_store import device_storage_key
+from imouse_farm.post.brand_keys import (
+    VALID_BRANDS,
+    base_profile_key,
+    brand_profile_key,
+    device_storage_key,
+    normalize_brand,
+)
 
 ACCOUNT_PROFILES_PATH = Path("data/account_profiles.json")
-VALID_BRANDS = frozenset({"labely", "valcoin"})
 VALID_STATUSES = frozenset({"idle", "running", "success", "failed"})
 _LEGACY_SLOT_RE = re.compile(r"^slot:\d+$")
 
@@ -29,6 +34,8 @@ def _default_profile(brand: str = "labely") -> dict[str, Any]:
     return {
         "tiktok_handle": "",
         "brand": b,
+        "warmup_enabled": False,
+        "warmup_days_completed": 0,
         "last_run_status": "idle",
         "posts_completed": 0,
         "posts_target": 3,
@@ -38,28 +45,7 @@ def _default_profile(brand: str = "labely") -> dict[str, Any]:
 
 
 def _normalize_brand(brand: str) -> str:
-    b = str(brand or "labely").strip().lower()
-    return b if b in VALID_BRANDS else "labely"
-
-
-def brand_profile_key(base_key: str, brand: str) -> str:
-    """Storage key for a slot/device + brand, e.g. slot:3:valcoin."""
-    base = str(base_key or "").strip()
-    b = _normalize_brand(brand)
-    if not base:
-        return f"unknown:{b}"
-    parts = base.split(":")
-    if parts and parts[-1] in VALID_BRANDS:
-        base = ":".join(parts[:-1])
-    return f"{base}:{b}"
-
-
-def base_profile_key(key: str) -> str:
-    """Strip brand suffix from a storage key (slot:3:valcoin → slot:3)."""
-    parts = str(key or "").split(":")
-    if parts and parts[-1] in VALID_BRANDS:
-        return ":".join(parts[:-1])
-    return str(key or "")
+    return normalize_brand(brand)
 
 
 def _load_store() -> None:
@@ -98,6 +84,8 @@ def _normalize_profile(data: dict[str, Any], brand: str) -> dict[str, Any]:
     base.update({
         "tiktok_handle": handle,
         "brand": _normalize_brand(brand),
+        "warmup_enabled": bool(data.get("warmup_enabled", False)),
+        "warmup_days_completed": max(0, int(data.get("warmup_days_completed", 0) or 0)),
         "last_run_status": status,
         "posts_completed": max(0, int(data.get("posts_completed", 0) or 0)),
         "posts_target": max(1, int(data.get("posts_target", 3) or 3)),
@@ -187,10 +175,23 @@ def set_profile(device_key: str, *, brand: str = "labely", **fields: Any) -> dic
     current = get_profile(key, brand=b)
     if "tiktok_handle" in fields:
         current["tiktok_handle"] = normalize_handle(str(fields["tiktok_handle"] or ""))
+    if "warmup_enabled" in fields:
+        current["warmup_enabled"] = bool(fields["warmup_enabled"])
     current["brand"] = b
     _store[key] = current
     _save_store()
     return dict(current)
+
+
+def increment_warmup_days(device_id: str, user_name: str = "", *, brand: str = "labely") -> int:
+    """Increment warmup_days_completed for a device slot and return the new day count."""
+    key = brand_profile_key(device_storage_key(device_id, user_name), brand)
+    profile = get_profile(key, brand=brand)
+    new_day = int(profile.get("warmup_days_completed", 0) or 0) + 1
+    profile["warmup_days_completed"] = new_day
+    _store[key] = profile
+    _save_store()
+    return new_day
 
 
 def mark_run_started(device_key: str, *, brand: str = "labely") -> None:

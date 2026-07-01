@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 async def run_server(config_path: str) -> None:
     """Start the iMouse Farm application with dashboard."""
     app_instance = await create_application(config_path)
-    await app_instance.start()
+    await app_instance.prepare()
 
     fastapi_app = create_app(app_instance.config, app_instance)
     config = uvicorn.Config(
@@ -29,10 +29,17 @@ async def run_server(config_path: str) -> None:
         log_level="info",
     )
     server = uvicorn.Server(config)
+    devices_task = asyncio.create_task(app_instance.start_devices())
 
     try:
         await server.serve()
     finally:
+        if not devices_task.done():
+            devices_task.cancel()
+            try:
+                await devices_task
+            except asyncio.CancelledError:
+                pass
         await app_instance.stop()
 
 

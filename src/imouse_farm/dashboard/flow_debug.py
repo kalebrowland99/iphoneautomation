@@ -96,6 +96,41 @@ def _end_steps() -> list[FlowStep]:
     ]
 
 
+def _warmup_steps() -> list[FlowStep]:
+    """ValCoin warmup from cold start: VPN on → open TikTok → switch account → scroll → exit → VPN off."""
+    return [
+        ("Warmup: open Shadowrocket", "prep-tap-shadowrocket"),
+        ("Warmup: turn VPN on", "prep-tap-vpn-on"),
+        ("Warmup: home", "prep-home"),
+        ("Warmup: open TikTok", "tap-tiktok"),
+        ("Warmup: switch to ValCoin @", "account-ensure-full"),
+        ("Warmup: run 2min scroll", "warmup-run"),
+        ("Warmup: home after scroll", "prep-home"),
+        ("Warmup: open Shadowrocket", "end-tap-shadowrocket"),
+        ("Warmup: turn VPN off", "end-tap-vpntoggle"),
+        ("Warmup: home", "prep-home"),
+    ]
+
+
+def _warmup_steps_post_labely() -> list[FlowStep]:
+    """ValCoin warmup coming directly after Labely posts — VPN already on, skip setup.
+
+    kill-apps is needed because in skip-media A-Z mode tap-post/post-go-home are skipped,
+    leaving TikTok on the post editor screen where the + button is not visible.
+    """
+    return [
+        ("Warmup: kill apps", "end-kill-apps"),
+        ("Warmup: home", "prep-home"),
+        ("Warmup: open TikTok", "tap-tiktok"),
+        ("Warmup: switch to ValCoin @", "account-ensure-full"),
+        ("Warmup: run 2min scroll", "warmup-run"),
+        ("Warmup: home after scroll", "prep-home"),
+        ("Warmup: open Shadowrocket", "end-tap-shadowrocket"),
+        ("Warmup: turn VPN off", "end-tap-vpntoggle"),
+        ("Warmup: home", "prep-home"),
+    ]
+
+
 def build_flow_debug_steps() -> list[FlowStep]:
     """Full Labely + ValCoin production pipeline in execution order."""
     steps: list[FlowStep] = []
@@ -111,7 +146,19 @@ def build_flow_debug_steps() -> list[FlowStep]:
     return steps
 
 
+def build_flow_debug_warmup_steps() -> list[FlowStep]:
+    """Labely posts → ValCoin warmup (VPN stays on — no wasteful off→on cycle)."""
+    steps: list[FlowStep] = []
+    steps.extend(_labely_prep_steps())
+    steps.append(("Labely: ensure TikTok @", "account-ensure-current"))
+    for n in (1, 2, 3):
+        steps.extend(_post_steps(n, phase="Labely"))
+    steps.extend(_warmup_steps_post_labely())
+    return steps
+
+
 FLOW_DEBUG_STEPS: list[FlowStep] = build_flow_debug_steps()
+FLOW_DEBUG_WARMUP_STEPS: list[FlowStep] = build_flow_debug_warmup_steps()
 
 # Backward-compatible alias.
 FULL_FLOW_DEBUG_STEPS = FLOW_DEBUG_STEPS
@@ -124,8 +171,8 @@ def flow_step_letter(index: int) -> str:
 
 
 def resolve_flow_debug_test_id(step_id: str) -> str:
-    """Map dropdown id ``flow:042:tap-plus`` → ``tap-plus``."""
-    if step_id.startswith("flow:"):
+    """Map dropdown id ``flow:042:tap-plus`` or ``warmup:006:warmup-run`` → the test id."""
+    if step_id.startswith("flow:") or step_id.startswith("warmup:"):
         parts = step_id.split(":", 2)
         if len(parts) == 3 and parts[2]:
             return parts[2]

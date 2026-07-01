@@ -25,6 +25,12 @@ def _navigation() -> TikTokNavigationConfig:
     )
 
 
+def _mock_plus_visible(controller: MagicMock) -> None:
+    controller.find_template_on_device = AsyncMock(
+        return_value={"x": 203, "y": 680, "confidence": 0.92}
+    )
+
+
 @pytest.mark.asyncio
 async def test_skips_when_no_handle_configured() -> None:
     controller = MagicMock()
@@ -43,6 +49,7 @@ async def test_skips_when_no_handle_configured() -> None:
 async def test_already_on_account_taps_home_only() -> None:
     controller = MagicMock()
     controller.tap = AsyncMock(return_value=True)
+    _mock_plus_visible(controller)
     controller.find_text_on_device = AsyncMock(
         return_value=[{"x": 100, "y": 50, "confidence": 0.9}]
     )
@@ -66,6 +73,7 @@ async def test_switches_to_dashboard_handle_when_on_other_account(
 ) -> None:
     controller = MagicMock()
     controller.tap = AsyncMock(return_value=True)
+    _mock_plus_visible(controller)
     find_calls = {"n": 0}
 
     async def find_text(*_args, **_kwargs):
@@ -111,6 +119,7 @@ async def test_full_switch_toggles_to_opposite_when_on_dashboard_account(
 ) -> None:
     controller = MagicMock()
     controller.tap = AsyncMock(return_value=True)
+    _mock_plus_visible(controller)
     find_calls = {"n": 0}
 
     async def find_text(*_args, **_kwargs):

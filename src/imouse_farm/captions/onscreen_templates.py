@@ -7,6 +7,7 @@ from imouse_farm.post.post_caption_store import POST_COUNT, media_index_for_post
 ONSCREEN_TEMPLATES: dict[str, str] = {
     "toxic_walmart": "The MOST Toxic {food} you should avoid\nWalmart Edition",
     "america_sick": "This Is Why AMERICA IS SICK\n{food} Edition",
+    "valcoin_receipt": "The REAL Cost of {food}\nValCoin Edition",
 }
 
 
@@ -24,6 +25,8 @@ def build_onscreen_text(template_key: str, food_name: str) -> str:
         return ""
     if template_key == "america_sick":
         return f"This Is Why AMERICA IS SICK\n{_format_food_edition(food)}"
+    if template_key == "valcoin_receipt":
+        return f"The REAL Cost of {food}\nValCoin Edition"
     pattern = ONSCREEN_TEMPLATES.get(template_key)
     if not pattern:
         return ""
@@ -64,11 +67,13 @@ def apply_onscreen_for_stems(
             template_key, food_names, device_key, set_onscreen_text=set_onscreen_text
         )
     from imouse_farm.captions.ai_generator import stem_to_food_name
+    from imouse_farm.post.post_caption_store import foods_post_order_to_file_order
 
-    names: list[str] = []
+    names_by_post: list[str] = []
     for post in range(1, POST_COUNT + 1):
         stem = post_media_stem(stems, post)
-        names.append(stem_to_food_name(stem) if stem else "")
+        names_by_post.append(stem_to_food_name(stem) if stem else "")
+    names = foods_post_order_to_file_order(names_by_post)
     return apply_onscreen_for_foods(
         template_key, names, device_key, set_onscreen_text=set_onscreen_text
     )

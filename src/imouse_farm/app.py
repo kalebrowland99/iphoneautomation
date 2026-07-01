@@ -57,6 +57,7 @@ class IMouseFarmApp:
             self.controller,
             self.device_manager,
             poll_interval_seconds=config.timing.permission_watcher_poll_seconds,
+            contacts_poll_interval_seconds=config.timing.contacts_watcher_poll_seconds,
         )
         self.state_machine = StateMachine(self.device_manager)
         self.action_engine = ActionEngine(
@@ -79,6 +80,7 @@ class IMouseFarmApp:
             self.workflow_engine,
             self.device_manager,
             self.db,
+            permission_watchers=self.permission_watchers,
         )
         self.farm_batch = FarmBatchRunner(
             config.batch,
@@ -88,6 +90,7 @@ class IMouseFarmApp:
             self.db,
             imouse_connect_delay=config.imouse.airplay_connect_delay_seconds,
             auto_generate_captions=config.slideshow.auto_generate_captions,
+            permission_watchers=self.permission_watchers,
         )
         self.slideshow_jobs = SlideshowJobStore()
         self.slideshow_orchestrator = SlideshowOrchestrator(
@@ -154,7 +157,8 @@ class IMouseFarmApp:
         if event != "activity":
             await app_state.broadcast(event, data)
 
-    async def start(self) -> None:
+    async def prepare(self) -> None:
+        """Lightweight startup so the dashboard can serve before iMouse connects."""
         setup_logging(
             self.config.logging.level,
             self.config.logging.format,
@@ -177,7 +181,10 @@ class IMouseFarmApp:
         self.workflow_pipeline.on_event(self._on_event)
         self.farm_batch.on_event(self._on_event)
         self.popup_manager.on_event(self._on_event)
+        logger.info("orchestrator_prepared")
 
+    async def start_devices(self) -> None:
+        """Connect iMouse SDK, load devices, and start background services."""
         await self.device_manager.start()
         await self.screenshot_service.start()
         await self.action_engine.start()
@@ -186,8 +193,19 @@ class IMouseFarmApp:
         self._running = True
         logger.info("orchestrator_started", vision_provider=self.vision.name)
 
+    async def start(self) -> None:
+        await self.prepare()
+        await self.start_devices()
+
     async def stop(self) -> None:
         self._running = False
+        if self._frozen_check_task:
+            self._frozen_check_task.cancel()
+            try:
+                await self._frozen_check_task
+            except asyncio.CancelledError:
+                pass
+            self._frozen_check_task = None
         await self.workflow_engine.stop_all()
         await self.workflow_pipeline.stop_all()
         await self.farm_batch.stop()

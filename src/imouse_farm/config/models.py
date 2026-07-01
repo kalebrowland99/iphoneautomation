@@ -99,8 +99,9 @@ class TimingConfig(BaseModel):
     frozen_device_threshold_seconds: float = 120.0
     workflow_step_delay_seconds: float = 0.25
     unknown_screen_escalation_count: int = 5
-    tiktok_touch_cooldown_seconds: float = 7.0
+    tiktok_touch_cooldown_seconds: float = 3.0
     permission_watcher_poll_seconds: float = 0.25
+    contacts_watcher_poll_seconds: float = 0.2
 
 
 class DeviceGroupConfig(BaseModel):
@@ -148,6 +149,9 @@ class DashboardConfig(BaseModel):
     port: int = 8080
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
     farm_slots: int = 20
+    split_windows_on_run: bool = True
+    chrome_side: str = "left"  # left | right — Chrome half; iMouseXP gets the other half
+    imouse_window_title: str = "iMouse"
 
 
 class TabCoord(BaseModel):
@@ -197,17 +201,33 @@ class TikTokNavigationConfig(BaseModel):
 
 
 class SlideshowConfig(BaseModel):
-    """Autoslideshow.vercel.app → gallery ingest → farm batch pipeline."""
+    """Local slideshow-ui → gallery ingest → farm batch pipeline."""
 
     enabled: bool = True
-    app_base_url: str = "https://autoslideshow.vercel.app"
+    app_base_url: str = "http://localhost:3000"
+    app_port: int = 3000
     farm_secret: str = ""
     slideshows_per_slot: int = 3
-    use_playwright_runner: bool = True
+    slides_per_slideshow: int = 1
+    use_embedded_runner: bool = True
+    use_playwright_runner: bool = False
     automation_timeout_seconds: float = 3600.0
     clear_slot_before_ingest: bool = True
     auto_generate_captions: bool = True
     default_onscreen_template: str = "america_sick"
+    blank_video_max_retries: int = 2
+    debug_slideshows_per_slot: int = 1
+
+
+class WarmupConfig(BaseModel):
+    """Pre-post TikTok feed scroll settings."""
+
+    duration_seconds: float = 1200.0
+    swipe_delay_min_seconds: float = 0.0
+    swipe_delay_max_seconds: float = 53.0
+    swipe_delay_mean_seconds: float = 4.0
+    swipe_delay_long_watch_probability: float = 0.20
+    double_tap_interval_seconds: float = 0.35
 
 
 class BatchConfig(BaseModel):
@@ -218,12 +238,19 @@ class BatchConfig(BaseModel):
     disconnect_on_complete: bool = True
     between_phones_pause_seconds: float = 2.0
     chain_valcoin_after_labely: bool = True
+    warmup: WarmupConfig = Field(default_factory=WarmupConfig)
 
 
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "json"
     file: str | None = "data/logs/imouse_farm.log"
+
+
+class DiagnosticsConfig(BaseModel):
+    """Runtime diagnostics — phone restart recovery timing."""
+
+    phone_restart_boot_wait_seconds: float = 90.0
 
 
 class AppConfig(BaseModel):
@@ -240,6 +267,7 @@ class AppConfig(BaseModel):
     dashboard: DashboardConfig = Field(default_factory=DashboardConfig)
     slideshow: SlideshowConfig = Field(default_factory=SlideshowConfig)
     batch: BatchConfig = Field(default_factory=BatchConfig)
+    diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     workflows_directory: str = "config/workflows"
     tiktok_navigation: TikTokNavigationConfig = Field(default_factory=TikTokNavigationConfig)

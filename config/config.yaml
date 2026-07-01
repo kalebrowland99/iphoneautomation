@@ -57,8 +57,9 @@ timing:
   frozen_device_threshold_seconds: 120
   workflow_step_delay_seconds: 0.25
   unknown_screen_escalation_count: 5
-  tiktok_touch_cooldown_seconds: 7  # pause after tap/swipe/drag in tiktok_* workflows (lets AirPlay lag settle)
+  tiktok_touch_cooldown_seconds: 3  # pause after tap/swipe/drag in tiktok_* workflows (lets AirPlay lag settle)
   permission_watcher_poll_seconds: 0.25  # background popup scan (runs until kill/disconnect)
+  contacts_watcher_poll_seconds: 0.2  # dedicated fast loop: tap Don't allow on find-contacts sheet
 
 device_groups:
   default:
@@ -88,20 +89,28 @@ dashboard:
   host: "0.0.0.0"
   port: 8080
   farm_slots: 20
+  split_windows_on_run: true
+  chrome_side: left
+  imouse_window_title: "iMouse"
   cors_origins:
     - "*"
 
-# Autoslideshow → gallery ingest → farm batch (set FARM_SECRET in .env)
+# Local slideshow-ui → gallery ingest → farm batch (set FARM_SECRET in .env)
 slideshow:
   enabled: true
-  app_base_url: "https://autoslideshow.vercel.app"
+  app_base_url: "http://localhost:3000"
+  app_port: 3000
   farm_secret: ""
-  slideshows_per_slot: 3
-  use_playwright_runner: true
-  automation_timeout_seconds: 3600
+  slideshows_per_slot: 3  # MP4s per phone (20 phones × 3 = 60 Labely videos per full run)
+  slides_per_slideshow: 1  # slide segments validated inside each MP4
+  use_embedded_runner: true  # iframe in farm dashboard (no Playwright popup)
+  use_playwright_runner: false
+  automation_timeout_seconds: 10800  # 60 videos × ~3 min each
   clear_slot_before_ingest: true
   auto_generate_captions: true
   default_onscreen_template: "america_sick"
+  blank_video_max_retries: 2
+  debug_slideshows_per_slot: 1  # debug Slideshow tab → 1 MP4 per test run
 
 batch:
   batch_size: 1
@@ -111,10 +120,20 @@ batch:
   disconnect_on_complete: true
   between_phones_pause_seconds: 2
   chain_valcoin_after_labely: true
+  warmup:
+    duration_seconds: 1200
+    swipe_delay_min_seconds: 0
+    swipe_delay_max_seconds: 53
+    swipe_delay_mean_seconds: 4
+    swipe_delay_long_watch_probability: 0.20
+    double_tap_interval_seconds: 0.35
 
 logging:
   level: "INFO"
   format: "json"  # json or console
   file: "data/logs/imouse_farm.log"
+
+diagnostics:
+  phone_restart_boot_wait_seconds: 90
 
 workflows_directory: "config/workflows"

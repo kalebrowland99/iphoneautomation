@@ -1,9 +1,8 @@
 name: tiktok_prep
 description: >
-  Sequential prep: unlock → force-quit apps → clear gallery via iMouse album API → upload
-  gallery → VPN (Shadowrocket — "Not Connected" OCR + vpntoggle) → TikTok. VPN runs
-  AFTER the album clear/upload so it can't interfere with the Photos shortcut.
-  Phone slot folder (e.g. gallery/12/).
+  Sequential prep (Labely account 1): unlock → force-quit apps → clear/upload gallery
+  with VPN off (phones start off — no Shadowrocket step). Then turn VPN on via
+  Shadowrocket (376, 1013) + toggle (511, 172), open TikTok.
 
 loop: false
 
@@ -83,6 +82,7 @@ steps:
     on_failure: pause
     action:
       type: album_clear
+      skip_vpn_off: true
       timeout_ms: 60000
       sheet_appear_timeout_seconds: 18
       round_active_timeout_seconds: 60
@@ -100,6 +100,7 @@ steps:
     on_failure: pause
     action:
       type: album_upload
+      skip_vpn_off: true
       folder: ${gallery_folder}
     skip_post_action: true
 
@@ -132,68 +133,31 @@ steps:
     name: settle_home_vpn
     duration_seconds: 0.5
 
-  # ── 6. Open Shadowrocket → VPN status via "Not Connected" text ─────
-  - type: screenshot
-    name: home_for_shadowrocket
-    templates: [shadowrocket]
-
-  - type: analyze_screen
-    name: analyze_shadowrocket
-    templates: [shadowrocket]
-
+  # ── 6. Open Shadowrocket → tap (511, 172) to turn VPN on ─────────────
   - type: execute_action
     name: open_shadowrocket
     on_failure: pause
     action:
-      type: tap_detection
-      detection: shadowrocket
+      type: tap
+      x: 376
+      y: 1013
     skip_post_action: true
 
   - type: wait
     name: shadowrocket_open
     duration_seconds: 2
 
-  - type: check_ocr_state
-    name: vpn_state
-    action:
-      texts: ["Not Connected", "NOT CONNECTED", "Not connected"]
-      threshold: 0.65
-      duration_seconds: 12
-      retry_delay: 1.5
-      state_if_found: WAITING
-      state_if_missing: ACTIVE
-      fallback_templates:
-        - template: bluetoggle
-          state: ACTIVE
-          min_confidence: 0.45
-        - template: vpntoggle
-          state: WAITING
-          min_confidence: 0.55
-
-  # ── 7. Not Connected showing → tap → wait 5s → continue prep ─
-  - type: screenshot
-    name: shadowrocket_toggle_screen
-    when_state: WAITING
-    templates: [vpntoggle]
-
-  - type: analyze_screen
-    name: analyze_vpntoggle
-    when_state: WAITING
-    templates: [vpntoggle]
-
   - type: execute_action
-    name: tap_vpntoggle
-    when_state: WAITING
+    name: tap_vpn_toggle_coord
     on_failure: pause
     action:
-      type: tap_detection
-      detection: vpntoggle
-      refind_on_device: true
+      type: tap
+      x: 511
+      y: 172
     skip_post_action: true
 
   - type: wait
-    name: after_vpn_toggle
-    when_state: WAITING
+    name: after_vpn_toggle_coord
     duration_seconds: 5
 
   # ── 8. Home after VPN ───────────────────────────────────────────────

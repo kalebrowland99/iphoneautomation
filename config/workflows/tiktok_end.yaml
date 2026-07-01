@@ -1,7 +1,7 @@
 name: tiktok_end
 description: >
   After posting: force-quit apps (AppSwitch + swipe up ×5), then turn off VPN
-  (open Shadowrocket → tap VPN toggle, same as prep).
+  (open Shadowrocket → tap (511, 172) once). Phones start VPN off; odd taps = on, even = off.
 
 loop: false
 
@@ -40,46 +40,31 @@ steps:
     name: settle_home
     duration_seconds: 3
 
-  # ── 2. Open Shadowrocket → tap VPN toggle (same as prep) ────────────
-  - type: screenshot
-    name: home_for_shadowrocket
-    templates: [shadowrocket]
-
-  - type: analyze_screen
-    name: analyze_shadowrocket
-    templates: [shadowrocket]
-
+  # ── 2. Open Shadowrocket → tap (511, 172) to turn VPN off ─────────
   - type: execute_action
     name: open_shadowrocket
     on_failure: pause
     action:
-      type: tap_detection
-      detection: shadowrocket
+      type: tap
+      x: 376
+      y: 1013
     skip_post_action: true
 
   - type: wait
     name: shadowrocket_open
     duration_seconds: 2
 
-  - type: screenshot
-    name: shadowrocket_toggle_screen
-    templates: [vpntoggle, bluetoggle]
-
-  - type: analyze_screen
-    name: analyze_vpntoggle
-    templates: [vpntoggle, bluetoggle]
-
   - type: execute_action
-    name: tap_vpntoggle
+    name: tap_vpn_toggle_coord
     on_failure: pause
     action:
-      type: tap_detection
-      detection: vpntoggle
-      refind_on_device: true
+      type: tap
+      x: 511
+      y: 172
     skip_post_action: true
 
   - type: wait
-    name: after_vpn_toggle
+    name: after_vpn_toggle_coord
     duration_seconds: 3
 
   - type: execute_action

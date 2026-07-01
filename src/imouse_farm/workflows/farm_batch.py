@@ -8,23 +8,24 @@ from typing import Any, Awaitable, Callable
 from imouse_farm.config.models import AppConfig, BatchConfig
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
-from imouse_farm.post.post_caption_store import validate_post_texts
+from imouse_farm.permissions.watcher import PermissionWatcherManager
+from imouse_farm.post.post_caption_store import validate_post_texts, text_key_for_device
+from imouse_farm.post.account_profile_store import get_profile_for_device
 from imouse_farm.captions.service import (
     default_onscreen_template_for_brand,
     generate_captions_for_device,
 )
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.workflows.pipeline import WorkflowPipeline
+from imouse_farm.workflows.warmup import run_tiktok_warmup
 
 logger = get_logger(__name__)
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
-def _post_text_key(device: Any) -> str:
-    from imouse_farm.post.post_caption_store import device_storage_key
-
-    return device_storage_key(device.device_id, device.user_name)
+def _post_text_key(device: Any, brand: str) -> str:
+    return text_key_for_device(device.device_id, device.user_name, brand=brand)
 
 
 class FarmBatchRunner:
@@ -40,10 +41,12 @@ class FarmBatchRunner:
         imouse_connect_delay: float = 4.0,
         *,
         auto_generate_captions: bool = True,
+        permission_watchers: PermissionWatcherManager | None = None,
     ) -> None:
         self._config = config
         self._app_config = app_config
         self._auto_captions = bool(auto_generate_captions)
+        self._permission_watchers = permission_watchers
         self._dm = device_manager
         self._pipeline = pipeline
         self._db = db
@@ -98,6 +101,9 @@ class FarmBatchRunner:
             batches.append(devices[i : i + size])
 
         self._stop_requested = False
+        if self._permission_watchers:
+            for device in devices:
+                await self._permission_watchers.ensure_watching(device.device_id)
         self._status = {
             "status": "connecting",
             "batch_index": 0,
@@ -149,8 +155,9 @@ class FarmBatchRunner:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        self._status["status"] = "stopped"
+        self._status["status"] = "idle"
         self._status["message"] = "Batch run stopped"
+        self._batch_done_events.clear()
         await self._emit("batch_stopped", self.get_status())
 
     async def _run_batches(
@@ -213,17 +220,99 @@ class FarmBatchRunner:
                 for device in connected:
                     if self._stop_requested:
                         break
-                    text_key = _post_text_key(device)
+                    valcoin_profile = get_profile_for_device(
+                        device.device_id, device.user_name, brand="valcoin"
+                    )
+                    chain_valcoin = (
+                        brand == "labely"
+                        and from_post is None
+                        and self._config.chain_valcoin_after_labely
+                        and not valcoin_profile.get("warmup_enabled")
+                    )
+                    profile = get_profile_for_device(
+                        device.device_id, device.user_name, brand=brand
+                    )
+                    if profile.get("warmup_enabled"):
+                        self._status["message"] = (
+                            f"Phone {phone_num}/{phone_total}: warmup slot {device.user_name}"
+                        )
+                        await self._emit("batch_running", self.get_status())
+                        try:
+                            await run_tiktok_warmup(
+                                self._dm.controller,
+                                device,
+                                brand=brand,
+                                app_config=self._app_config,
+                                device_manager=self._dm,
+                                stop_check=lambda: self._stop_requested,
+                                log_activity=self._db.log_activity,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "batch_warmup_failed",
+                                device_id=device.device_id,
+                                slot=device.user_name,
+                                error=str(exc),
+                            )
+                            self._status["failed"].append({
+                                "slot": device.user_name,
+                                "device_id": device.device_id,
+                                "reason": f"warmup_failed: {exc}",
+                            })
+                            await self._dm.disconnect_airplay(device.device_id)
+                            continue
+                        if self._stop_requested:
+                            break
+                        self._status["completed"].append({
+                            "slot": device.user_name,
+                            "device_id": device.device_id,
+                            "event": "warmup_only",
+                        })
+                        await self._dm.disconnect_airplay(device.device_id)
+                        continue
+
+                    # Caption validation only needed when actually posting.
+                    text_key = _post_text_key(device, brand)
                     check_from = from_post if from_post is not None else 1
-                    missing = validate_post_texts(text_key, from_post=check_from)
+                    missing = validate_post_texts(text_key, from_post=check_from, brand=brand)
+                    if chain_valcoin:
+                        valcoin_key = _post_text_key(device, "valcoin")
+                        missing.extend(
+                            validate_post_texts(valcoin_key, from_post=1, brand="valcoin")
+                        )
                     if missing and self._auto_captions and self._app_config.openai.enabled:
                         try:
                             await generate_captions_for_device(
                                 self._app_config,
                                 device,
                                 onscreen_template=default_onscreen_template_for_brand(brand),
+                                brand=brand,
                             )
-                            missing = validate_post_texts(text_key, from_post=check_from)
+                            missing = validate_post_texts(
+                                text_key, from_post=check_from, brand=brand
+                            )
+                            if chain_valcoin:
+                                valcoin_key = _post_text_key(device, "valcoin")
+                                valcoin_missing = validate_post_texts(
+                                    valcoin_key, from_post=1, brand="valcoin"
+                                )
+                                if valcoin_missing:
+                                    await generate_captions_for_device(
+                                        self._app_config,
+                                        device,
+                                        onscreen_template=default_onscreen_template_for_brand(
+                                            "valcoin"
+                                        ),
+                                        brand="valcoin",
+                                    )
+                                missing = validate_post_texts(
+                                    text_key, from_post=check_from, brand=brand
+                                )
+                                missing.extend(
+                                    validate_post_texts(
+                                        valcoin_key, from_post=1, brand="valcoin"
+                                    )
+                                )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
                                 "batch_auto_caption_failed",
@@ -241,11 +330,6 @@ class FarmBatchRunner:
                         continue
 
                     self._batch_done_events[device.device_id] = asyncio.Event()
-                    chain_valcoin = (
-                        brand == "labely"
-                        and from_post is None
-                        and self._config.chain_valcoin_after_labely
-                    )
                     started = await self._pipeline.start(
                         device.device_id,
                         from_post=from_post,
@@ -283,6 +367,37 @@ class FarmBatchRunner:
                             await self._dm.disconnect_airplay(device_id)
                         self._batch_done_events.pop(device_id, None)
 
+                if not self._stop_requested and brand == "labely":
+                    for device in connected:
+                        if self._stop_requested:
+                            break
+                        vc_profile = get_profile_for_device(
+                            device.device_id, device.user_name, brand="valcoin"
+                        )
+                        if not vc_profile.get("warmup_enabled"):
+                            continue
+                        self._status["message"] = (
+                            f"Phone {phone_num}/{phone_total}: ValCoin warmup slot {device.user_name}"
+                        )
+                        await self._emit("batch_running", self.get_status())
+                        try:
+                            await run_tiktok_warmup(
+                                self._dm.controller,
+                                device,
+                                brand="valcoin",
+                                app_config=self._app_config,
+                                device_manager=self._dm,
+                                stop_check=lambda: self._stop_requested,
+                                log_activity=self._db.log_activity,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.warning(
+                                "batch_valcoin_warmup_failed",
+                                device_id=device.device_id,
+                                slot=device.user_name,
+                                error=str(exc),
+                            )
+
                 if not self._stop_requested:
                     self._status["status"] = "disconnecting"
                     self._status["message"] = f"Phone {phone_num}/{phone_total}: disconnecting cast"
@@ -297,7 +412,8 @@ class FarmBatchRunner:
                     await asyncio.sleep(pause)
 
             if self._stop_requested:
-                self._status["status"] = "stopped"
+                self._status["status"] = "idle"
+                self._status["message"] = "Batch run stopped"
             else:
                 self._status["status"] = "completed"
                 self._status["message"] = (
@@ -306,7 +422,8 @@ class FarmBatchRunner:
                 )
             await self._emit("batch_completed", self.get_status())
         except asyncio.CancelledError:
-            self._status["status"] = "stopped"
+            self._status["status"] = "idle"
+            self._status["message"] = "Batch run stopped"
             raise
         except Exception as exc:
             logger.error("batch_run_failed", error=str(exc))

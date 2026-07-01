@@ -4,6 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
+_ACTIVE_BATCH_STATUSES = frozenset({"connecting", "running", "disconnecting"})
+_ACTIVE_JOB_PHASES = frozenset({"automation", "ingesting", "captions", "batch"})
+
+
+def _run_is_active(batch_status: str, job_status: str, job_phase: str) -> bool:
+    if batch_status in _ACTIVE_BATCH_STATUSES:
+        return True
+    return job_status == "running" and job_phase in _ACTIVE_JOB_PHASES
+
 
 def compute_run_progress(
     *,
@@ -71,12 +80,39 @@ def compute_run_progress(
             "active": True,
         }
 
-    if job_status == "completed" and batch_status == "idle":
+    if batch_status == "completed":
         return {
             "phase": "complete",
             "phase_label": "Complete",
             "progress": 100,
             "message": message or "Daily run finished",
+            "active": False,
+        }
+
+    if batch_status == "stopped":
+        return {
+            "phase": "idle",
+            "phase_label": "Stopped",
+            "progress": 0,
+            "message": message or "Run stopped",
+            "active": False,
+        }
+
+    if job_status == "completed" and batch_status == "idle":
+        # Ingest-only runs never start a batch; slideshow-only jobs finish here.
+        if job.get("run_batch") is False:
+            return {
+                "phase": "complete",
+                "phase_label": "Complete",
+                "progress": 100,
+                "message": message or "Ingest finished",
+                "active": False,
+            }
+        return {
+            "phase": "idle",
+            "phase_label": "Interrupted",
+            "progress": 0,
+            "message": message or "Batch did not finish — start a fresh run",
             "active": False,
         }
 
@@ -94,5 +130,5 @@ def compute_run_progress(
         "phase_label": job_phase.title() if job_phase else "Running",
         "progress": 12,
         "message": message or "Working…",
-        "active": job_status == "running" or batch_status not in ("idle", ""),
+        "active": _run_is_active(batch_status, job_status, job_phase),
     }

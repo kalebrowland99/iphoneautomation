@@ -10,7 +10,9 @@ from pydantic import BaseModel
 
 from imouse_farm.config.models import AppConfig
 from imouse_farm.integrations.slideshow_ingest import (
+    SlideshowVideoRejected,
     clear_slot_media,
+    list_slot_media,
     normalize_slot,
     save_bytes_to_slot,
 )
@@ -59,8 +61,11 @@ def register_slideshow_routes(
         return {
             "enabled": bool(ss.enabled),
             "app_base_url": str(ss.app_base_url or "").rstrip("/"),
+            "app_port": int(ss.app_port),
+            "use_embedded_runner": bool(ss.use_embedded_runner),
             "use_playwright_runner": bool(ss.use_playwright_runner),
             "slideshows_per_slot": int(ss.slideshows_per_slot),
+            "slides_per_slideshow": int(ss.slides_per_slideshow),
         }
 
     @router.get("/api/slideshow/jobs")
@@ -95,20 +100,62 @@ def register_slideshow_routes(
 
         job_key = str(job_id or "").strip()
         ingested = await app.slideshow_jobs.get(job_key) if job_key else None
+        job_brand = str(ingested.brand if ingested else "labely").strip().lower()
         slot_files = (ingested.ingested.get(slot_label, []) if ingested else []) or []
         if should_clear or (config.slideshow.clear_slot_before_ingest and not slot_files):
-            clear_slot_media(config.gallery.base_directory, slot_label, extensions)
+            clear_slot_media(
+                config.gallery.base_directory,
+                slot_label,
+                extensions,
+                brand=job_brand,
+            )
+
+        max_videos = max(1, int(ingested.videos_per_slot if ingested and ingested.videos_per_slot else config.slideshow.slideshows_per_slot))
+        expected_slides = 4 if job_brand == "labely" else max(1, int(config.slideshow.slides_per_slideshow))
+        on_disk = list_slot_media(
+            config.gallery.base_directory,
+            slot_label,
+            extensions,
+            brand=job_brand,
+        )
+        if len(on_disk) >= max_videos:
+            raise HTTPException(
+                409,
+                f"Slot {slot_label} already has {max_videos} video(s) — extra upload skipped",
+            )
 
         data = await file.read()
         if not data:
             raise HTTPException(400, "Empty upload")
         filename = str(file.filename or "slideshow.mp4").strip() or "slideshow.mp4"
-        dest = save_bytes_to_slot(
-            data,
-            base_directory=config.gallery.base_directory,
-            slot=slot_label,
-            filename=filename,
-        )
+        try:
+            dest = save_bytes_to_slot(
+                data,
+                base_directory=config.gallery.base_directory,
+                slot=slot_label,
+                filename=filename,
+                expected_slides=expected_slides,
+                brand=job_brand,
+            )
+        except SlideshowVideoRejected as exc:
+            if job_key:
+                await app.slideshow_jobs.record_reject(job_key, slot_label, str(exc))
+            reason_code = "blank_video"
+            lowered = str(exc).lower()
+            if "blank slide" in lowered:
+                reason_code = "blank_slide"
+            raise HTTPException(
+                422,
+                {
+                    "success": False,
+                    "retry": bool(exc.retry),
+                    "reason": reason_code,
+                    "slot": slot_label,
+                    "message": str(exc),
+                },
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
         job_key = str(job_id or "").strip()
         if job_key:

@@ -30,10 +30,21 @@ def test_set_profile_persists_handle_and_brand(tmp_path: Path) -> None:
     profile = store.set_profile("slot:3", tiktok_handle="myacct", brand="valcoin")
     assert profile["tiktok_handle"] == "@myacct"
     assert profile["brand"] == "valcoin"
+    assert profile["warmup_enabled"] is False
     store._load_store()
     loaded = store.get_brand_profile("slot:3", "valcoin")
     assert loaded["tiktok_handle"] == "@myacct"
     assert loaded["brand"] == "valcoin"
+
+
+def test_set_profile_persists_warmup_enabled() -> None:
+    store.set_profile("slot:2", tiktok_handle="@acct", brand="labely", warmup_enabled=True)
+    profile = store.get_brand_profile("slot:2", "labely")
+    assert profile["warmup_enabled"] is True
+    store.set_profile("slot:2", brand="labely", warmup_enabled=False)
+    profile = store.get_brand_profile("slot:2", "labely")
+    assert profile["warmup_enabled"] is False
+    assert profile["tiktok_handle"] == "@acct"
 
 
 def test_same_slot_different_brands() -> None:

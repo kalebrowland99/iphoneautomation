@@ -12,13 +12,15 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from imouse_farm.config.models import ActionType, AppConfig
+from imouse_farm.dashboard.activity import enrich_activity
 from imouse_farm.dashboard.brands import get_brand, load_brands, render_dashboard_html
 from imouse_farm.dashboard.stop import stop_device_automation
+from imouse_farm.dashboard.window_layout import tile_chrome_imouse
 from imouse_farm.dashboard.test_actions import (
     list_debug_tests,
     run_debug_test,
@@ -26,6 +28,7 @@ from imouse_farm.dashboard.test_actions import (
 )
 from imouse_farm.captions.ai_generator import (
     extract_food_names_from_stems,
+    generate_labely_onscreen_texts,
     stem_to_food_name,
 )
 from imouse_farm.captions.onscreen_templates import apply_onscreen_for_stems
@@ -61,6 +64,7 @@ from imouse_farm.post.post_caption_store import (
     post_media_stem,
     set_final_caption,
     set_onscreen_text,
+    text_key_for_device,
     validate_post_texts,
 )
 from imouse_farm.settings.device_settings import (
@@ -76,8 +80,17 @@ from imouse_farm.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _post_text_key(device: Any) -> str:
-    return device_storage_key(device.device_id, device.user_name)
+def _normalize_brand(brand: str | None) -> str:
+    b = str(brand or "labely").strip().lower()
+    return b if b in ("labely", "valcoin") else "labely"
+
+
+def _post_text_key(device: Any, brand: str | None = None) -> str:
+    return text_key_for_device(
+        device.device_id,
+        device.user_name,
+        brand=_normalize_brand(brand),
+    )
 
 
 def _slot_profile_key(slot: int) -> str:
@@ -109,6 +122,7 @@ class BatchStartBody(BaseModel):
 class CaptionAISettingsBody(BaseModel):
     prompt: str = ""
     hashtags: str = ""
+    brand: str | None = None
 
 
 class CaptionAIGenerateBody(BaseModel):
@@ -116,10 +130,12 @@ class CaptionAIGenerateBody(BaseModel):
     hashtags: str | None = None
     onscreen_template: str | None = None
     all_phones: bool = False
+    brand: str | None = None
 
 
 class OnscreenTemplateApplyBody(BaseModel):
     template_key: str
+    brand: str | None = None
 
 
 class PostTextFieldBody(BaseModel):
@@ -130,9 +146,14 @@ class DeviceSettingsBody(BaseModel):
     debug_skip_post: bool = False
 
 
-class AccountProfileBody(BaseModel):
-    tiktok_handle: str = ""
+class WindowLayoutBody(BaseModel):
     brand: str = "labely"
+
+
+class AccountProfileBody(BaseModel):
+    tiktok_handle: str | None = None
+    brand: str = "labely"
+    warmup_enabled: bool | None = None
 
 
 class ApplicationState:
@@ -247,6 +268,15 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.post("/api/window-layout/split")
+    async def split_chrome_imouse_windows(body: WindowLayoutBody | None = None) -> dict[str, Any]:
+        brand = str((body.brand if body else None) or "labely").strip().lower()
+        return tile_chrome_imouse(app_instance.config.dashboard, brand=brand)
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        return Response(status_code=204)
+
     @app.post("/api/server/restart")
     async def restart_server() -> dict[str, Any]:
         if _restart_scheduled:
@@ -260,11 +290,11 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         brand_filter = str(brand or "").strip().lower()
         result: list[dict[str, Any]] = []
         for device in dm.devices.values():
-            text_key = _post_text_key(device)
+            base_key = device_storage_key(device.device_id, device.user_name)
             profile = (
-                get_brand_profile(text_key, brand_filter)
+                get_brand_profile(base_key, brand_filter)
                 if brand_filter
-                else get_profile(text_key)
+                else get_profile(base_key)
             )
             data = dm.to_dict(device)
             data["debug_skip_post"] = get_debug_skip_post(device.device_id)
@@ -296,12 +326,10 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
-        key = _post_text_key(device)
-        profile = set_profile(
-            key,
-            brand=body.brand,
-            tiktok_handle=body.tiktok_handle,
-        )
+        key = device_storage_key(device.device_id, device.user_name)
+        fields = body.model_dump(exclude_unset=True)
+        brand = str(fields.pop("brand", body.brand) or "labely")
+        profile = set_profile(key, brand=brand, **fields)
         return {"profile": profile}
 
     @app.get("/api/slots/{slot}/account-profile")
@@ -321,7 +349,7 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         profile = set_profile(
             f"slot:{int(slot)}",
             brand=body.brand or "labely",
-            tiktok_handle=body.tiktok_handle,
+            **body.model_dump(exclude_unset=True, exclude={"brand"}),
         )
         return {"profile": profile}
 
@@ -414,11 +442,12 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
 
     @app.post("/api/batch/stop")
     async def stop_farm_batch() -> dict[str, Any]:
+        await app_instance.slideshow_orchestrator.cancel_running_jobs()
         await app_instance.farm_batch.stop()
         return {"success": True, "status": app_instance.farm_batch.get_status()}
 
     @app.get("/api/debug/tests")
-    async def get_debug_tests(group: str | None = None) -> list[dict[str, str]]:
+    async def get_debug_tests(group: str | None = None) -> list[dict[str, Any]]:
         return list_debug_tests(group)
 
     @app.get("/api/devices/{device_id:path}/settings")
@@ -445,9 +474,10 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             raise HTTPException(404, "Device not found")
         from_post = body.from_post if body else None
         brand = str((body.brand if body else None) or "labely").strip().lower()
-        text_key = _post_text_key(device)
+        brand = _normalize_brand(body.brand if body else None)
+        text_key = _post_text_key(device, brand)
         check_from = from_post if from_post is not None else 1
-        missing = validate_post_texts(text_key, from_post=check_from)
+        missing = validate_post_texts(text_key, from_post=check_from, brand=brand)
         if missing:
             raise HTTPException(400, "; ".join(missing))
         success = await app_instance.workflow_pipeline.start(
@@ -483,20 +513,25 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         return await stop_device_automation(app_instance, device_id)
 
     @app.get("/api/devices/{device_id:path}/post-texts")
-    async def get_device_post_texts(device_id: str) -> dict[str, Any]:
+    async def get_device_post_texts(
+        device_id: str,
+        brand: str | None = None,
+    ) -> dict[str, Any]:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
+        brand_key = _normalize_brand(brand)
         gallery = app_instance.config.gallery
         folder = phone_gallery_folder(
             gallery.base_directory,
             device.user_name,
             device.phone_name,
+            brand=brand_key,
         )
         media_stems = list_media_stems_for_posts(folder, gallery.media_extensions, POST_COUNT)
-        text_key = _post_text_key(device)
+        text_key = _post_text_key(device, brand_key)
         posts = []
-        for row in list_post_texts(text_key):
+        for row in list_post_texts(text_key, brand=brand_key):
             post_num = int(row["post"])
             stem = post_media_stem(media_stems, post_num)
             posts.append({
@@ -505,51 +540,63 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
                 "placeholder": stem,
                 "food_name": stem_to_food_name(stem),
             })
-        return {"posts": posts, "media_files": media_stems}
+        return {"posts": posts, "media_files": media_stems, "brand": brand_key}
 
     @app.put("/api/devices/{device_id:path}/post-texts/{post_num}/onscreen")
     async def set_device_onscreen_text(
-        device_id: str, post_num: int, body: PostTextFieldBody
+        device_id: str,
+        post_num: int,
+        body: PostTextFieldBody,
+        brand: str | None = None,
     ) -> dict[str, str]:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
         if post_num < 1 or post_num > POST_COUNT:
             raise HTTPException(400, f"post_num must be 1..{POST_COUNT}")
-        text_key = _post_text_key(device)
-        set_onscreen_text(text_key, post_num, body.text)
-        return {"text": get_onscreen_text(text_key, post_num)}
+        brand_key = _normalize_brand(brand)
+        text_key = _post_text_key(device, brand_key)
+        set_onscreen_text(text_key, post_num, body.text, brand=brand_key)
+        return {"text": get_onscreen_text(text_key, post_num, brand=brand_key)}
 
     @app.put("/api/devices/{device_id:path}/post-texts/{post_num}/final")
     async def set_device_final_caption(
-        device_id: str, post_num: int, body: PostTextFieldBody
+        device_id: str,
+        post_num: int,
+        body: PostTextFieldBody,
+        brand: str | None = None,
     ) -> dict[str, str]:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
         if post_num < 1 or post_num > POST_COUNT:
             raise HTTPException(400, f"post_num must be 1..{POST_COUNT}")
-        text_key = _post_text_key(device)
-        set_final_caption(text_key, post_num, body.text)
-        return {"text": get_final_caption(text_key, post_num)}
+        brand_key = _normalize_brand(brand)
+        text_key = _post_text_key(device, brand_key)
+        set_final_caption(text_key, post_num, body.text, brand=brand_key)
+        return {"text": get_final_caption(text_key, post_num, brand=brand_key)}
 
     @app.post("/api/devices/{device_id:path}/post-texts/clear")
-    async def clear_device_post_texts(device_id: str) -> dict[str, bool]:
+    async def clear_device_post_texts(
+        device_id: str,
+        brand: str | None = None,
+    ) -> dict[str, bool]:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
-        clear_all_post_texts(_post_text_key(device))
+        clear_all_post_texts(_post_text_key(device, brand), brand=_normalize_brand(brand))
         return {"success": True}
 
     @app.get("/api/caption-ai/settings")
-    async def get_caption_ai_settings() -> dict[str, str]:
-        return get_ai_settings()
+    async def get_caption_ai_settings(brand: str | None = None) -> dict[str, str]:
+        return get_ai_settings(_normalize_brand(brand))
 
     @app.put("/api/caption-ai/settings")
     async def update_caption_ai_settings(body: CaptionAISettingsBody) -> dict[str, str]:
-        set_ai_prompt(body.prompt)
-        set_ai_hashtags(body.hashtags)
-        return get_ai_settings()
+        brand_key = _normalize_brand(body.brand)
+        set_ai_prompt(body.prompt, brand=brand_key)
+        set_ai_hashtags(body.hashtags, brand=brand_key)
+        return get_ai_settings(brand_key)
 
     @app.post("/api/devices/{device_id:path}/onscreen-template/apply")
     async def apply_device_onscreen_template(
@@ -560,6 +607,7 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
+        brand_key = _normalize_brand(body.brand)
         openai_cfg = app_instance.config.openai
         if not openai_cfg.enabled:
             raise HTTPException(400, "OpenAI caption generation is disabled in config")
@@ -573,6 +621,7 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             gallery.base_directory,
             device.user_name,
             device.phone_name,
+            brand=brand_key,
         )
         media_stems = list_media_stems_for_posts(folder, gallery.media_extensions, POST_COUNT)
         if not any(media_stems):
@@ -581,38 +630,57 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
                 f"No media files in gallery folder: {folder}",
             )
 
-        text_key = _post_text_key(device)
+        text_key = _post_text_key(device, brand_key)
         try:
-            foods = await extract_food_names_from_stems(media_stems, config=openai_cfg)
+            if brand_key == "labely":
+                onscreen_lines = await generate_labely_onscreen_texts(
+                    media_stems,
+                    template_key=template_key,
+                    config=openai_cfg,
+                )
+                foods = await extract_food_names_from_stems(media_stems, config=openai_cfg)
+                applied = 0
+                for post_num, line in enumerate(onscreen_lines, start=1):
+                    if not line.strip():
+                        continue
+                    set_onscreen_text(text_key, post_num, line, brand=brand_key)
+                    applied += 1
+            else:
+                foods = await extract_food_names_from_stems(media_stems, config=openai_cfg)
+                from imouse_farm.post.post_caption_store import foods_post_order_to_file_order
+
+                applied = apply_onscreen_for_stems(
+                    template_key,
+                    media_stems,
+                    text_key,
+                    set_onscreen_text=set_onscreen_text,
+                    food_names=foods_post_order_to_file_order(foods),
+                )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
             logger.error("onscreen_template_apply_failed", device_id=device_id, error=str(exc))
             raise HTTPException(502, f"OpenAI request failed: {exc}") from exc
 
-        applied = apply_onscreen_for_stems(
-            template_key,
-            media_stems,
-            text_key,
-            set_onscreen_text=set_onscreen_text,
-            food_names=foods,
-        )
         if not applied:
             raise HTTPException(400, "Could not build onscreen text from gallery filenames")
 
         posts: list[dict[str, Any]] = []
-        for row in list_post_texts(text_key):
+        for row in list_post_texts(text_key, brand=brand_key):
             post_num = int(row["post"])
             stem = post_media_stem(media_stems, post_num)
-            idx = media_index_for_post(post_num)
-            food = foods[idx] if idx < len(foods) else stem_to_food_name(stem)
+            food = (
+                foods[post_num - 1]
+                if post_num - 1 < len(foods)
+                else stem_to_food_name(stem)
+            )
             posts.append({
                 **row,
-                "onscreen": get_onscreen_text(text_key, post_num),
+                "onscreen": get_onscreen_text(text_key, post_num, brand=brand_key),
                 "media_file": stem,
                 "food_name": food,
             })
-        return {"posts": posts, "media_files": media_stems, "applied": applied}
+        return {"posts": posts, "media_files": media_stems, "applied": applied, "brand": brand_key}
 
     @app.post("/api/devices/{device_id:path}/caption-ai/generate")
     async def generate_device_captions(
@@ -624,6 +692,7 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
+        brand_key = _normalize_brand(body.brand if body else None)
         try:
             result = await generate_captions_for_device(
                 app_instance.config,
@@ -631,6 +700,7 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
                 prompt=body.prompt if body else None,
                 hashtags=body.hashtags if body else None,
                 onscreen_template=body.onscreen_template if body else None,
+                brand=brand_key,
             )
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
@@ -652,13 +722,14 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         if not devices:
             raise HTTPException(400, "No farm phones registered")
 
+        brand_key = _normalize_brand(body.brand if body else None)
         result = await generate_captions_for_devices(
             app_instance.config,
             devices,
             prompt=body.prompt if body else None,
             hashtags=body.hashtags if body else None,
             onscreen_template=body.onscreen_template if body else None,
-            brand="labely",
+            brand=brand_key,
         )
 
         await app_instance.db.log_activity(
@@ -684,9 +755,12 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         device_id: str,
         test_id: str,
         brand: str | None = None,
+        skip_media: bool = False,
     ) -> dict[str, Any]:
         b = str(brand or "labely").strip().lower()
-        return await run_debug_test(app_instance, device_id, test_id, brand=b)
+        return await run_debug_test(
+            app_instance, device_id, test_id, brand=b, skip_media=skip_media
+        )
 
     @app.post("/api/devices/{device_id:path}/test/tap-vpntoggle")
     async def test_tap_vpntoggle(device_id: str) -> dict[str, Any]:
@@ -809,15 +883,39 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
     @app.get("/api/run/status")
     async def get_run_status(job_id: str | None = None) -> dict[str, Any]:
         batch = app_instance.farm_batch.get_status()
+        orch_busy = app_instance.slideshow_orchestrator.orchestrator_busy()
+
         job_data: dict[str, Any] | None = None
-        if job_id:
-            job = await app_instance.slideshow_jobs.get(job_id)
+        resolved_job_id = str(job_id or "").strip()
+        if resolved_job_id:
+            job = await app_instance.slideshow_jobs.get(resolved_job_id)
             if job:
                 job_data = job.to_dict()
+
+        if not job_data:
+            for row in await app_instance.slideshow_jobs.list_jobs(limit=20):
+                if str(row.get("status") or "").lower() == "running":
+                    job_data = row
+                    resolved_job_id = str(row.get("id") or "")
+                    break
+
         progress = compute_run_progress(slideshow_job=job_data, batch=batch)
+        if orch_busy and not progress.get("active"):
+            progress = {
+                **progress,
+                "active": True,
+                "phase": progress.get("phase") or "slideshow",
+                "phase_label": progress.get("phase_label") or "Slideshow in progress",
+                "progress": max(int(progress.get("progress") or 0), 12),
+                "message": progress.get("message")
+                or "Slideshow automation is still running — click Stop to cancel.",
+            }
+
         return {
             "batch": batch,
             "slideshow_job": job_data,
+            "slideshow_job_id": resolved_job_id or None,
+            "slideshow_orchestrator_busy": orch_busy,
             "progress": progress,
         }
 

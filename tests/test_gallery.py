@@ -9,11 +9,28 @@ from imouse_farm.utils.gallery import (
 )
 
 
-def test_phone_gallery_folder_uses_slot() -> None:
-    path = phone_gallery_folder("gallery", "12", "iPhone 12")
-    assert path.name == "12"
-    assert path.parent.name == "gallery"
+def test_phone_gallery_folder_default_brand_target(tmp_path: Path) -> None:
+    path = phone_gallery_folder(str(tmp_path / "gallery"), "12", "iPhone 12", brand="labely")
+    assert path.name == "labely"
+    assert path.parent.name == "12"
     assert path.is_absolute()
+
+
+def test_phone_gallery_folder_brand_subfolder(tmp_path: Path) -> None:
+    slot = tmp_path / "gallery" / "5"
+    branded = slot / "valcoin"
+    branded.mkdir(parents=True)
+    (branded / "a.mp4").write_bytes(b"x")
+    path = phone_gallery_folder(str(tmp_path / "gallery"), "5", brand="valcoin")
+    assert path == branded.resolve()
+
+
+def test_phone_gallery_folder_legacy_labely_flat(tmp_path: Path) -> None:
+    slot = tmp_path / "gallery" / "7"
+    slot.mkdir(parents=True)
+    (slot / "a.mp4").write_bytes(b"x")
+    path = phone_gallery_folder(str(tmp_path / "gallery"), "7", brand="labely")
+    assert path == slot.resolve()
 
 
 def test_list_media_files_returns_absolute_paths(tmp_path: Path) -> None:
@@ -35,6 +52,13 @@ def test_list_media_files_natural_order(tmp_path: Path) -> None:
     files = list_media_files(folder, [".mp4"])
     names = [Path(f).name for f in files]
     assert names == ["video1.mp4", "video2.mp4", "video10.mp4"]
+
+
+def test_list_media_files_missing_folder(tmp_path: Path) -> None:
+    missing = tmp_path / "gallery" / "99" / "valcoin"
+    assert not missing.exists()
+    assert list_media_files(missing, [".mp4"]) == []
+    assert list_media_stems_for_posts(missing, [".mp4"], post_count=3) == ["", "", ""]
 
 
 def test_list_media_stems_for_posts(tmp_path: Path) -> None:

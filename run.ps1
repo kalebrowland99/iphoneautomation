@@ -32,8 +32,18 @@ if (Test-Path $envFile) {
     }
 }
 
+function Start-SlideshowUiBackground {
+    $script = Join-Path $ProjectRoot "scripts\start_slideshow_ui.ps1"
+    if (-not (Test-Path $script)) { return }
+    Start-Process -FilePath "powershell.exe" `
+        -ArgumentList "-ExecutionPolicy", "Bypass", "-File", $script `
+        -WorkingDirectory $ProjectRoot `
+        -WindowStyle Hidden | Out-Null
+}
+
 if (-not $NoReload) {
     Write-Host "Starting iMouse Farm (dev mode - auto-restart on file changes)..." -ForegroundColor Cyan
+    Start-SlideshowUiBackground
     & $venvPython (Join-Path $ProjectRoot "scripts\watch_restart.py")
     exit $LASTEXITCODE
 }
@@ -42,5 +52,7 @@ Write-Host "Starting iMouse Farm..." -ForegroundColor Cyan
 Write-Host "Dashboard: http://localhost:8080" -ForegroundColor Green
 Write-Host "Press Ctrl+C to stop." -ForegroundColor Gray
 Write-Host ""
+
+Start-SlideshowUiBackground
 
 & $venvPython -m imouse_farm.main -c config\config.yaml

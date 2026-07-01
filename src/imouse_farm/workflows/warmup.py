@@ -1,0 +1,299 @@
+"""TikTok account warmup — scroll feed before posting."""
+
+from __future__ import annotations
+
+import asyncio
+import random
+import time
+from typing import Any, Callable
+
+from imouse_farm.actions.cancel import is_cancelled
+from imouse_farm.actions.permission_prompts import is_tiktok_live_feed_dialog
+from imouse_farm.actions.vpn_shadowrocket import (
+    SHADOWROCKET_ICON_X,
+    SHADOWROCKET_ICON_Y,
+    TEMPLATE_THRESHOLD,
+    VPN_TOGGLE_X,
+    VPN_TOGGLE_Y,
+)
+from imouse_farm.config.models import AppConfig
+from imouse_farm.post.account_profile_store import (
+    get_profile_for_device,
+    increment_warmup_days,
+)
+from imouse_farm.utils.logging import get_logger
+from imouse_farm.workflows.account_switch import ensure_tiktok_account
+from imouse_farm.workflows.feed_scroll import (
+    random_center_double_tap_coords,
+    screen_dimensions,
+    swipe_feed_up,
+)
+
+logger = get_logger(__name__)
+
+StopCheck = Callable[[], bool]
+
+
+async def run_tiktok_warmup(
+    controller: Any,
+    device: Any,
+    *,
+    brand: str,
+    app_config: AppConfig,
+    device_manager: Any | None = None,
+    stop_check: StopCheck | None = None,
+    log_activity: Any | None = None,
+    duration_override: float | None = None,
+    skip_setup: bool = False,
+) -> None:
+    """Verify account, tap home, then scroll the feed for the configured duration.
+
+    Set skip_setup=True when TikTok is already open and on the correct account
+    (e.g. debug flow where the account switch was a separate preceding step).
+    """
+    device_id = str(device.device_id)
+    profile = get_profile_for_device(device_id, device.user_name, brand=brand)
+    handle = str(profile.get("tiktok_handle") or "")
+    warmup_cfg = app_config.batch.warmup
+
+    if not skip_setup:
+        await _open_tiktok_for_warmup(
+            controller,
+            device_id,
+            app_config=app_config,
+            log_activity=log_activity,
+        )
+
+        await ensure_tiktok_account(
+            controller=controller,
+            device_id=device_id,
+            tiktok_handle=handle,
+            navigation=app_config.tiktok_navigation,
+            log_activity=log_activity,
+            device_manager=device_manager,
+            templates_dir=app_config.analysis.templates_directory,
+            brand=brand,
+            device_user_name=device.user_name,
+        )
+
+    sw, sh = screen_dimensions(device)
+    duration = float(duration_override) if duration_override is not None else float(warmup_cfg.duration_seconds)
+    delay_min = float(warmup_cfg.swipe_delay_min_seconds)
+    delay_max = float(warmup_cfg.swipe_delay_max_seconds)
+    delay_mean = float(warmup_cfg.swipe_delay_mean_seconds)
+    long_watch_prob = float(warmup_cfg.swipe_delay_long_watch_probability)
+    tap_interval = float(warmup_cfg.double_tap_interval_seconds)
+
+    if log_activity:
+        await log_activity(
+            "info",
+            "batch",
+            f"Warmup starting ({int(duration)}s scroll)",
+            device_id,
+        )
+
+    started = time.monotonic()
+    deadline = started + duration
+    double_tap_at = started + random.uniform(0.0, duration)
+    double_tap_done = False
+
+    def _stopped() -> bool:
+        if is_cancelled(device_id):
+            return True
+        if stop_check and stop_check():
+            return True
+        return False
+
+    logger.info(
+        "warmup_started",
+        device_id=device_id,
+        slot=device.user_name,
+        brand=brand,
+        duration_seconds=duration,
+        double_tap_at_seconds=round(double_tap_at - started, 1),
+    )
+
+    while time.monotonic() < deadline:
+        if _stopped():
+            logger.info("warmup_stopped", device_id=device_id, reason="cancelled")
+            return
+
+        elapsed = time.monotonic() - started
+        remaining = deadline - time.monotonic()
+
+        if not double_tap_done and time.monotonic() >= double_tap_at:
+            x, y = random_center_double_tap_coords(sw, sh)
+            await controller.tap(device_id, x, y)
+            await asyncio.sleep(tap_interval)
+            await controller.tap(device_id, x, y)
+            double_tap_done = True
+            logger.info("warmup_double_tap", device_id=device_id, x=x, y=y)
+            if log_activity:
+                await log_activity(
+                    "info",
+                    "batch",
+                    f"Warmup liked video (double-tap) at ({x}, {y}) — {elapsed:.0f}s elapsed",
+                    device_id,
+                )
+
+        # Bimodal: long_watch_prob chance of a full-length watch (delay_max),
+        # otherwise exponential weighted towards short watches (mean ~delay_mean).
+        if random.random() < long_watch_prob:
+            delay = delay_max
+        else:
+            delay = min(delay_max, max(delay_min, random.expovariate(1.0 / delay_mean)))
+        if log_activity:
+            await log_activity(
+                "info",
+                "batch",
+                f"Warmup watching {delay:.0f}s — {elapsed:.0f}s elapsed, {remaining:.0f}s left",
+                device_id,
+            )
+        if not await _wait_with_live_watch(
+            controller,
+            device_id,
+            sw,
+            sh,
+            delay,
+            deadline,
+            stop_check=_stopped,
+        ):
+            return
+
+        if _stopped():
+            return
+
+        swiped = await swipe_feed_up(controller, device_id, sw, sh)
+        if swiped:
+            logger.info("warmup_swipe", device_id=device_id, **swiped)
+            if log_activity:
+                elapsed_after = time.monotonic() - started
+                remaining_after = deadline - time.monotonic()
+                await log_activity(
+                    "info",
+                    "batch",
+                    f"Warmup swiped to next video — {elapsed_after:.0f}s elapsed, {remaining_after:.0f}s left",
+                    device_id,
+                )
+
+    day = increment_warmup_days(device_id, device.user_name, brand=brand)
+    logger.info("warmup_completed", device_id=device_id, slot=device.user_name, warmup_day=day)
+    if log_activity:
+        await log_activity(
+            "info",
+            "batch",
+            f"Warmup Day {day} complete ✓ — starting post pipeline",
+            device_id,
+        )
+
+
+async def _open_tiktok_for_warmup(
+    controller: Any,
+    device_id: str,
+    *,
+    app_config: AppConfig,
+    log_activity: Any | None = None,
+) -> None:
+    """Turn VPN on, go home, open TikTok — minimal prep for warmup."""
+    from imouse_farm.workflows.tiktok_plus_ready import (
+        _plus_template_path,
+        _plus_threshold,
+    )
+    from pathlib import Path
+
+    templates_dir = app_config.analysis.templates_directory
+    plus_path = _plus_template_path(None, templates_dir)
+    threshold = _plus_threshold(None)
+
+    # If TikTok is already open on home feed, just ensure VPN is on and return.
+    if plus_path:
+        hit = await controller.find_template_on_device(device_id, plus_path, threshold)
+        if hit:
+            await _ensure_vpn_on(controller, device_id, app_config, log_activity)
+            return
+
+    # Turn VPN on via Shadowrocket before opening TikTok.
+    await _ensure_vpn_on(controller, device_id, app_config, log_activity)
+
+    # Go home then tap TikTok icon.
+    await controller.home(device_id)
+    await asyncio.sleep(1.5)
+
+    tiktok_template = Path(templates_dir) / "tiktok.jpg"
+    if tiktok_template.is_file():
+        hit = await controller.find_template_on_device(device_id, tiktok_template, 0.55)
+        if hit:
+            await controller.tap(device_id, int(hit["x"]), int(hit["y"]))
+            if log_activity:
+                await log_activity("info", "batch", "Warmup: opened TikTok from home screen", device_id)
+            await asyncio.sleep(2.0)
+        else:
+            if log_activity:
+                await log_activity("warn", "batch", "Warmup: TikTok icon not found on home screen — ensure_tiktok_account will wait", device_id)
+    else:
+        if log_activity:
+            await log_activity("warn", "batch", "Warmup: no tiktok.jpg template — skipping open step", device_id)
+
+
+async def _ensure_vpn_on(
+    controller: Any,
+    device_id: str,
+    app_config: AppConfig,
+    log_activity: Any | None = None,
+) -> None:
+    """Open Shadowrocket and turn VPN on if it's currently off."""
+    from pathlib import Path
+
+    templates_dir = app_config.analysis.templates_directory
+    grey_path = Path(templates_dir) / "greytoggle.jpg"
+
+    # Open Shadowrocket.
+    await controller.press_home(device_id)
+    await asyncio.sleep(0.5)
+    await controller.tap(device_id, SHADOWROCKET_ICON_X, SHADOWROCKET_ICON_Y)
+    await asyncio.sleep(2.0)
+
+    if grey_path.is_file():
+        vpn_off = await controller.find_template_on_device(
+            device_id, grey_path, threshold=TEMPLATE_THRESHOLD
+        )
+        if vpn_off:
+            await controller.tap(device_id, VPN_TOGGLE_X, VPN_TOGGLE_Y)
+            await asyncio.sleep(3.0)
+            if log_activity:
+                await log_activity("info", "batch", "Warmup: VPN turned on", device_id)
+        else:
+            if log_activity:
+                await log_activity("info", "batch", "Warmup: VPN already on", device_id)
+
+    await controller.press_home(device_id)
+    await asyncio.sleep(1.0)
+
+
+async def _wait_with_live_watch(
+    controller: Any,
+    device_id: str,
+    sw: int,
+    sh: int,
+    duration: float,
+    deadline: float,
+    *,
+    stop_check: Callable[[], bool],
+) -> bool:
+    """Sleep up to *duration* seconds, polling for LIVE feed overlays."""
+    end = min(time.monotonic() + duration, deadline)
+    while time.monotonic() < end:
+        if stop_check():
+            return False
+
+        screen = await controller.ocr_on_device(device_id)
+        if screen and is_tiktok_live_feed_dialog(screen):
+            swiped = await swipe_feed_up(controller, device_id, sw, sh)
+            if swiped:
+                logger.info("warmup_live_dismiss", device_id=device_id, **swiped)
+
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(0.5, remaining))
+    return True

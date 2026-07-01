@@ -5,11 +5,26 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from imouse_farm.post.brand_keys import normalize_brand
 
-def phone_gallery_folder(base_directory: str, user_name: str, phone_name: str = "") -> Path:
-    """Map a device to ``gallery/<slot>/`` using iMouse slot label (e.g. ``12``)."""
+
+def phone_gallery_folder(
+    base_directory: str,
+    user_name: str,
+    phone_name: str = "",
+    *,
+    brand: str = "labely",
+) -> Path:
+    """Map a device to ``gallery/<slot>/`` or ``gallery/<slot>/<brand>/``."""
     label = (user_name or phone_name or "default").strip().lower()
-    return (Path(base_directory) / label).resolve()
+    slot_path = (Path(base_directory) / label).resolve()
+    brand_key = normalize_brand(brand)
+    branded = slot_path / brand_key
+    if branded.is_dir():
+        return branded
+    if brand_key == "labely" and slot_path.is_dir() and any(slot_path.iterdir()):
+        return slot_path
+    return branded
 
 
 def natural_sort_key(name: str) -> tuple[str | int, ...]:
@@ -21,6 +36,8 @@ def natural_sort_key(name: str) -> tuple[str | int, ...]:
 def list_media_files(folder: Path, extensions: list[str]) -> list[str]:
     """Return absolute media paths in stable natural-sorted order (post 1 → post N)."""
     folder = folder.resolve()
+    if not folder.is_dir():
+        return []
     allowed = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions}
     paths = [
         p.resolve()

@@ -17,6 +17,7 @@ logger = get_logger(__name__)
 
 TIKTOK_WORKFLOWS = frozenset({
     "tiktok_prep",
+    "tiktok_valcoin_prep",
     "tiktok_account_switch",
     "tiktok_post",
     "tiktok_end",
