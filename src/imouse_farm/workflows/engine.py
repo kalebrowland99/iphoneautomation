@@ -1877,22 +1877,20 @@ class WorkflowRunner:
 
         found = False
         try:
+            from pathlib import Path
             controller = self._actions._controller  # noqa: SLF001
-            screenshot_bytes = await controller.capture_screenshot(self._device_id)
-            if screenshot_bytes:
-                # Try template match first.
-                from pathlib import Path
-                templates_dir = self._config.analysis.templates_directory
-                template_path = Path(templates_dir) / f"{check}.jpg"
-                if template_path.is_file():
-                    hit = await controller.find_template_on_device(
-                        self._device_id, template_path, threshold=0.5
-                    )
-                    found = bool(hit)
-                else:
-                    # Fall back to OCR keyword check.
-                    ocr = await controller.ocr_on_device(self._device_id)
-                    found = bool(ocr and check.lower() in ocr.lower())
+            templates_dir = self._config.analysis.templates_directory
+            template_path = Path(templates_dir) / f"{check}.jpg"
+            if template_path.is_file():
+                # Template match — one screenshot + local OpenCV (~0.5–1.5s).
+                hit = await controller.find_template_on_device(
+                    self._device_id, template_path, threshold=0.5
+                )
+                found = bool(hit)
+            else:
+                # OCR keyword — SDK handles screenshot+OCR internally (~1–2s).
+                ocr = await controller.ocr_on_device(self._device_id)
+                found = bool(ocr and check.lower() in ocr.lower())
         except Exception as exc:
             logger.warning(
                 "screen_check_error",
