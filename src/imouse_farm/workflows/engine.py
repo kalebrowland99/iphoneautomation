@@ -50,6 +50,10 @@ from imouse_farm.vision.fallbacks import (
     resolve_template_state_fallback,
 )
 from imouse_farm.vision.template_scan import pick_detection_hit
+from imouse_farm.workflows.vision_recovery import (
+    ask_vision_for_recovery,
+    execute_recovery_action,
+)
 
 logger = get_logger(__name__)
 
@@ -633,6 +637,10 @@ class WorkflowRunner:
                     "White background tap done after TikTok restart",
                     step=step.name,
                 )
+            # Post-step screen validation: if screen_check is set, verify the
+            # expected element is present before proceeding to the next step.
+            if step.screen_check:
+                await self._verify_screen_check(step)
         except Exception as exc:
             logger.error("step_failed", step=step.name, device_id=self._device_id, error=str(exc))
             await self._log_activity(
@@ -643,6 +651,8 @@ class WorkflowRunner:
             )
             if await self._try_recover_tiktok_post(step, exc):
                 return
+            # Ask OpenAI Vision what to do to recover, then apply normal failure policy.
+            await self._vision_recover(step, exc)
             await self._handle_failure(step, exc)
 
     async def _execute_step_body(self, step: WorkflowStepConfig) -> None:
@@ -1822,6 +1832,93 @@ class WorkflowRunner:
             await asyncio.sleep(poll)
 
         raise RuntimeError(f"Stopped while waiting for '{target}'")
+
+    async def _vision_recover(self, step: WorkflowStepConfig, exc: Exception) -> None:
+        """Ask OpenAI Vision what to tap/press to recover from a step failure.
+
+        This is best-effort: if the API call fails or returns "none", we log
+        and continue to the normal on_failure handler.
+        """
+        try:
+            controller = self._actions._controller  # noqa: SLF001
+            result = await ask_vision_for_recovery(
+                controller,
+                self._device_id,
+                step_name=step.name,
+                workflow_name=self._workflow.name,
+                error_msg=str(exc),
+                app_config=self._config,
+            )
+            if result:
+                await execute_recovery_action(
+                    controller,
+                    self._device_id,
+                    result,
+                    log_activity=self._log_activity,
+                )
+        except Exception as recovery_exc:
+            logger.warning(
+                "vision_recovery_skipped",
+                device_id=self._device_id,
+                step=step.name,
+                error=str(recovery_exc),
+            )
+
+    async def _verify_screen_check(self, step: WorkflowStepConfig) -> None:
+        """After a step succeeds, verify screen_check element is present.
+
+        If the expected element is not found, ask OpenAI Vision to recover.
+        The step is not re-run — we just attempt to fix the screen state and
+        continue. Detections can be a template stem or a short OCR keyword.
+        """
+        check = step.screen_check
+        if not check:
+            return
+
+        found = False
+        try:
+            controller = self._actions._controller  # noqa: SLF001
+            screenshot_bytes = await controller.capture_screenshot(self._device_id)
+            if screenshot_bytes:
+                # Try template match first.
+                from pathlib import Path
+                templates_dir = self._config.analysis.templates_directory
+                template_path = Path(templates_dir) / f"{check}.jpg"
+                if template_path.is_file():
+                    hit = await controller.find_template_on_device(
+                        self._device_id, template_path, threshold=0.5
+                    )
+                    found = bool(hit)
+                else:
+                    # Fall back to OCR keyword check.
+                    ocr = await controller.ocr_on_device(self._device_id)
+                    found = bool(ocr and check.lower() in ocr.lower())
+        except Exception as exc:
+            logger.warning(
+                "screen_check_error",
+                device_id=self._device_id,
+                step=step.name,
+                check=check,
+                error=str(exc),
+            )
+            return
+
+        if found:
+            await self._log_activity(
+                "debug",
+                "workflow",
+                f"Screen check OK — {check} detected after {step.name}",
+            )
+        else:
+            await self._log_activity(
+                "info",
+                "workflow",
+                f"Screen check FAILED — expected '{check}' after {step.name}, asking vision recovery",
+            )
+            await self._vision_recover(
+                step,
+                RuntimeError(f"screen_check: '{check}' not found after step '{step.name}'"),
+            )
 
     async def _handle_failure(self, step: WorkflowStepConfig, exc: Exception) -> None:
         on_failure = step.on_failure

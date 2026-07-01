@@ -296,6 +296,10 @@ class WorkflowStepConfig(BaseModel):
     action: dict[str, Any] = Field(default_factory=dict)
     condition: str | None = None
     template: str | None = None
+    # After this step succeeds, verify the expected screen element is present
+    # before moving on. Set to a template filename stem (e.g. "plus") or OCR
+    # keyword (e.g. "Next"). If detection fails, vision recovery is triggered.
+    screen_check: str | None = None
 
 
 class WorkflowConfig(BaseModel):
