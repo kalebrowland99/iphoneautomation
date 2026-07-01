@@ -95,6 +95,7 @@ DebugKind = Literal[
     "home",
     "account_switch_step",
     "slideshow_generate",
+    "vision_navigate",
 ]
 
 _POST_TEMPLATE_NAMES = frozenset({"plus", "aa", "continuearrow"})
@@ -1022,6 +1023,17 @@ WARMUP_DEBUG_TESTS: dict[str, DebugTest] = {
 }
 
 
+VISION_DEBUG_TESTS: dict[str, DebugTest] = {
+    "vision-navigate": {
+        "label": "Vision: Ask OpenAI what to tap (screenshot → GPT-4o)",
+        "kind": "vision_navigate",
+        "group": "manual",
+        "prompt": "What should I tap to navigate this screen? Return the most important action.",
+        "hint": "Takes a screenshot, sends to GPT-4o, logs and executes the suggested action.",
+    },
+}
+
+
 def get_debug_registry(workflows_dir: str = "config/workflows") -> dict[str, DebugTest]:
     registry = _template_debug_tests(workflows_dir)
     registry.update(MANUAL_DEBUG_TESTS)
@@ -1031,6 +1043,7 @@ def get_debug_registry(workflows_dir: str = "config/workflows") -> dict[str, Deb
     registry.update(TIKTOK_VALCOIN_PREP_DEBUG_TESTS)
     registry.update(SLIDESHOW_DEBUG_TESTS)
     registry.update(WARMUP_DEBUG_TESTS)
+    registry.update(VISION_DEBUG_TESTS)
     return registry
 
 
@@ -1254,6 +1267,8 @@ async def run_debug_test(
     if kind == "warmup_run":
         warmup_brand = str(spec.get("brand") or brand)
         return await warmup_run_debug(app, device_id, test_id, spec, brand=warmup_brand)
+    if kind == "vision_navigate":
+        return await vision_navigate_debug(app, device_id, test_id, spec)
     if kind == "tiktok_popup_scan":
         return await tiktok_popup_scan_debug(app, device_id, test_id, spec)
     if kind == "account_switch_step":
@@ -1513,6 +1528,71 @@ async def detect_ocr_debug(
     level = "info" if ok else "warn"
     await app.db.log_activity(level, "test", message, device_id, {"test_id": test_id, "texts": texts})
     return {"success": ok, "message": message}
+
+
+async def vision_navigate_debug(
+    app: Any,
+    device_id: str,
+    test_id: str,
+    spec: DebugTest,
+) -> dict[str, Any]:
+    """Screenshot → GPT-4o Vision → log and execute the suggested action."""
+    from imouse_farm.workflows.vision_recovery import (
+        ask_vision_for_recovery,
+        execute_recovery_action,
+    )
+
+    dm = app.device_manager
+    device = dm.get_device(device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    if not device.is_online:
+        raise HTTPException(503, spec.get("offline_hint", OFFLINE_HINT))
+
+    ctrl = app.device_manager.controller
+    prompt = str(spec.get("prompt") or "What should I tap to navigate this screen?")
+
+    await app.db.log_activity("info", "test", "Vision navigate: taking screenshot…", device_id)
+
+    result = await ask_vision_for_recovery(
+        ctrl,
+        device_id,
+        step_name=test_id,
+        workflow_name="vision_navigate_debug",
+        error_msg=prompt,
+        app_config=app.config,
+    )
+
+    if not result:
+        msg = "Vision navigate: OpenAI call failed or returned no result"
+        await app.db.log_activity("warn", "test", msg, device_id)
+        return {"success": False, "message": msg}
+
+    description = result.get("description", "")
+    action = result.get("action", "none")
+    x = result.get("x")
+    y = result.get("y")
+    reasoning = result.get("reasoning", "")
+
+    log_msg = f"Vision sees: {description} → action={action}"
+    if action == "tap" and x is not None and y is not None:
+        log_msg += f" at ({x}, {y})"
+    log_msg += f" — {reasoning}"
+    await app.db.log_activity("info", "test", log_msg, device_id, {"result": result})
+
+    executed = await execute_recovery_action(
+        ctrl,
+        device_id,
+        result,
+        log_activity=app.db.log_activity,
+    )
+
+    return {
+        "success": True,
+        "message": log_msg,
+        "vision_result": result,
+        "executed": executed,
+    }
 
 
 async def tap_ocr_debug(
