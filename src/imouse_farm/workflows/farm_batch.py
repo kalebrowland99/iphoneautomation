@@ -72,6 +72,7 @@ class FarmBatchRunner:
         self._task: asyncio.Task[None] | None = None
         self._stop_requested = False
         self._batch_done_events: dict[str, asyncio.Event] = {}
+        self._current_brand: str = "labely"
 
     def on_event(self, callback: EventCallback) -> None:
         self._event_callbacks.append(callback)
@@ -173,6 +174,7 @@ class FarmBatchRunner:
         from_post: int | None,
         brand: str = "labely",
     ) -> None:
+        self._current_brand = brand
         selected_ids = {d.device_id for batch in batches for d in batch}
         try:
             await self._disconnect_unselected_casts(selected_ids)
@@ -525,8 +527,17 @@ class FarmBatchRunner:
             self._status["failed"].append(entry)
 
         # Keep AirPlay up when the user kills a run; only decast after a normal finish.
+        # Also skip auto-disconnect if ValCoin warmup is pending — the batch loop
+        # disconnects after warmup completes.
         if event == "pipeline_completed" and self._config.disconnect_on_complete:
-            await self._dm.disconnect_airplay(device_id)
+            valcoin_warmup_pending = False
+            if device and self._current_brand == "labely":
+                vc_profile = get_profile_for_device(
+                    device.device_id, device.user_name, brand="valcoin"
+                )
+                valcoin_warmup_pending = bool(vc_profile.get("warmup_enabled"))
+            if not valcoin_warmup_pending:
+                await self._dm.disconnect_airplay(device_id)
 
         done = self._batch_done_events.pop(device_id, None)
         if done:
