@@ -43,6 +43,27 @@ def test_analyze_popup_screen_tiktok_post_notify() -> None:
     assert result["tap_y"] == 63
 
 
+def test_analyze_popup_screen_tiktok_security_checkup() -> None:
+    result = analyze_popup_screen("Let's do a quick security checkup?")
+    assert result["dialog"] == "tiktok_security_checkup"
+    assert result["watcher_action"] == "tap_coord"
+    assert result["tap_x"] == 570
+    assert result["tap_y"] == 501
+
+
+def test_security_checkup_detects_unicode_apostrophe_and_body_copy() -> None:
+    from imouse_farm.actions.permission_prompts import is_tiktok_security_checkup_dialog
+
+    assert is_tiktok_security_checkup_dialog("Let\u2019s do a quick security checkup")
+    assert is_tiktok_security_checkup_dialog(
+        "Complete a few personalized security tips to strengthen the safety of your account"
+    )
+    assert is_tiktok_security_checkup_dialog(
+        "Completeafewpersonalizedsecuritytipstostrengthenthesafetyofyouraccount"
+    )
+    assert is_tiktok_security_checkup_dialog("Continue checkup")
+
+
 def test_analyze_popup_screen_tiktok_continue_editing() -> None:
     result = analyze_popup_screen("Continue editing this post?")
     assert result["dialog"] == "tiktok_continue_editing"

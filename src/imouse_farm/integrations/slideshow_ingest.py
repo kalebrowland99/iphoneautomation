@@ -210,6 +210,13 @@ def save_bytes_to_slot(
         path=str(dest),
         bytes=len(data),
     )
+    # New video saved — the device's gallery is no longer the same as what was
+    # uploaded during the last prep. Invalidate so the next batch re-runs prep.
+    try:
+        from imouse_farm.post.account_profile_store import clear_prep_completed
+        clear_prep_completed(f"slot:{slot_label}", brand=brand)
+    except Exception:  # noqa: BLE001
+        pass
     return dest
 
 

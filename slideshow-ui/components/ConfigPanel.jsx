@@ -3027,13 +3027,14 @@ ${SHARED_RULES_OUTRO}`;
       error:  (e) => { encoderError = e; console.error("VideoEncoder:", e); },
     });
     encoder.configure({
-      codec:        "avc1.640028",   // H.264 High Profile Level 4.0
-      width:        OUT_W,
-      height:       OUT_H,
-      bitrate:      12_000_000,
-      framerate:    fps,
-      bitrateMode:  "constant",
-      latencyMode:  "quality",
+      codec:                "avc1.640028",   // H.264 High Profile Level 4.0
+      width:                OUT_W,
+      height:               OUT_H,
+      bitrate:              6_000_000,       // 6 Mbps is plenty for slideshow stills
+      framerate:            fps,
+      bitrateMode:          "constant",
+      latencyMode:          "realtime",      // flush chunks immediately; prevents GPU queue build-up across sequential encodes
+      hardwareAcceleration: "prefer-hardware",
     });
 
     // ── Encode every frame ────────────────────────────────────────────────────
@@ -3086,7 +3087,7 @@ ${SHARED_RULES_OUTRO}`;
         }
         // Throttle if the encoder queue is building up — keep it tight to
         // avoid memory pressure accumulating across multiple videos.
-        while (encoder.encodeQueueSize > 4) {
+        while (encoder.encodeQueueSize > 2) {
           await new Promise((r) => setTimeout(r, 10));
           if (cancelGenRef.current) {
             try { encoder.close(); } catch {}
@@ -3210,6 +3211,21 @@ ${SHARED_RULES_OUTRO}`;
 
     muxer.finalize();
 
+    // Release GPU-backed canvas resources so the hardware encoder starts clean
+    // for the next video — the primary cause of progressive slowdown.
+    scaleCanvas.width = 0;
+    scaleCanvas.height = 0;
+    for (const snapshots of allSlideFrames) {
+      if (!Array.isArray(snapshots)) continue;
+      for (const item of snapshots) {
+        if (Array.isArray(item)) {
+          for (const c of item) { if (c && typeof c.width === "number") { c.width = 0; } }
+        } else if (item && typeof item.width === "number") {
+          item.width = 0;
+        }
+      }
+    }
+
     return new Blob([target.buffer], { type: "video/mp4" });
   };
 
@@ -3271,6 +3287,8 @@ ${SHARED_RULES_OUTRO}`;
         const blob = await encodeWorkspaceVideoToBlob(exportCfg);
         if (cancelGenRef.current) break;
         if (!blob) continue;
+        // Brief yield so the browser can GC released canvas textures before the next encode.
+        await new Promise((r) => setTimeout(r, 300));
         const arr = new Uint8Array(await blob.arrayBuffer());
         if (isPngBytes(arr) || !isMp4Bytes(arr)) {
           setExportStatus(`Skipped video ${i + 1} — invalid MP4 payload.`);

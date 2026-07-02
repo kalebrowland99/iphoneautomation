@@ -104,6 +104,77 @@ def test_detects_ios_passkeys_passcode_dialog() -> None:
     assert ios_passkeys_passcode_dismiss_coords() == (563, 592)
 
 
+def test_detects_tiktok_security_checkup_dialog() -> None:
+    from imouse_farm.actions.permission_prompts import (
+        is_tiktok_security_checkup_dialog,
+        tiktok_security_checkup_dismiss_coords,
+    )
+
+    text = "Let's do a quick security checkup?"
+    assert is_tiktok_security_checkup_dialog(text)
+    assert tiktok_security_checkup_dismiss_coords() == (570, 501)
+
+
+@pytest.mark.asyncio
+async def test_detect_security_checkup_uses_find_text_fallback() -> None:
+    from imouse_farm.permissions.watcher import detect_tiktok_security_checkup_on_device
+
+    controller = MagicMock()
+    controller.ocr_on_device = AsyncMock(return_value="Tony.r12 Edit profile")
+    controller.ocr_items_on_device = AsyncMock(return_value=[])
+    controller.find_text_on_device = AsyncMock(
+        return_value=[{"text": "security checkup", "x": 200, "y": 300, "confidence": 0.9}]
+    )
+    visible, sample = await detect_tiktok_security_checkup_on_device(
+        controller,
+        "phone-10",
+        screen="Tony.r12 Edit profile",
+    )
+    assert visible is True
+    assert "security checkup" in sample.lower()
+    controller.find_text_on_device.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_detect_security_checkup_uses_modal_ocr() -> None:
+    from imouse_farm.permissions.watcher import detect_tiktok_security_checkup_on_device
+
+    controller = MagicMock()
+    controller.ocr_on_device = AsyncMock(return_value="Tony.r12 Edit profile")
+    controller.find_text_on_device = AsyncMock(return_value=[])
+
+    async def _ocr_items(device_id, *, is_ex=False, rect=None):
+        if is_ex and rect is not None:
+            return [{"text": "Let's do a quick security checkup", "x": 200, "y": 300}]
+        return []
+
+    controller.ocr_items_on_device = _ocr_items
+    visible, sample = await detect_tiktok_security_checkup_on_device(
+        controller,
+        "phone-10",
+        screen="Tony.r12 Edit profile",
+    )
+    assert visible is True
+    assert "security checkup" in sample.lower()
+
+
+@pytest.mark.asyncio
+async def test_permission_watcher_dismisses_security_checkup() -> None:
+    from imouse_farm.permissions.watcher import PermissionWatcher
+
+    controller = MagicMock()
+    controller.ocr_on_device = AsyncMock(
+        return_value="Let's do a quick security checkup?"
+    )
+    controller.ocr_items_on_device = AsyncMock(return_value=[])
+    controller.find_text_on_device = AsyncMock(return_value=[])
+    controller.tap = AsyncMock(return_value=True)
+    watcher = PermissionWatcher(controller, "phone-1", poll_interval_seconds=0.25)
+
+    assert await watcher._check_once() is True
+    controller.tap.assert_awaited_once_with("phone-1", 570, 501)
+
+
 @pytest.mark.asyncio
 async def test_permission_watcher_dismisses_passkeys_passcode() -> None:
     from imouse_farm.permissions.watcher import PermissionWatcher
@@ -198,6 +269,19 @@ async def test_permission_watcher_dismisses_continue_editing() -> None:
         ex=65,
         ey=0,
     )
+
+
+@pytest.mark.asyncio
+async def test_permission_watcher_manager_run_watcher_cycle() -> None:
+    from imouse_farm.permissions.watcher import PermissionWatcherManager
+
+    controller = MagicMock()
+    manager = PermissionWatcherManager(controller, poll_interval_seconds=0.25)
+    manager._watchers["phone-1"] = MagicMock()
+    manager._watchers["phone-1"].run_full_cycle = AsyncMock(return_value=True)
+
+    assert await manager.run_watcher_cycle("phone-1") is True
+    manager._watchers["phone-1"].run_full_cycle.assert_awaited_once()
 
 
 @pytest.mark.asyncio

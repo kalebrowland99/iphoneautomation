@@ -452,6 +452,7 @@ async function stopDailyRun() {
         }
 
         async function toggleWarmupSlot(slot, enabled) {
+            if (BRAND_ID !== 'valcoin') return;
             const profile = slotProfiles[`slot:${slot}`] || {};
             const body = {
                 brand: BRAND_ID,
@@ -647,7 +648,7 @@ async function stopDailyRun() {
                 const statusInfo = phoneStatusCell(d, online, pipe);
                 const profile = d?.account_profile || slotProfiles[`slot:${key}`] || null;
                 const handle = profile?.tiktok_handle || '';
-                const warmupEnabled = Boolean(profile?.warmup_enabled);
+                const warmupEnabled = BRAND_ID === 'valcoin' && Boolean(profile?.warmup_enabled);
                 const warmupDays = parseInt(profile?.warmup_days_completed || 0, 10);
                 const cantCast = Boolean(profile?.cant_cast_imouse);
                 const runCell = lastRunCell(profile);
@@ -670,7 +671,7 @@ async function stopDailyRun() {
                     <td class="phones-td phones-td-slot">${key}</td>
                     <td class="phones-td phones-td-handle">
                         ${tiktokHandleCell(handle)}
-                        ${BRAND_ID !== 'labely' ? `<span class="warmup-day-badge">${warmupDays > 0 ? `Day ${warmupDays} Warmup ✓` : 'Day 0 Warmup'}</span>` : ''}
+                        ${BRAND_ID === 'valcoin' ? `<span class="warmup-day-badge">${warmupDays > 0 ? `Day ${warmupDays} Warmup ✓` : 'Day 0 Warmup'}</span>` : ''}
                         ${cantCast ? `<span class="cant-cast-badge" title="Click to clear tag" onclick="event.stopPropagation(); clearCantCast('${key}')">⚠ cant cast iMouse</span>` : ''}
                     </td>
                     <td class="phones-td">
@@ -684,7 +685,7 @@ async function stopDailyRun() {
                         <input type="checkbox" class="phones-check" ${hasDevice ? '' : 'disabled'}
                                ${warmupEnabled ? 'checked' : ''}
                                onchange="toggleWarmupSlot('${key}', this.checked)"
-                               aria-label="Warmup before post for phone ${key}">
+                               aria-label="Warmup only (no posting) for phone ${key}">
                     </td>
                     <td class="phones-td phones-td-run">${runCell}</td>
                 </tr>`);

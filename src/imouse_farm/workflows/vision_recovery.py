@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import os
 from typing import Any
@@ -17,26 +18,86 @@ from imouse_farm.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# System prompt sent alongside every error screenshot.
-_RECOVERY_SYSTEM = """You are an iOS automation assistant for a TikTok/iPhone farm.
-A workflow step failed and the screen shows an unexpected state.
-Your job: look at the screenshot and tell us the ONE action needed to dismiss the error
-or navigate back so the automation can continue.
+# System prompt for error recovery — simple popup check.
+_RECOVERY_SYSTEM = """You are an iOS automation assistant.
+Look at this iPhone screenshot and answer ONE question:
 
-Respond with valid JSON only — no markdown, no extra text:
-{
-  "description": "<what you see on screen in 1-2 sentences>",
-  "action": "<one of: tap | home | swipe_up | swipe_down | back | wait | none>",
-  "x": <integer x coordinate to tap, omit or null if action is not tap>,
-  "y": <integer y coordinate to tap, omit or null if action is not tap>,
-  "reasoning": "<why this action will help>"
-}
+Is there a popup, alert, dialog, permission prompt, or overlay on screen that would
+block taps on the app behind it?
 
-Screen dimensions are 1170×2532 pixels (iPhone).
-If the screen looks normal and no action is needed, use action "none".
-If a dialog/popup/alert is visible, tap the dismiss/OK/Cancel/Allow/Not Now button.
-If the app crashed or shows a black screen, use action "home".
-Prioritize the least destructive action that lets automation resume."""
+If YES — respond with the coordinate to tap to dismiss it:
+{"popup": true, "x": <integer>, "y": <integer>, "reason": "<button or element you are tapping>"}
+
+If NO — respond:
+{"popup": false}
+
+Respond with valid JSON only — no markdown, no extra text.
+Screen dimensions are 1170×2532 pixels (iPhone)."""
+
+# System prompt for the goal-driven tap loop.
+_TAP_SYSTEM = """You are an iOS automation assistant controlling a real iPhone.
+You will be given a screenshot and a goal. Each turn, decide the SINGLE next tap needed.
+
+If the goal is already achieved on this screen, respond:
+{"done": true, "reason": "<why goal is complete>"}
+
+Otherwise respond with the coordinate to tap next:
+{"x": <integer>, "y": <integer>, "reason": "<element you are tapping and why>"}
+
+Rules:
+- Respond with valid JSON only — no markdown, no extra text.
+- Screen dimensions are 1170×2532 pixels (iPhone).
+- Always pick the most obvious tap target. Never return null x/y unless done.
+- After each tap you will receive a new screenshot. Keep tapping until the goal is reached."""
+
+
+def _to_jpeg(data: bytes) -> bytes | None:
+    """Convert raw screenshot bytes (BMP/PNG/JPEG/etc.) to JPEG for OpenAI."""
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(data))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+    except Exception as exc:
+        logger.warning("vision_recovery_jpeg_convert_failed", error=str(exc))
+        return None
+
+
+async def _screenshot_to_b64(controller: Any, device_id: str) -> str:
+    """Capture screenshot, convert to JPEG, return base64 string. Raises on failure."""
+    screenshot_bytes = await controller.capture_screenshot(device_id)
+    if not screenshot_bytes:
+        raise RuntimeError("Screenshot returned no data")
+    jpeg_bytes = _to_jpeg(screenshot_bytes)
+    if not jpeg_bytes:
+        raise RuntimeError("Could not convert screenshot to JPEG")
+    return base64.b64encode(jpeg_bytes).decode("ascii")
+
+
+def _make_openai_client(app_config: AppConfig) -> Any:
+    from openai import AsyncOpenAI
+
+    openai_cfg = app_config.openai
+    api_key = (os.environ.get("OPENAI_API_KEY") or openai_cfg.api_key or "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not configured")
+    return AsyncOpenAI(api_key=api_key)
+
+
+def _model(app_config: AppConfig) -> str:
+    return getattr(app_config.openai, "model", "gpt-4o-mini") or "gpt-4o-mini"
+
+
+def _strip_fences(raw: str) -> str:
+    if raw.startswith("```"):
+        raw = "\n".join(raw.splitlines()[1:])
+        if raw.endswith("```"):
+            raw = raw[: raw.rfind("```")]
+    return raw.strip()
 
 
 async def ask_vision_for_recovery(
@@ -47,137 +108,183 @@ async def ask_vision_for_recovery(
     workflow_name: str,
     error_msg: str,
     app_config: AppConfig,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """
-    Capture a screenshot and ask OpenAI Vision what action to take.
+    Screenshot the device and ask: is there a blocking popup?
 
-    Returns a dict with keys: description, action, x, y, reasoning
-    Returns None if vision is unavailable or the call fails.
+    Returns one of:
+      {"popup": True,  "x": int, "y": int, "reason": str}  → tap to dismiss
+      {"popup": False}                                       → no popup, kill+reopen TikTok
+    Raises on any failure.
+    """
+    b64 = await _screenshot_to_b64(controller, device_id)
+    client = _make_openai_client(app_config)
+    model = _model(app_config)
+
+    user_text = f'Step "{step_name}" in "{workflow_name}" failed: {error_msg}'
+    response = await client.chat.completions.create(
+        model=model,
+        max_tokens=80,
+        messages=[
+            {"role": "system", "content": _RECOVERY_SYSTEM},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}},
+                ],
+            },
+        ],
+    )
+    raw = _strip_fences((response.choices[0].message.content or "").strip())
+    result = json.loads(raw)
+    logger.info("vision_recovery_response", device_id=device_id, step=step_name, result=result)
+    return result
+
+
+async def kill_and_reopen_tiktok(
+    controller: Any,
+    device_id: str,
+    app_config: AppConfig,
+    *,
+    log_activity: Any | None = None,
+) -> None:
+    """Kill TikTok via app switcher, go home, then use vision to reopen it."""
+    if log_activity:
+        await log_activity("info", "workflow", "Vision recovery: no popup — killing and reopening TikTok", device_id)
+
+    # Kill TikTok via app switcher.
+    await controller.kill_app(device_id)
+    await asyncio.sleep(1.0)
+
+    # Go to home screen.
+    await controller.press_home(device_id)
+    await asyncio.sleep(1.5)
+
+    # Use vision to find and tap the TikTok icon.
+    try:
+        x, y, reason = await ask_vision_for_tap(
+            controller,
+            device_id,
+            goal="Tap the TikTok app icon to open TikTok",
+            app_config=app_config,
+        )
+        if x is not None:
+            if log_activity:
+                await log_activity("info", "workflow", f"Vision recovery: tapping TikTok icon at ({x}, {y}) — {reason}", device_id)
+            await controller.tap(device_id, x, y)
+            await asyncio.sleep(3.0)
+    except Exception as exc:
+        logger.warning("vision_recovery_reopen_failed", device_id=device_id, error=str(exc))
+        if log_activity:
+            await log_activity("warn", "workflow", f"Vision recovery: could not find TikTok icon — {exc}", device_id)
+
+
+async def ask_vision_for_tap(
+    controller: Any,
+    device_id: str,
+    *,
+    goal: str,
+    app_config: AppConfig,
+    client: Any | None = None,
+) -> tuple[int, int, str] | tuple[None, None, str]:
+    """
+    Screenshot the device and ask GPT what coordinate to tap next toward `goal`.
+
+    Returns:
+      (x, y, reason)       — tap this coordinate
+      (None, None, reason) — goal is already achieved ("done")
+
+    Raises on any failure (screenshot, API, parse).
+    Pass an existing `client` to reuse the same OpenAI connection across loop iterations.
     """
     openai_cfg = app_config.openai
     api_key = (os.environ.get("OPENAI_API_KEY") or openai_cfg.api_key or "").strip()
     if not api_key:
-        logger.warning("vision_recovery_no_api_key", device_id=device_id)
-        return None
+        raise RuntimeError("OPENAI_API_KEY not configured")
 
-    try:
-        screenshot_bytes = await controller.capture_screenshot(device_id)
-    except Exception as exc:
-        logger.warning("vision_recovery_screenshot_failed", device_id=device_id, error=str(exc))
-        return None
-
+    screenshot_bytes = await controller.capture_screenshot(device_id)
     if not screenshot_bytes:
-        logger.warning("vision_recovery_no_screenshot", device_id=device_id)
-        return None
+        raise RuntimeError("Screenshot returned no data")
 
-    b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+    jpeg_bytes = _to_jpeg(screenshot_bytes)
+    if not jpeg_bytes:
+        raise RuntimeError("Could not convert screenshot to JPEG")
 
-    user_text = (
-        f'Workflow: "{workflow_name}" | Step: "{step_name}"\n'
-        f'Error: {error_msg}\n\n'
-        f"What ONE action should I take to navigate out of this screen and let the automation continue?"
-    )
+    b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+    model = getattr(openai_cfg, "model", "gpt-4o-mini") or "gpt-4o-mini"
 
-    try:
+    if client is None:
         from openai import AsyncOpenAI
-
         client = AsyncOpenAI(api_key=api_key)
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            max_tokens=256,
-            messages=[
-                {"role": "system", "content": _RECOVERY_SYSTEM},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{b64}",
-                                "detail": "low",
-                            },
-                        },
-                    ],
-                },
-            ],
-        )
-        raw = response.choices[0].message.content or ""
-        result = json.loads(raw)
-        logger.info(
-            "vision_recovery_response",
-            device_id=device_id,
-            step=step_name,
-            action=result.get("action"),
-            reasoning=result.get("reasoning", ""),
-        )
-        return result
-    except Exception as exc:
-        logger.warning("vision_recovery_api_failed", device_id=device_id, error=str(exc))
-        return None
+
+    response = await client.chat.completions.create(
+        model=model,
+        max_tokens=120,
+        messages=[
+            {"role": "system", "content": _TAP_SYSTEM},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"Goal: {goal}"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"},
+                    },
+                ],
+            },
+        ],
+    )
+    raw = (response.choices[0].message.content or "").strip()
+
+    # Strip markdown fences if present.
+    if raw.startswith("```"):
+        raw = "\n".join(raw.splitlines()[1:])
+        if raw.endswith("```"):
+            raw = raw[: raw.rfind("```")]
+
+    parsed = json.loads(raw)
+
+    if parsed.get("done"):
+        reason = str(parsed.get("reason", "goal achieved"))
+        logger.info("vision_tap_done", device_id=device_id, reason=reason)
+        return None, None, reason
+
+    x = int(parsed["x"])
+    y = int(parsed["y"])
+    reason = str(parsed.get("reason", ""))
+    logger.info("vision_tap_response", device_id=device_id, x=x, y=y, reason=reason)
+    return x, y, reason
 
 
 async def execute_recovery_action(
     controller: Any,
     device_id: str,
-    action_dict: dict[str, Any],
+    result: dict[str, Any],
     *,
     log_activity: Any | None = None,
 ) -> bool:
     """
-    Execute the recovery action returned by OpenAI.
-
-    Returns True if an action was executed, False if nothing was done.
+    Tap the popup dismiss coordinate returned by ask_vision_for_recovery.
+    Returns True if a tap was executed, False if popup=False (caller handles kill/reopen).
     """
-    action = str(action_dict.get("action", "none")).lower().strip()
-    description = action_dict.get("description", "")
-    reasoning = action_dict.get("reasoning", "")
-
-    if log_activity:
-        await log_activity(
-            "info",
-            "workflow",
-            f"Vision recovery — {description} → {action} ({reasoning})",
-            device_id,
-        )
-
-    if action == "none":
+    if not result.get("popup"):
         return False
 
-    try:
-        if action == "tap":
-            x = action_dict.get("x")
-            y = action_dict.get("y")
-            if x is not None and y is not None:
-                await controller.tap(device_id, int(x), int(y))
-                await asyncio.sleep(1.5)
-                return True
-        elif action == "home":
-            await controller.press_home(device_id)
-            await asyncio.sleep(1.5)
-            return True
-        elif action == "back":
-            # Swipe from left edge to go back on iOS
-            await controller.swipe(device_id, 30, 600, 300, 600, duration_ms=200)
-            await asyncio.sleep(1.0)
-            return True
-        elif action == "swipe_up":
-            await controller.swipe(device_id, 585, 1800, 585, 400, duration_ms=300)
-            await asyncio.sleep(1.0)
-            return True
-        elif action == "swipe_down":
-            await controller.swipe(device_id, 585, 400, 585, 1800, duration_ms=300)
-            await asyncio.sleep(1.0)
-            return True
-        elif action == "wait":
-            await asyncio.sleep(3.0)
-            return True
-    except Exception as exc:
-        logger.warning(
-            "vision_recovery_action_failed",
-            device_id=device_id,
-            action=action,
-            error=str(exc),
-        )
+    x = result.get("x")
+    y = result.get("y")
+    reason = result.get("reason", "popup")
 
-    return False
+    if x is None or y is None:
+        return False
+
+    if log_activity:
+        await log_activity("info", "workflow", f"Vision recovery: dismissing popup — tapping ({x}, {y}) {reason}", device_id)
+
+    try:
+        await controller.tap(device_id, int(x), int(y))
+        await asyncio.sleep(1.5)
+        return True
+    except Exception as exc:
+        logger.warning("vision_recovery_tap_failed", device_id=device_id, error=str(exc))
+        return False

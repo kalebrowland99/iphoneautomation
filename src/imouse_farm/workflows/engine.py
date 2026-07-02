@@ -53,6 +53,7 @@ from imouse_farm.vision.template_scan import pick_detection_hit
 from imouse_farm.workflows.vision_recovery import (
     ask_vision_for_recovery,
     execute_recovery_action,
+    kill_and_reopen_tiktok,
 )
 
 logger = get_logger(__name__)
@@ -554,8 +555,15 @@ class WorkflowRunner:
         level: str,
         category: str,
         message: str,
+        *args: Any,
         **details: Any,
     ) -> None:
+        # Shared helpers (account_switch, tiktok_plus_ready, vision_recovery, warmup)
+        # sometimes pass device_id as a 4th positional when wired to db.log_activity.
+        if args:
+            extra = args[0]
+            if isinstance(extra, str) and extra.strip() and "device_id" not in details:
+                details = {**details, "passed_device_id": extra.strip()}
         await self._db.log_activity(
             level,
             category,
@@ -915,8 +923,8 @@ class WorkflowRunner:
             device_manager=self._device_manager,
             vision=self._vision,
             templates_directory=self._config.analysis.templates_directory,
-            log_activity=lambda level, category, message, **details: self._log_activity(
-                level, category, message, step=step_name, **details
+            log_activity=lambda level, category, message, *args, **details: self._log_activity(
+                level, category, message, *args, step=step_name, **details
             ),
         )
 
@@ -1571,8 +1579,8 @@ class WorkflowRunner:
             )
             return
 
-        async def _log(level: str, category: str, message: str, **details: Any) -> None:
-            await self._log_activity(level, category, message, step=step.name, **details)
+        async def _log(level: str, category: str, message: str, *args: Any, **details: Any) -> None:
+            await self._log_activity(level, category, message, *args, step=step.name, **details)
 
         await ensure_tiktok_account(
             controller=self._device_manager.controller,
@@ -1834,11 +1842,14 @@ class WorkflowRunner:
         raise RuntimeError(f"Stopped while waiting for '{target}'")
 
     async def _vision_recover(self, step: WorkflowStepConfig, exc: Exception) -> None:
-        """Ask OpenAI Vision what to tap/press to recover from a step failure.
+        """On step failure: check for a blocking popup via OpenAI Vision.
 
-        This is best-effort: if the API call fails or returns "none", we log
-        and continue to the normal on_failure handler.
+        - If a popup is found → tap to dismiss it.
+        - If no popup → kill TikTok and reopen it so the workflow can retry.
+        Best-effort: logs and continues to normal on_failure handler on any error.
         """
+        from imouse_farm.workflows.vision_recovery import kill_and_reopen_tiktok
+
         try:
             controller = self._actions._controller  # noqa: SLF001
             result = await ask_vision_for_recovery(
@@ -1849,11 +1860,20 @@ class WorkflowRunner:
                 error_msg=str(exc),
                 app_config=self._config,
             )
-            if result:
+            if result.get("popup"):
+                # Dismiss the blocking popup.
                 await execute_recovery_action(
                     controller,
                     self._device_id,
                     result,
+                    log_activity=self._log_activity,
+                )
+            else:
+                # No popup — kill and reopen TikTok.
+                await kill_and_reopen_tiktok(
+                    controller,
+                    self._device_id,
+                    self._config,
                     log_activity=self._log_activity,
                 )
         except Exception as recovery_exc:
@@ -1862,6 +1882,11 @@ class WorkflowRunner:
                 device_id=self._device_id,
                 step=step.name,
                 error=str(recovery_exc),
+            )
+            await self._log_activity(
+                "warn",
+                "workflow",
+                f"Vision recovery skipped: {type(recovery_exc).__name__}: {recovery_exc}",
             )
 
     async def _verify_screen_check(self, step: WorkflowStepConfig) -> None:

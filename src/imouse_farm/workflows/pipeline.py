@@ -286,6 +286,20 @@ class WorkflowPipeline:
         if event == "workflow_completed":
             if workflow != current:
                 return
+
+            # Track that prep finished so a restart can skip re-uploading videos.
+            if workflow == "tiktok_prep":
+                try:
+                    from imouse_farm.post.account_profile_store import mark_prep_completed
+                    from imouse_farm.post.brand_keys import brand_profile_key, device_storage_key
+                    device = self._dm.get_device(device_id)
+                    if device:
+                        base_key = device_storage_key(device_id, device.user_name)
+                        run_brand = pipe.get("brand", "labely")
+                        mark_prep_completed(base_key, brand=run_brand)
+                except Exception:  # noqa: BLE001
+                    pass
+
             pipe["index"] += 1
             if pipe["index"] >= len(steps):
                 pipe["status"] = "completed"

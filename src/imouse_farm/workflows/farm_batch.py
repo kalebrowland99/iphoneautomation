@@ -73,6 +73,7 @@ class FarmBatchRunner:
         self._stop_requested = False
         self._batch_done_events: dict[str, asyncio.Event] = {}
         self._current_brand: str = "labely"
+        self._labely_pipeline_ok: set[str] = set()
 
     def on_event(self, callback: EventCallback) -> None:
         self._event_callbacks.append(callback)
@@ -89,6 +90,22 @@ class FarmBatchRunner:
 
     def is_running(self) -> bool:
         return self._status.get("status") in ("connecting", "running", "disconnecting")
+
+    async def wait_done(self, timeout: float = 1800.0) -> None:
+        """Wait until the current batch task finishes (no-op if nothing is running).
+
+        timeout: max seconds to wait before giving up (default 30 min).
+        """
+        if self._task and not self._task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(self._task), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning("farm_batch_wait_done_timeout", timeout=timeout)
+            except Exception:
+                pass
+        # Force status out of running so the next start() is not blocked.
+        if self.is_running():
+            self._status["status"] = "completed"
 
     async def start(
         self,
@@ -108,6 +125,7 @@ class FarmBatchRunner:
             batches.append(devices[i : i + size])
 
         self._stop_requested = False
+        self._labely_pipeline_ok.clear()
         if self._permission_watchers:
             for device in devices:
                 await self._permission_watchers.ensure_watching(device.device_id)
@@ -165,6 +183,7 @@ class FarmBatchRunner:
         self._status["status"] = "idle"
         self._status["message"] = "Batch run stopped"
         self._batch_done_events.clear()
+        self._labely_pipeline_ok.clear()
         await self._emit("batch_stopped", self.get_status())
 
     async def _run_batches(
@@ -175,6 +194,7 @@ class FarmBatchRunner:
         brand: str = "labely",
     ) -> None:
         self._current_brand = brand
+        self._labely_pipeline_ok.clear()
         selected_ids = {d.device_id for batch in batches for d in batch}
         try:
             await self._disconnect_unselected_casts(selected_ids)
@@ -428,10 +448,41 @@ class FarmBatchRunner:
                         )
                         if not vc_profile.get("warmup_enabled"):
                             continue
+                        if device.device_id not in self._labely_pipeline_ok:
+                            logger.info(
+                                "batch_valcoin_warmup_skipped_no_labely",
+                                device_id=device.device_id,
+                                slot=device.user_name,
+                            )
+                            await self._db.log_activity(
+                                "info",
+                                "batch",
+                                f"ValCoin warmup skipped for slot {device.user_name} — Labely run did not finish",
+                                device.device_id,
+                            )
+                            continue
                         self._status["message"] = (
                             f"Phone {phone_num}/{phone_total}: ValCoin warmup slot {device.user_name}"
                         )
                         await self._emit("batch_running", self.get_status())
+
+                        # Ensure AirPlay is still live — the Labely pipeline's tiktok_end
+                        # workflow disconnects on some code paths before we get here.
+                        cast_ok = await self._ensure_cast(device.device_id)
+                        if not cast_ok:
+                            logger.warning(
+                                "batch_valcoin_warmup_no_cast",
+                                device_id=device.device_id,
+                                slot=device.user_name,
+                            )
+                            await self._db.log_activity(
+                                "warn",
+                                "batch",
+                                f"ValCoin warmup skipped — could not reconnect AirPlay for slot {device.user_name}",
+                                device.device_id,
+                            )
+                            continue
+
                         try:
                             await run_tiktok_warmup(
                                 self._dm.controller,
@@ -441,6 +492,7 @@ class FarmBatchRunner:
                                 device_manager=self._dm,
                                 stop_check=lambda: self._stop_requested,
                                 log_activity=self._db.log_activity,
+                                after_labely=True,
                             )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
@@ -448,6 +500,12 @@ class FarmBatchRunner:
                                 device_id=device.device_id,
                                 slot=device.user_name,
                                 error=str(exc),
+                            )
+                            await self._db.log_activity(
+                                "warn",
+                                "batch",
+                                f"ValCoin warmup failed for slot {device.user_name}: {exc}",
+                                device.device_id,
                             )
 
                 if not self._stop_requested:
@@ -522,6 +580,8 @@ class FarmBatchRunner:
         entry = {"slot": slot, "device_id": device_id, "event": event}
         if event == "pipeline_completed":
             self._status["completed"].append(entry)
+            if self._current_brand == "labely":
+                self._labely_pipeline_ok.add(str(device_id))
         else:
             entry["reason"] = data.get("message", event)
             self._status["failed"].append(entry)

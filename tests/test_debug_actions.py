@@ -118,7 +118,23 @@ def test_list_account_switch_debug_tests() -> None:
     ids = {t["id"] for t in tests}
     assert "account-ensure-full" in ids
     assert "account-tap-profile-tab" in ids
+    assert "account-dismiss-security-checkup" in ids
     assert all(t["group"] == "account_switch" for t in tests)
+
+
+def test_security_checkup_debug_tests_registered() -> None:
+    registry = get_debug_registry()
+    for test_id in ("post-dismiss-security-checkup", "account-dismiss-security-checkup"):
+        spec = registry[test_id]
+        assert spec["kind"] == "tap_xy"
+        assert spec["x"] == 570
+        assert spec["y"] == 501
+
+
+def test_permission_watcher_run_debug_registered() -> None:
+    registry = get_debug_registry()
+    assert registry["run-permission-watcher"]["kind"] == "permission_watcher_run"
+    assert registry["account-run-permission-watcher"]["kind"] == "permission_watcher_run"
 
 
 def test_list_slideshow_debug_tests() -> None:

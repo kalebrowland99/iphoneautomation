@@ -74,6 +74,12 @@
   text-align: center;
 }
 
+/* Warmup is ValCoin-only; hide on Labely so toggles don't mirror across tabs. */
+body.brand-labely .phones-th-warmup,
+body.brand-labely .phones-td-warmup {
+  display: none;
+}
+
 .phones-table-row {
   border-bottom: 1px solid hsl(var(--border));
   cursor: pointer;

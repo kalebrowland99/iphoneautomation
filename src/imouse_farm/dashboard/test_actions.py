@@ -27,6 +27,7 @@ from imouse_farm.actions.permission_prompts import (
     UPLOAD_PERMISSION_TEXTS,
     analyze_popup_screen,
     known_popup_watcher_button_labels,
+    tiktok_security_checkup_dismiss_coords,
 )
 from imouse_farm.config.models import ActionType
 from imouse_farm.vision.fallbacks import (
@@ -90,6 +91,7 @@ DebugKind = Literal[
     "gallery_then_recents",
     "hvitserk_after_favorites",
     "tiktok_popup_scan",
+    "permission_watcher_run",
     "close_app",
     "kill_app",
     "home",
@@ -110,6 +112,8 @@ _POST_DEBUG_LIST_PRIORITY = (
     "tap-plus",
     "detect-tiktok-popups",
     "dismiss-tiktok-popup",
+    "run-permission-watcher",
+    "post-dismiss-security-checkup",
     "post-tap-gallery-recents",
     "post-wait-recents",
     "post-tap-gallery-item",
@@ -153,9 +157,13 @@ _ACCOUNT_SWITCH_DEBUG_LIST_PRIORITY = (
     "account-swipe-continue-editing",
     "account-scan-popups",
     "account-dismiss-popup",
+    "account-run-permission-watcher",
+    "account-dismiss-security-checkup",
 )
 
 OFFLINE_HINT = "Device offline — click Connect AirPlay first"
+
+_SECURITY_CHECKUP_DISMISS_X, _SECURITY_CHECKUP_DISMISS_Y = tiktok_security_checkup_dismiss_coords()
 
 HVITSERK_CHOICE_TEXTS = [
     "Hvitserk's choice",
@@ -366,6 +374,22 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "post",
         "apply_watcher": True,
         "hint": "Same as scan, but runs one permission-watcher cycle and taps if a known popup is found.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "run-permission-watcher": {
+        "label": "Run permission watcher (full cycle — detect + tap)",
+        "kind": "permission_watcher_run",
+        "group": "post",
+        "hint": "Runs the live watcher once: all popup handlers, security checkup OCR, find-contacts loop — taps/swipes if anything matches (no pre-scan).",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-dismiss-security-checkup": {
+        "label": f"Post: Dismiss security checkup X ({_SECURITY_CHECKUP_DISMISS_X}, {_SECURITY_CHECKUP_DISMISS_Y})",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": _SECURITY_CHECKUP_DISMISS_X,
+        "y": _SECURITY_CHECKUP_DISMISS_Y,
+        "hint": "Show TikTok's 'Let's do a quick security checkup?' sheet first, then run.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-gallery-only": {
@@ -808,6 +832,22 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
         "hint": "Runs one watcher cycle; swipes/taps if a known popup is found.",
         "offline_hint": OFFLINE_HINT,
     },
+    "account-run-permission-watcher": {
+        "label": "Account: Run permission watcher (full cycle)",
+        "kind": "permission_watcher_run",
+        "group": "account_switch",
+        "hint": "Same as Post → Run permission watcher: full popup scan + find-contacts, tap/swipe if matched.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-dismiss-security-checkup": {
+        "label": f"Account: Dismiss security checkup X ({_SECURITY_CHECKUP_DISMISS_X}, {_SECURITY_CHECKUP_DISMISS_Y})",
+        "kind": "tap_xy",
+        "group": "account_switch",
+        "x": _SECURITY_CHECKUP_DISMISS_X,
+        "y": _SECURITY_CHECKUP_DISMISS_Y,
+        "hint": "Show TikTok's 'Let's do a quick security checkup?' sheet first, then run.",
+        "offline_hint": OFFLINE_HINT,
+    },
 }
 
 _VALCOIN_PREP_DEBUG_LIST_PRIORITY = (
@@ -1025,11 +1065,11 @@ WARMUP_DEBUG_TESTS: dict[str, DebugTest] = {
 
 VISION_DEBUG_TESTS: dict[str, DebugTest] = {
     "vision-navigate": {
-        "label": "Vision: Ask OpenAI what to tap (screenshot → GPT-4o)",
+        "label": "Vision: Tap to create a new note (Notes app test)",
         "kind": "vision_navigate",
         "group": "manual",
-        "prompt": "What should I tap to navigate this screen? Return the most important action.",
-        "hint": "Takes a screenshot, sends to GPT-4o, logs and executes the suggested action.",
+        "prompt": "Tap the button that creates a new note",
+        "hint": "Takes a screenshot, asks GPT for the tap coordinate, then taps it.",
     },
 }
 
@@ -1052,6 +1092,7 @@ DEBUG_TESTS = get_debug_registry()
 
 _DEBUG_LIST_PRIORITY = (
     "upload-gallery",
+    "run-permission-watcher",
     "prep-kill-apps",
     "clear-album",
     "list-album",
@@ -1271,6 +1312,8 @@ async def run_debug_test(
         return await vision_navigate_debug(app, device_id, test_id, spec)
     if kind == "tiktok_popup_scan":
         return await tiktok_popup_scan_debug(app, device_id, test_id, spec)
+    if kind == "permission_watcher_run":
+        return await permission_watcher_run_debug(app, device_id, test_id, spec)
     if kind == "account_switch_step":
         return await account_switch_step_debug(app, device_id, test_id, spec, brand=brand)
     if kind == "detect":
@@ -1343,6 +1386,46 @@ async def open_photos_spotlight_debug(
     return {"success": True, "message": "Opened Photos via Spotlight search"}
 
 
+async def permission_watcher_run_debug(
+    app: Any,
+    device_id: str,
+    test_id: str,
+    spec: DebugTest,
+) -> dict[str, Any]:
+    """Run one full permission-watcher poll (same handlers as production background loop)."""
+    from imouse_farm.permissions.watcher import PermissionWatcher, PermissionWatcherManager
+
+    await _require_online_device(app, device_id, spec)
+    await app.screenshot_service.capture(device_id)
+
+    managers = getattr(app, "permission_watchers", None)
+    if isinstance(managers, PermissionWatcherManager):
+        handled = await managers.run_watcher_cycle(device_id)
+    else:
+        watcher = PermissionWatcher(
+            app.device_manager.controller,
+            device_id,
+            device_manager=app.device_manager,
+        )
+        handled = await watcher.run_full_cycle()
+
+    await app.screenshot_service.capture(device_id)
+    message = (
+        "Permission watcher handled a popup (tap/swipe applied)"
+        if handled
+        else "Permission watcher: no known popup handled this cycle"
+    )
+    payload = {"success": True, "message": message, "handled": handled}
+    await app.db.log_activity(
+        "info" if handled else "warn",
+        "test",
+        message,
+        device_id,
+        {"test_id": test_id, **payload},
+    )
+    return payload
+
+
 async def tiktok_popup_scan_debug(
     app: Any,
     device_id: str,
@@ -1350,12 +1433,25 @@ async def tiktok_popup_scan_debug(
     spec: DebugTest,
 ) -> dict[str, Any]:
     """OCR the screen and report how PermissionWatcher would handle known popups."""
+    from imouse_farm.permissions.watcher import (
+        PermissionWatcher,
+        detect_tiktok_security_checkup_on_device,
+    )
+
     await _require_online_device(app, device_id, spec)
     ctrl = app.device_manager.controller
     await app.screenshot_service.capture(device_id)
 
     screen = await ctrl.ocr_on_device(device_id)
+    checkup_visible, checkup_ocr = await detect_tiktok_security_checkup_on_device(
+        ctrl,
+        device_id,
+        screen=screen or "",
+        device_manager=app.device_manager,
+    )
     analysis = analyze_popup_screen(screen or "")
+    if analysis.get("dialog") == "none":
+        analysis = analyze_popup_screen(checkup_ocr or screen or "")
 
     button_matches: list[dict[str, Any]] = []
     labels = known_popup_watcher_button_labels()
@@ -1384,6 +1480,10 @@ async def tiktok_popup_scan_debug(
     if dialog == "none":
         headline = "No known TikTok / permission popup detected"
         success = False
+        ocr_sample = (checkup_ocr or screen or "").strip()
+        if ocr_sample:
+            snippet = ocr_sample[:280] + ("…" if len(ocr_sample) > 280 else "")
+            watcher_detail = f"No popup matched. OCR sample: {snippet}"
     elif dialog == "photo_delete_sheet":
         headline = "Photo delete sheet (watcher skips)"
         success = True
@@ -1397,9 +1497,8 @@ async def tiktok_popup_scan_debug(
     parts = [headline]
     if button_bits:
         parts.append("Visible buttons: " + "; ".join(button_bits))
-    elif dialog == "tiktok_post_notify":
-        tx, ty = analysis.get("tap_x"), analysis.get("tap_y")
-        parts.append(f"Watcher would tap coord ({tx}, {ty})")
+    elif analysis.get("tap_x") is not None and analysis.get("tap_y") is not None:
+        parts.append(f"Watcher would tap coord ({analysis['tap_x']}, {analysis['tap_y']})")
     elif dialog == "tiktok_continue_editing":
         sx, sy = analysis.get("swipe_sx"), analysis.get("swipe_sy")
         ex, ey = analysis.get("swipe_ex"), analysis.get("swipe_ey")
@@ -1410,8 +1509,6 @@ async def tiktok_popup_scan_debug(
     message = " | ".join(parts)
 
     if spec.get("apply_watcher") and dialog not in ("none", "photo_delete_sheet"):
-        from imouse_farm.permissions.watcher import PermissionWatcher
-
         watcher = PermissionWatcher(
             ctrl, device_id, device_manager=app.device_manager
         )
@@ -1536,11 +1633,15 @@ async def vision_navigate_debug(
     test_id: str,
     spec: DebugTest,
 ) -> dict[str, Any]:
-    """Screenshot → GPT-4o Vision → log and execute the suggested action."""
-    from imouse_farm.workflows.vision_recovery import (
-        ask_vision_for_recovery,
-        execute_recovery_action,
-    )
+    """
+    Screenshot → GPT decides tap or done → tap → screenshot again → repeat.
+    Stops when GPT says done or after MAX_STEPS taps.
+    """
+    from openai import AsyncOpenAI
+
+    from imouse_farm.workflows.vision_recovery import ask_vision_for_tap
+
+    MAX_STEPS = 6
 
     dm = app.device_manager
     device = dm.get_device(device_id)
@@ -1550,49 +1651,41 @@ async def vision_navigate_debug(
         raise HTTPException(503, spec.get("offline_hint", OFFLINE_HINT))
 
     ctrl = app.device_manager.controller
-    prompt = str(spec.get("prompt") or "What should I tap to navigate this screen?")
+    goal = str(spec.get("prompt") or "Navigate to the next step")
 
-    await app.db.log_activity("info", "test", "Vision navigate: taking screenshot…", device_id)
+    openai_cfg = app.config.openai
+    import os
+    api_key = (os.environ.get("OPENAI_API_KEY") or openai_cfg.api_key or "").strip()
+    client = AsyncOpenAI(api_key=api_key)
 
-    result = await ask_vision_for_recovery(
-        ctrl,
-        device_id,
-        step_name=test_id,
-        workflow_name="vision_navigate_debug",
-        error_msg=prompt,
-        app_config=app.config,
-    )
+    await app.db.log_activity("info", "test", f"Vision: goal → {goal}", device_id)
 
-    if not result:
-        msg = "Vision navigate: OpenAI call failed or returned no result"
-        await app.db.log_activity("warn", "test", msg, device_id)
-        return {"success": False, "message": msg}
+    steps_taken = []
+    for step in range(1, MAX_STEPS + 1):
+        await app.db.log_activity("info", "test", f"Vision step {step}: taking screenshot…", device_id)
 
-    description = result.get("description", "")
-    action = result.get("action", "none")
-    x = result.get("x")
-    y = result.get("y")
-    reasoning = result.get("reasoning", "")
+        try:
+            x, y, reason = await ask_vision_for_tap(
+                ctrl, device_id, goal=goal, app_config=app.config, client=client
+            )
+        except Exception as exc:
+            msg = f"Vision step {step} failed: {type(exc).__name__}: {exc}"
+            await app.db.log_activity("warn", "test", msg, device_id)
+            return {"success": False, "message": msg, "steps": steps_taken}
 
-    log_msg = f"Vision sees: {description} → action={action}"
-    if action == "tap" and x is not None and y is not None:
-        log_msg += f" at ({x}, {y})"
-    log_msg += f" — {reasoning}"
-    await app.db.log_activity("info", "test", log_msg, device_id, {"result": result})
+        if x is None:
+            await app.db.log_activity("info", "test", f"Vision: done — {reason}", device_id)
+            return {"success": True, "message": f"Goal reached: {reason}", "steps": steps_taken}
 
-    executed = await execute_recovery_action(
-        ctrl,
-        device_id,
-        result,
-        log_activity=app.db.log_activity,
-    )
+        log_msg = f"Vision step {step}: tapping ({x}, {y}) — {reason}"
+        await app.db.log_activity("info", "test", log_msg, device_id)
+        steps_taken.append({"step": step, "x": x, "y": y, "reason": reason})
 
-    return {
-        "success": True,
-        "message": log_msg,
-        "vision_result": result,
-        "executed": executed,
-    }
+        await ctrl.tap(device_id, x, y)
+        await __import__("asyncio").sleep(1.2)
+
+    await app.db.log_activity("warn", "test", f"Vision: reached max {MAX_STEPS} steps without done", device_id)
+    return {"success": False, "message": f"Max steps ({MAX_STEPS}) reached", "steps": steps_taken}
 
 
 async def tap_ocr_debug(

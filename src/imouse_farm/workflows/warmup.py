@@ -45,11 +45,15 @@ async def run_tiktok_warmup(
     log_activity: Any | None = None,
     duration_override: float | None = None,
     skip_setup: bool = False,
+    after_labely: bool = False,
 ) -> None:
     """Verify account, tap home, then scroll the feed for the configured duration.
 
     Set skip_setup=True when TikTok is already open and on the correct account
     (e.g. debug flow where the account switch was a separate preceding step).
+
+    after_labely=True when Labely posts just finished: confirm the Labely @ first,
+    then toggle to the ValCoin account for warmup scrolling.
     """
     device_id = str(device.device_id)
     profile = get_profile_for_device(device_id, device.user_name, brand=brand)
@@ -64,17 +68,46 @@ async def run_tiktok_warmup(
             log_activity=log_activity,
         )
 
-        await ensure_tiktok_account(
-            controller=controller,
-            device_id=device_id,
-            tiktok_handle=handle,
-            navigation=app_config.tiktok_navigation,
-            log_activity=log_activity,
-            device_manager=device_manager,
-            templates_dir=app_config.analysis.templates_directory,
-            brand=brand,
-            device_user_name=device.user_name,
-        )
+        if after_labely and brand == "valcoin":
+            labely_profile = get_profile_for_device(
+                device_id, device.user_name, brand="labely"
+            )
+            labely_handle = str(labely_profile.get("tiktok_handle") or "")
+            if log_activity:
+                await log_activity(
+                    "info",
+                    "batch",
+                    f"Labely finished — switching to ValCoin @ for warmup",
+                    device_id,
+                )
+            await ensure_tiktok_account(
+                controller=controller,
+                device_id=device_id,
+                tiktok_handle=labely_handle,
+                navigation=app_config.tiktok_navigation,
+                log_activity=log_activity,
+                device_manager=device_manager,
+                templates_dir=app_config.analysis.templates_directory,
+                brand="labely",
+                device_user_name=device.user_name,
+                toggle_to_opposite=True,
+                tiktok_ready_timeout_seconds=180.0,
+            )
+        else:
+            await ensure_tiktok_account(
+                controller=controller,
+                device_id=device_id,
+                tiktok_handle=handle,
+                navigation=app_config.tiktok_navigation,
+                log_activity=log_activity,
+                device_manager=device_manager,
+                templates_dir=app_config.analysis.templates_directory,
+                brand=brand,
+                device_user_name=device.user_name,
+                # After tiktok_end kills apps + VPN, TikTok cold-start can take longer
+                # than the default 90s — give it 3 minutes before giving up.
+                tiktok_ready_timeout_seconds=180.0,
+            )
 
     sw, sh = screen_dimensions(device)
     duration = float(duration_override) if duration_override is not None else float(warmup_cfg.duration_seconds)
@@ -266,7 +299,9 @@ async def _open_tiktok_for_warmup(
             await controller.tap(device_id, int(hit["x"]), int(hit["y"]))
             if log_activity:
                 await log_activity("info", "batch", "Warmup: opened TikTok from home screen", device_id)
-            await asyncio.sleep(2.0)
+            # Extra settle time — after tiktok_end kills the app and VPN, TikTok needs
+            # several seconds to cold-start before the account-ready check begins.
+            await asyncio.sleep(8.0)
         else:
             if log_activity:
                 await log_activity("warn", "batch", "Warmup: TikTok icon not found on home screen — ensure_tiktok_account will wait", device_id)

@@ -21,6 +21,7 @@ from imouse_farm.actions.permission_prompts import (
     is_tiktok_live_feed_dialog,
     is_ios_passkeys_passcode_dialog,
     is_tiktok_post_notify_dialog,
+    is_tiktok_security_checkup_dialog,
     is_tiktok_viewer_history_dialog,
     is_tiktok_avatar_style_dialog,
     is_tiktok_virtual_items_policies_dialog,
@@ -31,9 +32,12 @@ from imouse_farm.actions.permission_prompts import (
     tiktok_dont_allow_button_texts,
     tiktok_got_it_button_texts,
     tiktok_not_now_button_texts,
+    tiktok_security_checkup_modal_rect_pct,
+    tiktok_security_checkup_search_texts,
     ios_passkeys_passcode_dismiss_coords,
     tiktok_avatar_style_dismiss_coords,
     tiktok_post_notify_dismiss_coords,
+    tiktok_security_checkup_dismiss_coords,
     tiktok_viewer_history_save_button_texts,
 )
 from imouse_farm.actions.pre_touch_reset import (
@@ -43,10 +47,87 @@ from imouse_farm.actions.pre_touch_reset import (
 from imouse_farm.controller.device_controller import DeviceController
 from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.utils.logging import get_logger
+from imouse_farm.vision.template_scan import ocr_rect_from_pct
 
 logger = get_logger(__name__)
 
 POST_DISMISS_SETTLE_SECONDS = 0.5
+
+
+def _device_screen_size(device_manager: DeviceManager | None, device_id: str) -> tuple[int, int]:
+    if device_manager:
+        device = device_manager.get_device(device_id)
+        if device and device.screen_width and device.screen_height:
+            return int(device.screen_width), int(device.screen_height)
+    return 406, 720
+
+
+async def _ocr_join(
+    controller: Any,
+    device_id: str,
+    *,
+    is_ex: bool = False,
+    rect: list[int] | None = None,
+) -> str:
+    items = await controller.ocr_items_on_device(device_id, is_ex=is_ex, rect=rect)
+    return " ".join(str(item.get("text", "")) for item in items if item.get("text"))
+
+
+async def collect_security_checkup_ocr(
+    controller: Any,
+    device_id: str,
+    *,
+    screen: str | None = None,
+    device_manager: DeviceManager | None = None,
+) -> str:
+    """Merge full-screen + center-modal OCR (same sources the watcher uses)."""
+    sw, sh = _device_screen_size(device_manager, device_id)
+    modal_rect = ocr_rect_from_pct(sw, sh, list(tiktok_security_checkup_modal_rect_pct()))
+    full = screen if screen is not None else await _ocr_join(controller, device_id)
+    modal_ex = await _ocr_join(controller, device_id, is_ex=True, rect=modal_rect)
+    full_ex = await _ocr_join(controller, device_id, is_ex=True)
+    return "\n".join(part for part in (full, modal_ex, full_ex) if part)
+
+
+async def detect_tiktok_security_checkup_on_device(
+    controller: Any,
+    device_id: str,
+    *,
+    screen: str | None = None,
+    device_manager: DeviceManager | None = None,
+) -> tuple[bool, str]:
+    """Detect the security checkup sheet using the same OCR stack as other popups, plus modal crop."""
+    combined = await collect_security_checkup_ocr(
+        controller,
+        device_id,
+        screen=screen,
+        device_manager=device_manager,
+    )
+    if is_tiktok_security_checkup_dialog(combined):
+        return True, combined
+
+    sw, sh = _device_screen_size(device_manager, device_id)
+    modal_rect = ocr_rect_from_pct(sw, sh, list(tiktok_security_checkup_modal_rect_pct()))
+    for rect in (modal_rect, None):
+        matches = await controller.find_text_on_device(
+            device_id,
+            tiktok_security_checkup_search_texts(),
+            threshold=0.45,
+            contain=True,
+            is_ex=True,
+            rect=rect,
+        )
+        if not matches:
+            continue
+        joined = " ".join(str(m.get("text", "")) for m in matches if m.get("text"))
+        probe = f"{combined}\n{joined}".strip()
+        if is_tiktok_security_checkup_dialog(probe):
+            return True, probe
+        for match in matches:
+            line = str(match.get("text", ""))
+            if is_tiktok_security_checkup_dialog(line):
+                return True, f"{combined}\n{line}".strip()
+    return False, combined
 
 
 class PermissionWatcher:
@@ -220,6 +301,27 @@ class PermissionWatcher:
                     await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
                     return True
 
+            checkup_visible, _ = await detect_tiktok_security_checkup_on_device(
+                self._controller,
+                self._device_id,
+                screen=screen,
+                device_manager=self._device_manager,
+            )
+            if checkup_visible:
+                tapped = await self._dismiss_security_checkup()
+                if tapped:
+                    logger.info(
+                        "tiktok_popup_dismiss",
+                        device_id=self._device_id,
+                        dialog="security_checkup",
+                        text=tapped.get("text", ""),
+                        x=tapped.get("x"),
+                        y=tapped.get("y"),
+                    )
+                    await self._touch_activity()
+                    await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
+                    return True
+
             if is_ios_passkeys_passcode_dialog(screen):
                 tapped = await self._dismiss_passkeys_passcode()
                 if tapped:
@@ -319,6 +421,12 @@ class PermissionWatcher:
                 await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
                 return True
             return False
+
+    async def run_full_cycle(self) -> bool:
+        """One production-equivalent poll: main popup scan then find-contacts loop."""
+        if await self._check_once():
+            return True
+        return await self._check_contacts_once()
 
     async def _check_contacts_once(self) -> bool:
         """Tap Don't allow when the TikTok find-contacts sheet is visible.
@@ -457,6 +565,13 @@ class PermissionWatcher:
             return None
         return {"text": "post_notify_dismiss", "x": x, "y": y}
 
+    async def _dismiss_security_checkup(self) -> dict[str, Any] | None:
+        x, y = tiktok_security_checkup_dismiss_coords()
+        await self._pre_touch_if_tiktok()
+        if not await self._controller.tap(self._device_id, x, y):
+            return None
+        return {"text": "security_checkup_dismiss", "x": x, "y": y}
+
     async def _dismiss_passkeys_passcode(self) -> dict[str, Any] | None:
         x, y = ios_passkeys_passcode_dismiss_coords()
         await self._pre_touch_if_tiktok()
@@ -577,6 +692,12 @@ class PermissionWatcherManager:
         await self.ensure_watching(device_id)
         watcher = self._watchers[device_id]
         return await watcher._check_once()
+
+    async def run_watcher_cycle(self, device_id: str) -> bool:
+        """Run one full watcher poll (main scan + find-contacts loop)."""
+        await self.ensure_watching(device_id)
+        watcher = self._watchers[device_id]
+        return await watcher.run_full_cycle()
 
     async def stop_all(self) -> None:
         for device_id in list(self._watchers.keys()):

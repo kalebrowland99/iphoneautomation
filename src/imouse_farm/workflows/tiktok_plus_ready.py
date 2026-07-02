@@ -93,8 +93,8 @@ async def wait_for_tiktok_plus_visible(
                 await log_activity(
                     "info",
                     "workflow",
-                    f"TikTok ready — + visible after {elapsed:.1f}s (attempt {attempt})",
-                    confidence=float(hit.get("confidence", 0)),
+                    f"TikTok ready — + visible after {elapsed:.1f}s (attempt {attempt}, confidence {hit.get('confidence', 0):.2f})",
+                    device_id,
                 )
             return True
         remaining = deadline - time.monotonic()

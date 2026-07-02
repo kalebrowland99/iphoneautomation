@@ -118,6 +118,48 @@ TIKTOK_POST_NOTIFY_KEYWORDS = (
     "post interactions?",
 )
 
+# TikTok: "Let's do a quick security checkup?" → tap X at (570, 501).
+TIKTOK_SECURITY_CHECKUP_DISMISS_X = 570
+TIKTOK_SECURITY_CHECKUP_DISMISS_Y = 501
+
+TIKTOK_SECURITY_CHECKUP_KEYWORDS = (
+    "let's do a quick security checkup",
+    "lets do a quick security checkup",
+    "do a quick security checkup",
+    "quick security checkup",
+    "security check up",
+    "security checkup",
+)
+
+TIKTOK_SECURITY_CHECKUP_BODY_KEYWORDS = (
+    "complete a few personalized security tips",
+    "personalized security tips to strengthen",
+    "personalized security tips",
+    "strengthen the safety of your account",
+)
+
+TIKTOK_SECURITY_CHECKUP_COMPACT_NEEDLES = (
+    "securitycheckup",
+    "quicksecuritycheckup",
+    "letsdoaquicksecuritycheckup",
+    "personalizedsecuritytips",
+    "strengthenthesafetyofyouraccount",
+)
+
+# Center modal crop — full-screen OCR often reads the profile behind this sheet.
+TIKTOK_SECURITY_CHECKUP_MODAL_RECT_PCT = (0.05, 0.10, 0.95, 0.90)
+
+TIKTOK_SECURITY_CHECKUP_SHORT_SEARCH_TEXTS = (
+    "checkup",
+    "security checkup",
+    "quick security checkup",
+    "security tips",
+    "personalized security",
+    "personalized security tips",
+    "strengthen the safety",
+    "Continue",
+)
+
 TIKTOK_CONTINUE_EDITING_KEYWORDS = (
     "continue editing this post",
     "continue editing",
@@ -677,6 +719,49 @@ def tiktok_post_notify_dismiss_coords() -> tuple[int, int]:
     return TIKTOK_POST_NOTIFY_DISMISS_X, TIKTOK_POST_NOTIFY_DISMISS_Y
 
 
+def is_tiktok_security_checkup_dialog(ocr_text: str) -> bool:
+    """True when TikTok shows the quick security checkup sheet."""
+    text = str(ocr_text or "")
+    if not text.strip():
+        return False
+    phrases = (*TIKTOK_SECURITY_CHECKUP_KEYWORDS, *TIKTOK_SECURITY_CHECKUP_BODY_KEYWORDS)
+    if any(ocr_contains_phrase(text, phrase) for phrase in phrases):
+        return True
+    compact = ocr_compact(text)
+    if any(needle in compact for needle in TIKTOK_SECURITY_CHECKUP_COMPACT_NEEDLES):
+        return True
+    if "checkup" in compact and any(
+        token in compact
+        for token in ("security", "personalized", "quick", "strengthen", "continue", "safety")
+    ):
+        return True
+    return False
+
+
+def tiktok_security_checkup_search_texts() -> list[str]:
+    """Targeted find_text queries when full-screen OCR misses the modal title."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for phrase in (
+        *TIKTOK_SECURITY_CHECKUP_SHORT_SEARCH_TEXTS,
+        *TIKTOK_SECURITY_CHECKUP_KEYWORDS,
+        *TIKTOK_SECURITY_CHECKUP_BODY_KEYWORDS,
+    ):
+        key = phrase.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(phrase)
+    return out
+
+
+def tiktok_security_checkup_modal_rect_pct() -> tuple[float, float, float, float]:
+    return TIKTOK_SECURITY_CHECKUP_MODAL_RECT_PCT
+
+
+def tiktok_security_checkup_dismiss_coords() -> tuple[int, int]:
+    return TIKTOK_SECURITY_CHECKUP_DISMISS_X, TIKTOK_SECURITY_CHECKUP_DISMISS_Y
+
+
 def is_ios_passkeys_passcode_dialog(ocr_text: str) -> bool:
     """True when Apple shows the Passkeys require a passcode / Touch ID sheet."""
     text = str(ocr_text or "").lower()
@@ -860,6 +945,18 @@ def analyze_popup_screen(ocr_text: str) -> dict[str, Any]:
             "dialog": "tiktok_post_notify",
             "watcher_action": "tap_coord",
             "watcher_detail": f"Tap dismiss at ({x}, {y}) — no button OCR.",
+            "button_labels": [],
+            "tap_x": x,
+            "tap_y": y,
+            "ocr_snippet": snippet,
+        }
+
+    if is_tiktok_security_checkup_dialog(text):
+        x, y = tiktok_security_checkup_dismiss_coords()
+        return {
+            "dialog": "tiktok_security_checkup",
+            "watcher_action": "tap_coord",
+            "watcher_detail": f"Tap dismiss at ({x}, {y}) on security checkup sheet.",
             "button_labels": [],
             "tap_x": x,
             "tap_y": y,
