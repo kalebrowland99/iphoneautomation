@@ -774,7 +774,16 @@ class SlideshowOrchestrator:
             )
             started = await self._farm_batch.start([device], brand=job.brand)
             if started:
-                await self._farm_batch.wait_done()
+                if not await self._farm_batch.wait_done():
+                    await self._jobs.update(
+                        job_id,
+                        phase="batch",
+                        message=(
+                            f"Phone {idx}/{total}: still running {slot} "
+                            f"(post + warmup can exceed 30 min)…"
+                        ),
+                    )
+                await self._farm_batch.wait_until_idle()
             else:
                 logger.warning("per_slot_batch_not_started", slot=slot)
             completed += 1

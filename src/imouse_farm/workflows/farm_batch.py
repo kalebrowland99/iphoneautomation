@@ -90,21 +90,33 @@ class FarmBatchRunner:
     def is_running(self) -> bool:
         return self._status.get("status") in ("connecting", "running", "disconnecting")
 
-    async def wait_done(self, timeout: float = 1800.0) -> None:
+    def _batch_wait_timeout_seconds(self) -> float:
+        """Max seconds to wait for one phone's batch (post + chained ValCoin warmup)."""
+        return max(1800.0, float(self._config.batch_device_timeout_seconds))
+
+    async def wait_done(self, timeout: float | None = None) -> bool:
         """Wait until the current batch task finishes (no-op if nothing is running).
 
-        timeout: max seconds to wait before giving up (default 30 min).
+        Returns True when the task completed, False if *timeout* elapsed first.
+        When False, the batch may still be running — call ``wait_until_idle()``
+        before starting the next phone.
         """
+        limit = float(timeout) if timeout is not None else self._batch_wait_timeout_seconds()
         if self._task and not self._task.done():
             try:
-                await asyncio.wait_for(asyncio.shield(self._task), timeout=timeout)
+                await asyncio.wait_for(asyncio.shield(self._task), timeout=limit)
             except asyncio.TimeoutError:
-                logger.warning("farm_batch_wait_done_timeout", timeout=timeout)
+                logger.warning("farm_batch_wait_done_timeout", timeout=limit)
+                return False
             except Exception:
-                pass
-        # Force status out of running so the next start() is not blocked.
-        if self.is_running():
-            self._status["status"] = "completed"
+                logger.exception("farm_batch_wait_done_error")
+                return False
+        return self._task is None or self._task.done()
+
+    async def wait_until_idle(self) -> None:
+        """Block until the batch asyncio task finishes (no timeout)."""
+        if self._task and not self._task.done():
+            await asyncio.shield(self._task)
 
     async def start(
         self,

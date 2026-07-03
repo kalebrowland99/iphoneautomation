@@ -76,7 +76,9 @@ async def test_stop_does_not_disconnect_airplay() -> None:
 async def test_pipeline_stopped_does_not_disconnect_airplay() -> None:
     dm = MagicMock()
     dm.disconnect_airplay = AsyncMock(return_value=True)
-    dm.get_device = MagicMock(return_value=SimpleNamespace(user_name="1"))
+    dm.get_device = MagicMock(
+        return_value=SimpleNamespace(device_id="phone-1", user_name="1")
+    )
     runner = FarmBatchRunner(
         BatchConfig(disconnect_on_complete=True),
         _APP,
@@ -101,7 +103,9 @@ async def test_pipeline_stopped_does_not_disconnect_airplay() -> None:
 async def test_pipeline_completed_disconnects_when_configured() -> None:
     dm = MagicMock()
     dm.disconnect_airplay = AsyncMock(return_value=True)
-    dm.get_device = MagicMock(return_value=SimpleNamespace(user_name="1"))
+    dm.get_device = MagicMock(
+        return_value=SimpleNamespace(device_id="phone-1", user_name="1")
+    )
     runner = FarmBatchRunner(
         BatchConfig(disconnect_on_complete=True),
         _APP,
@@ -119,6 +123,62 @@ async def test_pipeline_completed_disconnects_when_configured() -> None:
     )
 
     dm.disconnect_airplay.assert_awaited_once_with("phone-1")
+
+
+@pytest.mark.asyncio
+async def test_wait_done_does_not_force_completed_on_timeout() -> None:
+    runner = FarmBatchRunner(
+        BatchConfig(batch_device_timeout_seconds=7200),
+        _APP,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        auto_generate_captions=False,
+    )
+
+    async def slow_batch() -> None:
+        runner._status["status"] = "running"
+        try:
+            await asyncio.sleep(60)
+        finally:
+            runner._status["status"] = "completed"
+
+    runner._task = asyncio.create_task(slow_batch())
+    runner._status["status"] = "running"
+    assert runner.is_running()
+
+    assert await runner.wait_done(timeout=0.01) is False
+    assert runner.is_running()
+    assert runner._status["status"] == "running"
+
+    runner._task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await runner._task
+
+
+@pytest.mark.asyncio
+async def test_wait_until_idle_blocks_until_task_finishes() -> None:
+    runner = FarmBatchRunner(
+        BatchConfig(),
+        _APP,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        auto_generate_captions=False,
+    )
+    done = asyncio.Event()
+
+    async def batch() -> None:
+        runner._status["status"] = "running"
+        await asyncio.sleep(0.05)
+        runner._status["status"] = "completed"
+        done.set()
+
+    runner._task = asyncio.create_task(batch())
+    assert await runner.wait_done(timeout=0.01) is False
+    await runner.wait_until_idle()
+    assert done.is_set()
+    assert runner._status["status"] == "completed"
 
 
 @pytest.mark.asyncio
