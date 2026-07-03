@@ -89,3 +89,31 @@ def test_handle_match_queries_variants() -> None:
     queries = store.handle_match_queries("@TestUser")
     assert "@TestUser" in queries
     assert "TestUser" in queries
+
+
+def test_reset_last_run_state_clears_sticker_fields() -> None:
+    key = "slot:4"
+    store.mark_run_success(key, posts_completed=3, brand="labely")
+    store.mark_prep_completed(key, brand="labely")
+
+    store.reset_last_run_state(key, brand="labely")
+    profile = store.get_brand_profile(key, "labely")
+
+    assert profile["last_run_status"] == "idle"
+    assert profile["last_run_at"] is None
+    assert profile["last_error"] == ""
+    assert profile["posts_completed"] == 0
+    assert profile["prep_completed_at"] is not None
+
+
+def test_reset_all_session_states_clears_prep_and_last_run() -> None:
+    store.mark_run_failed("slot:2", message="boom", brand="valcoin")
+    store.mark_prep_completed("slot:2", brand="valcoin")
+
+    cleared = store.reset_all_session_states(farm_slots=3)
+
+    assert cleared == ["1", "2", "3"]
+    profile = store.get_brand_profile("slot:2", "valcoin")
+    assert profile["last_run_status"] == "idle"
+    assert profile["last_run_at"] is None
+    assert profile["prep_completed_at"] is None

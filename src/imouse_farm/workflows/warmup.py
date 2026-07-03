@@ -13,6 +13,8 @@ from imouse_farm.actions.vpn_shadowrocket import (
     SHADOWROCKET_ICON_X,
     SHADOWROCKET_ICON_Y,
     TEMPLATE_THRESHOLD,
+    TIKTOK_HOME_ICON_X,
+    TIKTOK_HOME_ICON_Y,
     VPN_TOGGLE_X,
     VPN_TOGGLE_Y,
 )
@@ -22,7 +24,7 @@ from imouse_farm.post.account_profile_store import (
     increment_warmup_days,
 )
 from imouse_farm.utils.logging import get_logger
-from imouse_farm.workflows.account_switch import ensure_tiktok_account
+from imouse_farm.workflows.account_switch import ClearPopupsFn, ensure_tiktok_account
 from imouse_farm.workflows.feed_scroll import (
     random_center_double_tap_coords,
     screen_dimensions,
@@ -46,6 +48,8 @@ async def run_tiktok_warmup(
     duration_override: float | None = None,
     skip_setup: bool = False,
     after_labely: bool = False,
+    clear_popups: ClearPopupsFn | None = None,
+    permission_watchers: Any | None = None,
 ) -> None:
     """Verify account, tap home, then scroll the feed for the configured duration.
 
@@ -60,7 +64,17 @@ async def run_tiktok_warmup(
     handle = str(profile.get("tiktok_handle") or "")
     warmup_cfg = app_config.batch.warmup
 
-    if not skip_setup:
+    dismiss_popups = clear_popups
+    if dismiss_popups is None and permission_watchers is not None:
+        async def dismiss_popups(context: str) -> bool:
+            cleared = 0
+            for _ in range(5):
+                if not await permission_watchers.try_dismiss(device_id):
+                    break
+                cleared += 1
+            return cleared > 0
+
+    if not skip_setup and not (after_labely and brand == "valcoin"):
         await _open_tiktok_for_warmup(
             controller,
             device_id,
@@ -68,6 +82,7 @@ async def run_tiktok_warmup(
             log_activity=log_activity,
         )
 
+    if not skip_setup:
         if after_labely and brand == "valcoin":
             labely_profile = get_profile_for_device(
                 device_id, device.user_name, brand="labely"
@@ -92,6 +107,7 @@ async def run_tiktok_warmup(
                 device_user_name=device.user_name,
                 toggle_to_opposite=True,
                 tiktok_ready_timeout_seconds=180.0,
+                clear_popups=dismiss_popups,
             )
         else:
             await ensure_tiktok_account(
@@ -107,6 +123,7 @@ async def run_tiktok_warmup(
                 # After tiktok_end kills apps + VPN, TikTok cold-start can take longer
                 # than the default 90s — give it 3 minutes before giving up.
                 tiktok_ready_timeout_seconds=180.0,
+                clear_popups=dismiss_popups,
             )
 
     sw, sh = screen_dimensions(device)
@@ -292,22 +309,25 @@ async def _open_tiktok_for_warmup(
     await controller.home(device_id)
     await asyncio.sleep(1.5)
 
-    tiktok_template = Path(templates_dir) / "tiktok.jpg"
-    if tiktok_template.is_file():
-        hit = await controller.find_template_on_device(device_id, tiktok_template, 0.55)
-        if hit:
-            await controller.tap(device_id, int(hit["x"]), int(hit["y"]))
-            if log_activity:
-                await log_activity("info", "batch", "Warmup: opened TikTok from home screen", device_id)
-            # Extra settle time — after tiktok_end kills the app and VPN, TikTok needs
-            # several seconds to cold-start before the account-ready check begins.
-            await asyncio.sleep(8.0)
-        else:
-            if log_activity:
-                await log_activity("warn", "batch", "Warmup: TikTok icon not found on home screen — ensure_tiktok_account will wait", device_id)
-    else:
+    ok = await controller.tap(device_id, TIKTOK_HOME_ICON_X, TIKTOK_HOME_ICON_Y)
+    if ok:
         if log_activity:
-            await log_activity("warn", "batch", "Warmup: no tiktok.jpg template — skipping open step", device_id)
+            await log_activity(
+                "info",
+                "batch",
+                f"Warmup: opened TikTok at ({TIKTOK_HOME_ICON_X}, {TIKTOK_HOME_ICON_Y})",
+                device_id,
+            )
+        # Extra settle time — after tiktok_end kills the app and VPN, TikTok needs
+        # several seconds to cold-start before the account-ready check begins.
+        await asyncio.sleep(8.0)
+    elif log_activity:
+        await log_activity(
+            "warn",
+            "batch",
+            f"Warmup: TikTok tap failed at ({TIKTOK_HOME_ICON_X}, {TIKTOK_HOME_ICON_Y})",
+            device_id,
+        )
 
 
 async def _ensure_vpn_on(

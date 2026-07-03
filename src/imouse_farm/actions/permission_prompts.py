@@ -160,6 +160,33 @@ TIKTOK_SECURITY_CHECKUP_SHORT_SEARCH_TEXTS = (
     "Continue",
 )
 
+# TikTok: "Add phone" sheet → tap X at (564, 260).
+TIKTOK_ADD_PHONE_DISMISS_X = 564
+TIKTOK_ADD_PHONE_DISMISS_Y = 260
+
+TIKTOK_ADD_PHONE_KEYWORDS = (
+    "add phone",
+    "add your phone",
+    "add a phone",
+    "add phone number",
+    "add your phone number",
+)
+
+TIKTOK_ADD_PHONE_COMPACT_NEEDLES = (
+    "addphone",
+    "addyourphone",
+    "addphonenumber",
+)
+
+TIKTOK_ADD_PHONE_SHORT_SEARCH_TEXTS = (
+    "add phone",
+    "add your phone",
+    "add phone number",
+)
+
+# Same center modal crop as security checkup — full-screen OCR often misses the sheet.
+TIKTOK_ADD_PHONE_MODAL_RECT_PCT = TIKTOK_SECURITY_CHECKUP_MODAL_RECT_PCT
+
 TIKTOK_CONTINUE_EDITING_KEYWORDS = (
     "continue editing this post",
     "continue editing",
@@ -174,10 +201,7 @@ TIKTOK_GET_NOTIFIED_BUTTON_LABELS = (
     "get notified!",
 )
 
-# Apple Passkeys sheet: "Passkeys require a passcode and work best with Touch ID" → tap X.
-IOS_PASSKEYS_PASSCODE_DISMISS_X = 563
-IOS_PASSKEYS_PASSCODE_DISMISS_Y = 592
-
+# Apple Passkeys sheet: "Passkeys require a passcode and work best with Touch ID" → press Home.
 IOS_PASSKEYS_PASSCODE_KEYWORDS = (
     "passkeys require a passcode",
     "require a passcode and work best with touch id",
@@ -204,6 +228,42 @@ TIKTOK_AVATAR_STYLE_KEYWORDS = (
     "your avatar, your style",
     "your avatar your style",
 )
+
+# TikTok: "Let AI pick for you" sheet (gallery flow) → tap dismiss at (184, 972).
+TIKTOK_AI_PICK_DISMISS_X = 184
+TIKTOK_AI_PICK_DISMISS_Y = 972
+
+TIKTOK_AI_PICK_KEYWORDS = (
+    "let ai pick for you",
+    "let ai pick",
+)
+
+TIKTOK_AI_PICK_BODY_KEYWORDS = (
+    "ai matches your photos and videos",
+    "ai matches your photos",
+    "while ai picks",
+    "create a video instantly",
+    "different themes",
+)
+
+TIKTOK_AI_PICK_COMPACT_NEEDLES = (
+    "letaipickforyou",
+    "letaipick",
+    "aimatchesyourphotos",
+    "whileaipicks",
+)
+
+TIKTOK_AI_PICK_SEARCH_TEXTS = (
+    "Let AI pick for you",
+    "Let AI pick",
+    "AI pick for you",
+    "AI matches your photos",
+    "while AI picks",
+    "create a video instantly",
+)
+
+# Center modal — full-screen OCR often reads Recents behind this sheet.
+TIKTOK_AI_PICK_MODAL_RECT_PCT = (0.05, 0.12, 0.95, 0.92)
 
 # TikTok: "Virtual Items and Rewards Policies update" → tap Got it.
 TIKTOK_VIRTUAL_ITEMS_POLICIES_KEYWORDS = (
@@ -637,6 +697,8 @@ def delete_match_is_stable(first: dict, second: dict, *, tolerance: int = 45) ->
 
 def is_permission_dialog_text(ocr_text: str) -> bool:
     """True when on-screen OCR looks like an iOS permission alert."""
+    if is_tiktok_ai_pick_dialog(ocr_text):
+        return False
     text = ocr_text.lower()
     has_buttons = "allow" in text and _has_deny_permission_button(ocr_text)
     has_dialog_phrase = any(
@@ -762,6 +824,37 @@ def tiktok_security_checkup_dismiss_coords() -> tuple[int, int]:
     return TIKTOK_SECURITY_CHECKUP_DISMISS_X, TIKTOK_SECURITY_CHECKUP_DISMISS_Y
 
 
+def is_tiktok_add_phone_dialog(ocr_text: str) -> bool:
+    """True when TikTok shows the Add phone sheet."""
+    text = str(ocr_text or "")
+    if not text.strip():
+        return False
+    if any(ocr_contains_phrase(text, phrase) for phrase in TIKTOK_ADD_PHONE_KEYWORDS):
+        return True
+    compact = ocr_compact(text)
+    return any(needle in compact for needle in TIKTOK_ADD_PHONE_COMPACT_NEEDLES)
+
+
+def tiktok_add_phone_search_texts() -> list[str]:
+    """Targeted find_text queries when full-screen OCR misses the modal title."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for phrase in (*TIKTOK_ADD_PHONE_SHORT_SEARCH_TEXTS, *TIKTOK_ADD_PHONE_KEYWORDS):
+        key = phrase.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(phrase)
+    return out
+
+
+def tiktok_add_phone_modal_rect_pct() -> tuple[float, float, float, float]:
+    return TIKTOK_ADD_PHONE_MODAL_RECT_PCT
+
+
+def tiktok_add_phone_dismiss_coords() -> tuple[int, int]:
+    return TIKTOK_ADD_PHONE_DISMISS_X, TIKTOK_ADD_PHONE_DISMISS_Y
+
+
 def is_ios_passkeys_passcode_dialog(ocr_text: str) -> bool:
     """True when Apple shows the Passkeys require a passcode / Touch ID sheet."""
     text = str(ocr_text or "").lower()
@@ -772,10 +865,6 @@ def is_ios_passkeys_passcode_dialog(ocr_text: str) -> bool:
     if "passkey" in text and "touch id" in text:
         return True
     return False
-
-
-def ios_passkeys_passcode_dismiss_coords() -> tuple[int, int]:
-    return IOS_PASSKEYS_PASSCODE_DISMISS_X, IOS_PASSKEYS_PASSCODE_DISMISS_Y
 
 
 def is_tiktok_viewer_history_dialog(ocr_text: str) -> bool:
@@ -806,6 +895,140 @@ def is_tiktok_avatar_style_dialog(ocr_text: str) -> bool:
 
 def tiktok_avatar_style_dismiss_coords() -> tuple[int, int]:
     return TIKTOK_AVATAR_STYLE_DISMISS_X, TIKTOK_AVATAR_STYLE_DISMISS_Y
+
+
+def is_tiktok_ai_pick_dialog(ocr_text: str) -> bool:
+    """True when TikTok shows the Let AI pick for you sheet."""
+    text = str(ocr_text or "")
+    if not text.strip():
+        return False
+    lowered = text.lower()
+    if any(kw in lowered for kw in (*TIKTOK_AI_PICK_KEYWORDS, *TIKTOK_AI_PICK_BODY_KEYWORDS)):
+        return True
+    compact = ocr_compact(text)
+    if any(needle in compact for needle in TIKTOK_AI_PICK_COMPACT_NEEDLES):
+        return True
+    return "letaipick" in compact and "ai" in compact
+
+
+def tiktok_ai_pick_search_texts() -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for phrase in (
+        *TIKTOK_AI_PICK_SEARCH_TEXTS,
+        *TIKTOK_AI_PICK_KEYWORDS,
+        *TIKTOK_AI_PICK_BODY_KEYWORDS,
+    ):
+        key = phrase.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(phrase)
+    return out
+
+
+def tiktok_ai_pick_modal_rect_pct() -> tuple[float, float, float, float]:
+    return TIKTOK_AI_PICK_MODAL_RECT_PCT
+
+
+def tiktok_ai_pick_dismiss_coords() -> tuple[int, int]:
+    return TIKTOK_AI_PICK_DISMISS_X, TIKTOK_AI_PICK_DISMISS_Y
+
+
+async def collect_ai_pick_ocr(
+    controller: Any,
+    device_id: str,
+    *,
+    screen: str | None = None,
+    device_manager: Any | None = None,
+) -> str:
+    """Merge full-screen + center-modal OCR for the Let AI pick sheet."""
+    from imouse_farm.vision.template_scan import ocr_rect_from_pct
+
+    sw, sh = 406, 720
+    if device_manager:
+        device = device_manager.get_device(device_id)
+        if device and device.screen_width and device.screen_height:
+            sw, sh = int(device.screen_width), int(device.screen_height)
+    modal_rect = ocr_rect_from_pct(sw, sh, list(tiktok_ai_pick_modal_rect_pct()))
+    full = screen if screen is not None else await controller.ocr_on_device(device_id)
+    modal_items = await controller.ocr_items_on_device(
+        device_id, is_ex=True, rect=modal_rect
+    )
+    modal_ex = " ".join(
+        str(item.get("text", "")) for item in modal_items if item.get("text")
+    )
+    full_items = await controller.ocr_items_on_device(device_id, is_ex=True)
+    full_ex = " ".join(
+        str(item.get("text", "")) for item in full_items if item.get("text")
+    )
+    return "\n".join(part for part in (full or "", modal_ex, full_ex) if part)
+
+
+async def detect_tiktok_ai_pick_on_device(
+    controller: Any,
+    device_id: str,
+    *,
+    screen: str | None = None,
+    device_manager: Any | None = None,
+) -> tuple[bool, str]:
+    """Detect the Let AI pick sheet using OCR + modal crop + find_text fallback."""
+    combined = await collect_ai_pick_ocr(
+        controller,
+        device_id,
+        screen=screen,
+        device_manager=device_manager,
+    )
+    if is_tiktok_ai_pick_dialog(combined):
+        return True, combined
+
+    sw, sh = 406, 720
+    if device_manager:
+        device = device_manager.get_device(device_id)
+        if device and device.screen_width and device.screen_height:
+            sw, sh = int(device.screen_width), int(device.screen_height)
+    from imouse_farm.vision.template_scan import ocr_rect_from_pct
+
+    modal_rect = ocr_rect_from_pct(sw, sh, list(tiktok_ai_pick_modal_rect_pct()))
+    for rect in (modal_rect, None):
+        matches = await controller.find_text_on_device(
+            device_id,
+            tiktok_ai_pick_search_texts(),
+            threshold=0.45,
+            contain=True,
+            is_ex=True,
+            rect=rect,
+        )
+        if not matches:
+            continue
+        joined = " ".join(str(m.get("text", "")) for m in matches if m.get("text"))
+        probe = f"{combined}\n{joined}".strip()
+        if is_tiktok_ai_pick_dialog(probe):
+            return True, probe
+        for match in matches:
+            line = str(match.get("text", ""))
+            if is_tiktok_ai_pick_dialog(line):
+                return True, f"{combined}\n{line}".strip()
+    return False, combined
+
+
+async def dismiss_tiktok_ai_pick_if_visible(
+    controller: Any,
+    device_id: str,
+    *,
+    device_manager: Any | None = None,
+) -> bool:
+    """Tap the fixed dismiss coord when the Let AI pick sheet is on screen."""
+    visible, _ = await detect_tiktok_ai_pick_on_device(
+        controller,
+        device_id,
+        device_manager=device_manager,
+    )
+    if not visible:
+        return False
+    x, y = tiktok_ai_pick_dismiss_coords()
+    if not await controller.tap(device_id, x, y):
+        return False
+    return True
 
 
 def is_tiktok_virtual_items_policies_dialog(ocr_text: str) -> bool:
@@ -963,15 +1186,24 @@ def analyze_popup_screen(ocr_text: str) -> dict[str, Any]:
             "ocr_snippet": snippet,
         }
 
-    if is_ios_passkeys_passcode_dialog(text):
-        x, y = ios_passkeys_passcode_dismiss_coords()
+    if is_tiktok_add_phone_dialog(text):
+        x, y = tiktok_add_phone_dismiss_coords()
         return {
-            "dialog": "ios_passkeys_passcode",
+            "dialog": "tiktok_add_phone",
             "watcher_action": "tap_coord",
-            "watcher_detail": f"Tap dismiss at ({x}, {y}) on Passkeys passcode sheet.",
+            "watcher_detail": f"Tap dismiss at ({x}, {y}) on Add phone sheet.",
             "button_labels": [],
             "tap_x": x,
             "tap_y": y,
+            "ocr_snippet": snippet,
+        }
+
+    if is_ios_passkeys_passcode_dialog(text):
+        return {
+            "dialog": "ios_passkeys_passcode",
+            "watcher_action": "press_home",
+            "watcher_detail": "Press Home to dismiss Passkeys passcode sheet.",
+            "button_labels": [],
             "ocr_snippet": snippet,
         }
 
@@ -990,6 +1222,18 @@ def analyze_popup_screen(ocr_text: str) -> dict[str, Any]:
             "dialog": "tiktok_avatar_style",
             "watcher_action": "tap_coord",
             "watcher_detail": f"Tap dismiss at ({x}, {y}) on avatar/style sheet.",
+            "button_labels": [],
+            "tap_x": x,
+            "tap_y": y,
+            "ocr_snippet": snippet,
+        }
+
+    if is_tiktok_ai_pick_dialog(text):
+        x, y = tiktok_ai_pick_dismiss_coords()
+        return {
+            "dialog": "tiktok_ai_pick",
+            "watcher_action": "tap_coord",
+            "watcher_detail": f"Tap dismiss at ({x}, {y}) on Let AI pick sheet.",
             "button_labels": [],
             "tap_x": x,
             "tap_y": y,

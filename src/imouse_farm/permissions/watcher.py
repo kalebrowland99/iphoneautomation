@@ -21,9 +21,12 @@ from imouse_farm.actions.permission_prompts import (
     is_tiktok_live_feed_dialog,
     is_ios_passkeys_passcode_dialog,
     is_tiktok_post_notify_dialog,
+    is_tiktok_add_phone_dialog,
     is_tiktok_security_checkup_dialog,
     is_tiktok_viewer_history_dialog,
     is_tiktok_avatar_style_dialog,
+    is_tiktok_ai_pick_dialog,
+    detect_tiktok_ai_pick_on_device,
     is_tiktok_virtual_items_policies_dialog,
     is_got_it_label,
     is_save_button_label,
@@ -34,9 +37,12 @@ from imouse_farm.actions.permission_prompts import (
     tiktok_not_now_button_texts,
     tiktok_security_checkup_modal_rect_pct,
     tiktok_security_checkup_search_texts,
-    ios_passkeys_passcode_dismiss_coords,
     tiktok_avatar_style_dismiss_coords,
+    tiktok_ai_pick_dismiss_coords,
     tiktok_post_notify_dismiss_coords,
+    tiktok_add_phone_dismiss_coords,
+    tiktok_add_phone_modal_rect_pct,
+    tiktok_add_phone_search_texts,
     tiktok_security_checkup_dismiss_coords,
     tiktok_viewer_history_save_button_texts,
 )
@@ -126,6 +132,63 @@ async def detect_tiktok_security_checkup_on_device(
         for match in matches:
             line = str(match.get("text", ""))
             if is_tiktok_security_checkup_dialog(line):
+                return True, f"{combined}\n{line}".strip()
+    return False, combined
+
+
+async def collect_add_phone_ocr(
+    controller: Any,
+    device_id: str,
+    *,
+    screen: str | None = None,
+    device_manager: DeviceManager | None = None,
+) -> str:
+    """Merge full-screen + center-modal OCR for the Add phone sheet."""
+    sw, sh = _device_screen_size(device_manager, device_id)
+    modal_rect = ocr_rect_from_pct(sw, sh, list(tiktok_add_phone_modal_rect_pct()))
+    full = screen if screen is not None else await _ocr_join(controller, device_id)
+    modal_ex = await _ocr_join(controller, device_id, is_ex=True, rect=modal_rect)
+    full_ex = await _ocr_join(controller, device_id, is_ex=True)
+    return "\n".join(part for part in (full, modal_ex, full_ex) if part)
+
+
+async def detect_tiktok_add_phone_on_device(
+    controller: Any,
+    device_id: str,
+    *,
+    screen: str | None = None,
+    device_manager: DeviceManager | None = None,
+) -> tuple[bool, str]:
+    """Detect the Add phone sheet using OCR + modal crop + find_text fallback."""
+    combined = await collect_add_phone_ocr(
+        controller,
+        device_id,
+        screen=screen,
+        device_manager=device_manager,
+    )
+    if is_tiktok_add_phone_dialog(combined):
+        return True, combined
+
+    sw, sh = _device_screen_size(device_manager, device_id)
+    modal_rect = ocr_rect_from_pct(sw, sh, list(tiktok_add_phone_modal_rect_pct()))
+    for rect in (modal_rect, None):
+        matches = await controller.find_text_on_device(
+            device_id,
+            tiktok_add_phone_search_texts(),
+            threshold=0.45,
+            contain=True,
+            is_ex=True,
+            rect=rect,
+        )
+        if not matches:
+            continue
+        joined = " ".join(str(m.get("text", "")) for m in matches if m.get("text"))
+        probe = f"{combined}\n{joined}".strip()
+        if is_tiktok_add_phone_dialog(probe):
+            return True, probe
+        for match in matches:
+            line = str(match.get("text", ""))
+            if is_tiktok_add_phone_dialog(line):
                 return True, f"{combined}\n{line}".strip()
     return False, combined
 
@@ -286,6 +349,27 @@ class PermissionWatcher:
                     await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
                     return True
 
+            ai_pick_visible, _ = await detect_tiktok_ai_pick_on_device(
+                self._controller,
+                self._device_id,
+                screen=screen,
+                device_manager=self._device_manager,
+            )
+            if ai_pick_visible:
+                tapped = await self._dismiss_ai_pick()
+                if tapped:
+                    logger.info(
+                        "tiktok_popup_dismiss",
+                        device_id=self._device_id,
+                        dialog="ai_pick",
+                        text=tapped.get("text", ""),
+                        x=tapped.get("x"),
+                        y=tapped.get("y"),
+                    )
+                    await self._touch_activity()
+                    await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
+                    return True
+
             if is_tiktok_post_notify_dialog(screen):
                 tapped = await self._dismiss_post_notify()
                 if tapped:
@@ -322,16 +406,35 @@ class PermissionWatcher:
                     await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
                     return True
 
-            if is_ios_passkeys_passcode_dialog(screen):
-                tapped = await self._dismiss_passkeys_passcode()
+            add_phone_visible, _ = await detect_tiktok_add_phone_on_device(
+                self._controller,
+                self._device_id,
+                screen=screen,
+                device_manager=self._device_manager,
+            )
+            if add_phone_visible:
+                tapped = await self._dismiss_add_phone()
                 if tapped:
                     logger.info(
                         "tiktok_popup_dismiss",
                         device_id=self._device_id,
-                        dialog="passkeys_passcode",
+                        dialog="add_phone",
                         text=tapped.get("text", ""),
                         x=tapped.get("x"),
                         y=tapped.get("y"),
+                    )
+                    await self._touch_activity()
+                    await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
+                    return True
+
+            if is_ios_passkeys_passcode_dialog(screen):
+                dismissed = await self._dismiss_passkeys_passcode()
+                if dismissed:
+                    logger.info(
+                        "tiktok_popup_dismiss",
+                        device_id=self._device_id,
+                        dialog="passkeys_passcode",
+                        action=dismissed.get("action", ""),
                     )
                     await self._touch_activity()
                     await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
@@ -572,12 +675,17 @@ class PermissionWatcher:
             return None
         return {"text": "security_checkup_dismiss", "x": x, "y": y}
 
-    async def _dismiss_passkeys_passcode(self) -> dict[str, Any] | None:
-        x, y = ios_passkeys_passcode_dismiss_coords()
+    async def _dismiss_add_phone(self) -> dict[str, Any] | None:
+        x, y = tiktok_add_phone_dismiss_coords()
         await self._pre_touch_if_tiktok()
         if not await self._controller.tap(self._device_id, x, y):
             return None
-        return {"text": "passkeys_passcode_dismiss", "x": x, "y": y}
+        return {"text": "add_phone_dismiss", "x": x, "y": y}
+
+    async def _dismiss_passkeys_passcode(self) -> dict[str, Any] | None:
+        if not await self._controller.press_home(self._device_id):
+            return None
+        return {"text": "passkeys_passcode_dismiss", "action": "press_home"}
 
     async def _dismiss_avatar_style(self) -> dict[str, Any] | None:
         x, y = tiktok_avatar_style_dismiss_coords()
@@ -585,6 +693,13 @@ class PermissionWatcher:
         if not await self._controller.tap(self._device_id, x, y):
             return None
         return {"text": "avatar_style_dismiss", "x": x, "y": y}
+
+    async def _dismiss_ai_pick(self) -> dict[str, Any] | None:
+        x, y = tiktok_ai_pick_dismiss_coords()
+        await self._pre_touch_if_tiktok()
+        if not await self._controller.tap(self._device_id, x, y):
+            return None
+        return {"text": "ai_pick_dismiss", "x": x, "y": y}
 
     async def _tap_viewer_history_save(self) -> dict[str, Any] | None:
         from imouse_farm.vision.text_color import decode_screenshot, is_text_light_enough

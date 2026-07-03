@@ -28,6 +28,7 @@ from imouse_farm.actions.permission_prompts import (
     analyze_popup_screen,
     known_popup_watcher_button_labels,
     tiktok_security_checkup_dismiss_coords,
+    tiktok_add_phone_dismiss_coords,
 )
 from imouse_farm.config.models import ActionType
 from imouse_farm.vision.fallbacks import (
@@ -52,6 +53,8 @@ from imouse_farm.utils.logging import get_logger
 from imouse_farm.actions.vpn_shadowrocket import (
     SHADOWROCKET_ICON_X,
     SHADOWROCKET_ICON_Y,
+    TIKTOK_HOME_ICON_X,
+    TIKTOK_HOME_ICON_Y,
     VPN_TOGGLE_X,
     VPN_TOGGLE_Y,
 )
@@ -114,6 +117,7 @@ _POST_DEBUG_LIST_PRIORITY = (
     "dismiss-tiktok-popup",
     "run-permission-watcher",
     "post-dismiss-security-checkup",
+    "post-dismiss-add-phone",
     "post-tap-gallery-recents",
     "post-wait-recents",
     "post-tap-gallery-item",
@@ -159,11 +163,13 @@ _ACCOUNT_SWITCH_DEBUG_LIST_PRIORITY = (
     "account-dismiss-popup",
     "account-run-permission-watcher",
     "account-dismiss-security-checkup",
+    "account-dismiss-add-phone",
 )
 
 OFFLINE_HINT = "Device offline — click Connect AirPlay first"
 
 _SECURITY_CHECKUP_DISMISS_X, _SECURITY_CHECKUP_DISMISS_Y = tiktok_security_checkup_dismiss_coords()
+_ADD_PHONE_DISMISS_X, _ADD_PHONE_DISMISS_Y = tiktok_add_phone_dismiss_coords()
 
 HVITSERK_CHOICE_TEXTS = [
     "Hvitserk's choice",
@@ -286,6 +292,15 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "prep",
         "offline_hint": OFFLINE_HINT,
     },
+    "tap-tiktok": {
+        "label": f"Prep: Tap TikTok icon ({TIKTOK_HOME_ICON_X}, {TIKTOK_HOME_ICON_Y})",
+        "kind": "tap_xy",
+        "group": "prep",
+        "x": TIKTOK_HOME_ICON_X,
+        "y": TIKTOK_HOME_ICON_Y,
+        "hint": "Home screen — fixed dock icon coordinate.",
+        "offline_hint": OFFLINE_HINT,
+    },
     "list-album": {
         "label": "List album contents (Recents)",
         "kind": "album_list",
@@ -390,6 +405,15 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "x": _SECURITY_CHECKUP_DISMISS_X,
         "y": _SECURITY_CHECKUP_DISMISS_Y,
         "hint": "Show TikTok's 'Let's do a quick security checkup?' sheet first, then run.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "post-dismiss-add-phone": {
+        "label": f"Post: Dismiss Add phone X ({_ADD_PHONE_DISMISS_X}, {_ADD_PHONE_DISMISS_Y})",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": _ADD_PHONE_DISMISS_X,
+        "y": _ADD_PHONE_DISMISS_Y,
+        "hint": "Show TikTok's 'Add phone' sheet first, then run.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-gallery-only": {
@@ -507,7 +531,7 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "post-tap-music": {
-        "label": "Post: Tap music gallery (310, 62) — after tapping gallery item",
+        "label": "Post: Tap music gallery (310, 62) — after 6s load wait",
         "kind": "tap_xy",
         "group": "post",
         "x": 310,
@@ -790,7 +814,7 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "account-open-switcher": {
-        "label": "Account: Open switcher (profile + tap 301, 288)",
+        "label": "Account: Open switcher (profile + tap 301, 288 then 293, 249)",
         "kind": "account_switch_step",
         "group": "account_switch",
         "step": "open_switcher",
@@ -846,6 +870,15 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
         "x": _SECURITY_CHECKUP_DISMISS_X,
         "y": _SECURITY_CHECKUP_DISMISS_Y,
         "hint": "Show TikTok's 'Let's do a quick security checkup?' sheet first, then run.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-dismiss-add-phone": {
+        "label": f"Account: Dismiss Add phone X ({_ADD_PHONE_DISMISS_X}, {_ADD_PHONE_DISMISS_Y})",
+        "kind": "tap_xy",
+        "group": "account_switch",
+        "x": _ADD_PHONE_DISMISS_X,
+        "y": _ADD_PHONE_DISMISS_Y,
+        "hint": "Show TikTok's 'Add phone' sheet first, then run.",
         "offline_hint": OFFLINE_HINT,
     },
 }
@@ -914,10 +947,11 @@ TIKTOK_VALCOIN_PREP_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "valcoin-prep-tap-tiktok": {
-        "label": "ValCoin prep: Tap TikTok icon",
-        "kind": "tap",
+        "label": f"ValCoin prep: Tap TikTok icon ({TIKTOK_HOME_ICON_X}, {TIKTOK_HOME_ICON_Y})",
+        "kind": "tap_xy",
         "group": "valcoin_prep",
-        "detection": "tiktok",
+        "x": TIKTOK_HOME_ICON_X,
+        "y": TIKTOK_HOME_ICON_Y,
         "hint": "Home screen — opens TikTok for ValCoin account switch + posts.",
         "offline_hint": OFFLINE_HINT,
     },
@@ -1433,8 +1467,10 @@ async def tiktok_popup_scan_debug(
     spec: DebugTest,
 ) -> dict[str, Any]:
     """OCR the screen and report how PermissionWatcher would handle known popups."""
+    from imouse_farm.actions.permission_prompts import detect_tiktok_ai_pick_on_device
     from imouse_farm.permissions.watcher import (
         PermissionWatcher,
+        detect_tiktok_add_phone_on_device,
         detect_tiktok_security_checkup_on_device,
     )
 
@@ -1449,9 +1485,24 @@ async def tiktok_popup_scan_debug(
         screen=screen or "",
         device_manager=app.device_manager,
     )
+    add_phone_visible, add_phone_ocr = await detect_tiktok_add_phone_on_device(
+        ctrl,
+        device_id,
+        screen=screen or "",
+        device_manager=app.device_manager,
+    )
+    ai_pick_visible, ai_pick_ocr = await detect_tiktok_ai_pick_on_device(
+        ctrl,
+        device_id,
+        screen=screen or "",
+        device_manager=app.device_manager,
+    )
+    extra_ocr = "\n".join(
+        part for part in (checkup_ocr, add_phone_ocr, ai_pick_ocr) if part
+    )
     analysis = analyze_popup_screen(screen or "")
     if analysis.get("dialog") == "none":
-        analysis = analyze_popup_screen(checkup_ocr or screen or "")
+        analysis = analyze_popup_screen(extra_ocr or screen or "")
 
     button_matches: list[dict[str, Any]] = []
     labels = known_popup_watcher_button_labels()
@@ -1480,7 +1531,7 @@ async def tiktok_popup_scan_debug(
     if dialog == "none":
         headline = "No known TikTok / permission popup detected"
         success = False
-        ocr_sample = (checkup_ocr or screen or "").strip()
+        ocr_sample = (extra_ocr or screen or "").strip()
         if ocr_sample:
             snippet = ocr_sample[:280] + ("…" if len(ocr_sample) > 280 else "")
             watcher_detail = f"No popup matched. OCR sample: {snippet}"

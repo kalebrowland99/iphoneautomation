@@ -110,7 +110,7 @@
                         Stop
                     </button>
                     <button type="button" id="btn-reset-session" onclick="resetSession()"
-                        title="Clear saved video-upload state — forces a full re-upload on next run"
+                        title="Clear last-run timestamps and gallery videos for all phones (use before a fresh run)"
                         class="inline-flex items-center justify-center rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
                         Reset
                     </button>
@@ -155,7 +155,15 @@
                                     <th class="phones-th phones-th-slot" scope="col">#</th>
                                     <th class="phones-th" scope="col">__APP_NAME__ Handle</th>
                                     <th class="phones-th" scope="col">Status</th>
-                                    <th class="phones-th phones-th-warmup" scope="col">Warmup</th>
+                                    <th class="phones-th phones-th-warmup" scope="col">
+                                        <label class="warmup-th-label">
+                                            <input type="checkbox" id="warmup-select-all" class="phones-check"
+                                                   aria-label="Warmup all phones"
+                                                   onchange="onWarmupSelectAllChange(this.checked)"
+                                                   onclick="event.stopPropagation()">
+                                            <span>Warmup</span>
+                                        </label>
+                                    </th>
                                     <th class="phones-th" scope="col">Last run</th>
                                 </tr>
                             </thead>

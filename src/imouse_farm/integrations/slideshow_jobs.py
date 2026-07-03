@@ -34,6 +34,7 @@ class SlideshowJob:
     videos_per_slot: int = 0  # 0 = use slideshow.slideshows_per_slot from config
     automation_url: str = ""
     error: str = ""
+    parent_job_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -51,6 +52,7 @@ class SlideshowJob:
             "videos_per_slot": self.videos_per_slot,
             "automation_url": self.automation_url,
             "error": self.error,
+            "parent_job_id": self.parent_job_id,
         }
 
     @classmethod
@@ -76,6 +78,7 @@ class SlideshowJob:
             videos_per_slot=max(0, int(data.get("videos_per_slot") or 0)),
             automation_url=str(data.get("automation_url") or ""),
             error=str(data.get("error") or ""),
+            parent_job_id=str(data.get("parent_job_id") or ""),
         )
 
 
@@ -119,6 +122,7 @@ class SlideshowJobStore:
         slots: list[str],
         run_batch: bool = True,
         videos_per_slot: int = 0,
+        parent_job_id: str = "",
     ) -> SlideshowJob:
         job = SlideshowJob(
             id=uuid.uuid4().hex[:12],
@@ -126,6 +130,7 @@ class SlideshowJobStore:
             slots=[str(s).strip() for s in slots if str(s).strip()],
             run_batch=bool(run_batch),
             videos_per_slot=max(0, int(videos_per_slot)),
+            parent_job_id=str(parent_job_id or "").strip(),
         )
         async with self._lock:
             self._jobs[job.id] = job

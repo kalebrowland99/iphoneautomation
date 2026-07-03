@@ -19,10 +19,8 @@ export function getFarmJobAutoRunState(jobId) {
   }
 }
 
-export function shouldAutoRunFarmJob(jobId) {
-  const state = getFarmJobAutoRunState(jobId);
-  if (!state) return true;
-  return state !== "started" && state !== "done" && state !== "cancelled" && state !== "failed";
+export function shouldAutoRunFarmJob(_jobId) {
+  return true;
 }
 
 export function markFarmJobAutoRunStarted(jobId) {
@@ -74,6 +72,36 @@ export async function fetchFarmJobStatus({ farmUrl, jobId, secret }) {
   return res.json();
 }
 
+/** Parse farm ingest rejection bodies (422 blank slide / blank video). */
+export class FarmUploadError extends Error {
+  constructor(message, { retry = false, reason = "" } = {}) {
+    super(message);
+    this.name = "FarmUploadError";
+    this.retry = retry;
+    this.reason = reason;
+  }
+}
+
+function farmUploadErrorFromBody(text, status) {
+  if (!text) return new FarmUploadError(`HTTP ${status}`);
+  try {
+    const body = JSON.parse(text);
+    const detail = body?.detail;
+    if (detail && typeof detail === "object") {
+      return new FarmUploadError(
+        detail.message || detail.reason || "Farm upload rejected",
+        { retry: Boolean(detail.retry), reason: String(detail.reason || "") },
+      );
+    }
+    if (typeof detail === "string") return new FarmUploadError(detail);
+    if (typeof body?.message === "string") return new FarmUploadError(body.message);
+    if (typeof body?.error === "string") return new FarmUploadError(body.error);
+  } catch {
+    /* plain text */
+  }
+  return new FarmUploadError(text);
+}
+
 /** Parse FastAPI / farm error bodies into a short user-facing string. */
 async function readFarmErrorResponse(res) {
   const text = await res.text();
@@ -81,7 +109,9 @@ async function readFarmErrorResponse(res) {
   try {
     const body = JSON.parse(text);
     if (typeof body?.detail === "string") return body.detail;
-    if (body?.detail != null) return JSON.stringify(body.detail);
+    if (body?.detail != null && typeof body.detail === "object") {
+      return body.detail.message || body.detail.reason || JSON.stringify(body.detail);
+    }
     if (typeof body?.message === "string") return body.message;
     if (typeof body?.error === "string") return body.error;
   } catch {
@@ -116,7 +146,8 @@ export async function uploadMp4ToFarm({
     body: form,
   });
   if (!res.ok) {
-    throw new Error(await readFarmErrorResponse(res));
+    const text = await res.text();
+    throw farmUploadErrorFromBody(text, res.status);
   }
   return res.json();
 }

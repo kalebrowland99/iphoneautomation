@@ -46,6 +46,7 @@ from imouse_farm.post.account_profile_store import (
     brand_profile_key,
     clear_cant_cast_imouse,
     clear_prep_completed,
+    reset_all_session_states,
     get_brand_profile,
     get_profile,
     get_profile_for_device,
@@ -453,15 +454,21 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
 
     @app.post("/api/batch/reset-session")
     async def reset_batch_session() -> dict[str, Any]:
-        """Clear prep_completed_at for all slots so the next run re-uploads videos fresh."""
-        devices = farm_devices_sorted(app_instance.device_manager)
-        cleared: list[str] = []
-        for device in devices:
-            base_key = _device_storage_key(device.device_id, device.user_name)
-            for brand in ("labely", "valcoin"):
-                clear_prep_completed(base_key, brand=brand)
-            cleared.append(str(device.user_name))
-        return {"success": True, "cleared_slots": cleared}
+        """Clear prep, last-run, and gallery videos for all slots."""
+        from imouse_farm.integrations.slideshow_ingest import clear_all_slot_media
+
+        farm_slots = int(getattr(app_instance.config.dashboard, "farm_slots", 20) or 20)
+        cleared = reset_all_session_states(farm_slots=farm_slots)
+        videos_removed = clear_all_slot_media(
+            app_instance.config.gallery.base_directory,
+            list(app_instance.config.gallery.media_extensions),
+            farm_slots=farm_slots,
+        )
+        return {
+            "success": True,
+            "cleared_slots": cleared,
+            "videos_removed": videos_removed,
+        }
 
     @app.post("/api/batch/clear-cant-cast/{slot}")
     async def clear_cant_cast_slot(slot: str) -> dict[str, Any]:
@@ -906,6 +913,7 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
 
     @app.get("/api/run/status")
     async def get_run_status(job_id: str | None = None) -> dict[str, Any]:
+        await app_instance.slideshow_orchestrator.resume_orphan_jobs()
         batch = app_instance.farm_batch.get_status()
         orch_busy = app_instance.slideshow_orchestrator.orchestrator_busy()
 

@@ -51,6 +51,22 @@ def test_analyze_popup_screen_tiktok_security_checkup() -> None:
     assert result["tap_y"] == 501
 
 
+def test_analyze_popup_screen_tiktok_add_phone() -> None:
+    result = analyze_popup_screen("Add phone")
+    assert result["dialog"] == "tiktok_add_phone"
+    assert result["watcher_action"] == "tap_coord"
+    assert result["tap_x"] == 564
+    assert result["tap_y"] == 260
+
+
+def test_add_phone_detects_variants() -> None:
+    from imouse_farm.actions.permission_prompts import is_tiktok_add_phone_dialog
+
+    assert is_tiktok_add_phone_dialog("Add phone")
+    assert is_tiktok_add_phone_dialog("Add your phone number")
+    assert is_tiktok_add_phone_dialog("Addphonenumber")
+
+
 def test_security_checkup_detects_unicode_apostrophe_and_body_copy() -> None:
     from imouse_farm.actions.permission_prompts import is_tiktok_security_checkup_dialog
 
@@ -99,9 +115,7 @@ def test_analyze_popup_screen_ios_passkeys_passcode() -> None:
         "Passkeys require a passcode and work best with Touch ID"
     )
     assert result["dialog"] == "ios_passkeys_passcode"
-    assert result["watcher_action"] == "tap_coord"
-    assert result["tap_x"] == 563
-    assert result["tap_y"] == 592
+    assert result["watcher_action"] == "press_home"
 
 
 def test_analyze_popup_screen_tiktok_viewer_history() -> None:
@@ -117,6 +131,19 @@ def test_analyze_popup_screen_tiktok_avatar_style() -> None:
     assert result["watcher_action"] == "tap_coord"
     assert result["tap_x"] == 563
     assert result["tap_y"] == 92
+
+
+def test_analyze_popup_screen_tiktok_ai_pick() -> None:
+    result = analyze_popup_screen("Let AI pick for you")
+    assert result["dialog"] == "tiktok_ai_pick"
+    assert result["watcher_action"] == "tap_coord"
+    assert result["tap_x"] == 184
+    assert result["tap_y"] == 972
+
+    body = analyze_popup_screen(
+        "AI matches your photos and videos to different themes\nCancel\nAllow"
+    )
+    assert body["dialog"] == "tiktok_ai_pick"
 
 
 def test_analyze_popup_screen_tiktok_virtual_items_policies() -> None:

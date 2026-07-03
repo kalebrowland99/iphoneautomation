@@ -41,9 +41,9 @@ steps:
   - type: wait
     name: after_unlock
     when_detection: lock_screen
-    duration_seconds: 2
+    duration_seconds: 0.5
 
-  # ── 2. Force-quit apps (same as tiktok_end) ─────────────────────────
+  # ── 2. Force-quit apps ──────────────────────────────────────────────
   - type: execute_action
     name: go_home_before_kill
     action:
@@ -52,7 +52,7 @@ steps:
 
   - type: wait
     name: settle_before_kill
-    duration_seconds: 3
+    duration_seconds: 0.5
 
   - type: execute_action
     name: kill_apps
@@ -60,10 +60,6 @@ steps:
     action:
       type: kill_app
     skip_post_action: true
-
-  - type: wait
-    name: after_kill
-    duration_seconds: 3
 
   - type: execute_action
     name: go_home
@@ -73,10 +69,9 @@ steps:
 
   - type: wait
     name: settle_home
-    duration_seconds: 3
+    duration_seconds: 0.5
 
   # ── 3. Clear photo library (iMouse album API — Photos app not required) ─
-  # go_home above — no second home press before clear.
   - type: execute_action
     name: clear_album
     on_failure: pause
@@ -89,7 +84,6 @@ steps:
       sheet_poll_interval_seconds: 5
     skip_post_action: true
 
-  # album_clear loops until Recents is empty (3 or 20+ items), then upload runs.
   - type: wait
     name: after_clear
     duration_seconds: 3
@@ -122,18 +116,13 @@ steps:
     name: upload_settle
     duration_seconds: 5
 
-  # ── 5. Go home before VPN check ─────────────────────────────────────
+  # ── 5. VPN on → home → TikTok ───────────────────────────────────────
   - type: execute_action
     name: go_home_before_vpn
     action:
       type: home
     skip_post_action: true
 
-  - type: wait
-    name: settle_home_vpn
-    duration_seconds: 0.5
-
-  # ── 6. Open Shadowrocket → tap (511, 172) to turn VPN on ─────────────
   - type: execute_action
     name: open_shadowrocket
     on_failure: pause
@@ -145,7 +134,7 @@ steps:
 
   - type: wait
     name: shadowrocket_open
-    duration_seconds: 2
+    duration_seconds: 1
 
   - type: execute_action
     name: tap_vpn_toggle_coord
@@ -158,9 +147,8 @@ steps:
 
   - type: wait
     name: after_vpn_toggle_coord
-    duration_seconds: 5
+    duration_seconds: 2
 
-  # ── 8. Home after VPN ───────────────────────────────────────────────
   - type: execute_action
     name: go_home_after_vpn
     action:
@@ -169,46 +157,17 @@ steps:
 
   - type: wait
     name: after_vpn_home
-    duration_seconds: 2
-
-  # ── 9. TikTok (home screen) ────────────────────────────────────────
-  - type: execute_action
-    name: go_home_for_tiktok
-    action:
-      type: home
-    skip_post_action: true
-
-  - type: wait
-    name: settle_for_tiktok
-    duration_seconds: 3
-
-  - type: wait_for_detection
-    name: wait_for_tiktok_icon
-    templates: [tiktok]
-    when_detection: tiktok
-    duration_seconds: 60
-    min_seconds: 2
-    on_failure: pause
-
-  - type: screenshot
-    name: fresh_tiktok_screen
-    templates: [tiktok]
-
-  - type: analyze_screen
-    name: fresh_tiktok_analyze
-    templates: [tiktok]
-
-  - type: verify
-    name: confirm_tiktok_before_tap
-    condition: template_match
-    template: tiktok
-    on_failure: pause
+    duration_seconds: 0.5
 
   - type: execute_action
     name: open_tiktok
-    requires_analysis: true
     on_failure: pause
     action:
-      type: tap_detection
-      detection: tiktok
+      type: tap
+      x: 507
+      y: 1011
     skip_post_action: true
+
+  - type: wait
+    name: after_open_tiktok
+    duration_seconds: 2

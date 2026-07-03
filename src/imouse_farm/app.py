@@ -190,6 +190,7 @@ class IMouseFarmApp:
         await self.action_engine.start()
 
         self._frozen_check_task = asyncio.create_task(self._frozen_check_loop())
+        await self.slideshow_orchestrator.resume_orphan_jobs()
         self._running = True
         logger.info("orchestrator_started", vision_provider=self.vision.name)
 

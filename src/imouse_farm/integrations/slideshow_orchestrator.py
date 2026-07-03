@@ -108,20 +108,33 @@ class SlideshowOrchestrator:
         return bool(self._active_task_ids())
 
     async def _clear_stale_jobs(self) -> None:
-        """Mark running jobs with no live task as failed (e.g. after a failed start or server reload)."""
+        """Re-spawn asyncio tasks for running jobs whose task died (e.g. server reload)."""
+        await self.resume_orphan_jobs()
+
+    def _ensure_job_task(self, job_id: str) -> bool:
+        key = str(job_id or "").strip()
+        if not key or key in self._active_task_ids():
+            return False
+        self._tasks[key] = asyncio.create_task(self._run_job(key))
+        return True
+
+    async def resume_orphan_jobs(self) -> None:
+        """Restart pipeline tasks for parent jobs stuck in 'running' with no live task."""
         active = self._active_task_ids()
         for row in await self._jobs.list_jobs(limit=100):
             if str(row.get("status") or "").lower() != "running":
                 continue
+            if not row.get("run_batch", True):
+                continue
             job_id = str(row.get("id") or "").strip()
-            if job_id and job_id not in active:
-                await self._jobs.update(
-                    job_id,
-                    status="failed",
-                    phase="automation",
-                    message="Stale slideshow job cleared",
-                    error="Stale job — no active automation task",
-                )
+            if not job_id or job_id in active:
+                continue
+            logger.info("slideshow_job_resuming", job_id=job_id)
+            await self._jobs.update(
+                job_id,
+                message=str(row.get("message") or "Resuming slideshow pipeline…"),
+            )
+            self._ensure_job_task(job_id)
 
     async def start_job(
         self,
@@ -208,7 +221,13 @@ class SlideshowOrchestrator:
             phase="done",
             message="Video ingested.",
         )
-        return (await self._jobs.get(job_id)).to_dict()
+        updated = (await self._jobs.get(job_id)).to_dict()
+        parent_id = str(updated.get("parent_job_id") or "").strip()
+        if parent_id:
+            parent = await self._jobs.get(parent_id)
+            if parent and str(parent.status).lower() == "running":
+                self._ensure_job_task(parent_id)
+        return updated
 
     async def cancel_running_jobs(self) -> None:
         """Stop in-flight slideshow automation (Playwright) and mark jobs cancelled."""
@@ -291,6 +310,25 @@ class SlideshowOrchestrator:
             return bool(profile.get("warmup_enabled", False))
         except Exception:  # noqa: BLE001
             return False
+
+    def _slot_has_valid_videos(self, slot: str, brand: str, *, job: Any | None = None) -> bool:
+        """True when gallery already holds enough valid MP4s for this slot."""
+        slot_key = str(slot).strip()
+        brand_key = str(brand or "labely").strip().lower()
+        if self._is_warmup_slot(slot_key, brand_key):
+            return True
+        min_count = max(1, self._videos_per_slot(job) if job else self._config.slideshows_per_slot)
+        expected_slides = self._expected_slides_for_brand(brand_key)
+        ok, _ = slot_gallery_status(
+            self._app_config.gallery.base_directory,
+            slot_key,
+            list(self._app_config.gallery.media_extensions),
+            min_count=min_count,
+            expected_slides=expected_slides,
+            brand=brand_key,
+            prune_invalid=True,
+        )
+        return ok
 
     def _slots_missing_valid_video(self, job: Any) -> list[str]:
         extensions = list(self._app_config.gallery.media_extensions)
@@ -427,6 +465,7 @@ class SlideshowOrchestrator:
             slots=[str(s).strip() for s in slots if str(s).strip()],
             run_batch=False,
             videos_per_slot=max(1, int(self._config.slideshows_per_slot)),
+            parent_job_id=str(parent_job_id or "").strip(),
         )
         await self._jobs.update(
             extra_job.id,
@@ -561,6 +600,58 @@ class SlideshowOrchestrator:
                     )
         return False
 
+    async def _generate_captions_for_slot(
+        self,
+        job_id: str,
+        device: Any,
+        *,
+        brand: str,
+        slot_index: int,
+        slot_total: int,
+    ) -> bool:
+        """Generate AI captions for one phone after its gallery video exists."""
+        if not self._config.auto_generate_captions:
+            return True
+
+        slot = str(device.user_name)
+        brand_key = str(brand or "labely").strip().lower()
+        await self._jobs.update(
+            job_id,
+            phase="captions",
+            message=(
+                f"Phone {slot_index}/{slot_total}: generating {brand_key} captions for {slot}…"
+            ),
+        )
+        caption_result = await generate_captions_for_devices(
+            self._app_config,
+            [device],
+            onscreen_template=default_onscreen_template_for_brand(
+                brand_key, self._config.default_onscreen_template
+            ),
+            brand=brand_key,
+        )
+        if caption_result["generated"] > 0:
+            return True
+
+        detail = (
+            caption_result["errors"][0]["error"]
+            if caption_result["errors"]
+            else "No captions generated"
+        )
+        logger.warning(
+            "per_slot_caption_failed",
+            slot=slot,
+            brand=brand_key,
+            error=detail,
+        )
+        await self._jobs.update(
+            job_id,
+            message=(
+                f"Phone {slot_index}/{slot_total}: caption generation failed for {slot} — {detail}"
+            ),
+        )
+        return False
+
     async def _run_per_slot_pipeline(self, job_id: str) -> None:
         """
         Per-slot pipeline: for each phone, encode one video → run batch → next phone.
@@ -586,37 +677,6 @@ class SlideshowOrchestrator:
             )
             return
 
-        # Captions for all devices upfront — text only, fast.
-        if self._config.auto_generate_captions:
-            await self._jobs.update(job_id, phase="captions", message="Generating AI captions…")
-            caption_result = await generate_captions_for_devices(
-                self._app_config,
-                selected,
-                onscreen_template=default_onscreen_template_for_brand(
-                    job.brand, self._config.default_onscreen_template
-                ),
-                brand=job.brand,
-            )
-            if (
-                job.brand == "labely"
-                and self._app_config.batch.chain_valcoin_after_labely
-                and caption_result["generated"] > 0
-            ):
-                await generate_captions_for_devices(
-                    self._app_config,
-                    selected,
-                    onscreen_template=default_onscreen_template_for_brand("valcoin"),
-                    brand="valcoin",
-                )
-            if caption_result["generated"] == 0:
-                detail = (
-                    caption_result["errors"][0]["error"]
-                    if caption_result["errors"]
-                    else "No captions generated"
-                )
-                await self._jobs.update(job_id, status="failed", error=f"Caption generation failed: {detail}")
-                return
-
         chain_valcoin = (
             job.brand == "labely"
             and self._app_config.batch.chain_valcoin_after_labely
@@ -627,33 +687,86 @@ class SlideshowOrchestrator:
         for idx, device in enumerate(selected, 1):
             slot = str(device.user_name)
 
-            # Step 1 — encode video for this slot only.
-            await self._jobs.update(
-                job_id,
-                phase="automation",
-                message=f"Phone {idx}/{total}: encoding video for {slot}…",
-            )
-            sub_job = await self._jobs.create(
-                brand=job.brand,
-                slots=[slot],
-                run_batch=False,
-                videos_per_slot=int(job.videos_per_slot or 0),
-            )
-            await self._jobs.update(sub_job.id, status="running", phase="automation", message=f"Encoding {slot}…")
+            # Step 1 — encode video for this slot only (skip if gallery already ready).
+            if self._slot_has_valid_videos(slot, job.brand, job=job):
+                await self._jobs.update(
+                    job_id,
+                    phase="automation",
+                    message=f"Phone {idx}/{total}: videos ready for {slot}, skipping encode…",
+                )
+                ok = True
+            else:
+                await self._jobs.update(
+                    job_id,
+                    phase="automation",
+                    message=f"Phone {idx}/{total}: encoding video for {slot}…",
+                )
+                sub_job = await self._jobs.create(
+                    brand=job.brand,
+                    slots=[slot],
+                    run_batch=False,
+                    videos_per_slot=int(job.videos_per_slot or 0),
+                    parent_job_id=job_id,
+                )
+                await self._jobs.update(sub_job.id, status="running", phase="automation", message=f"Encoding {slot}…")
 
-            ok = await self._execute_slideshow_generation(sub_job.id, parent_job_id=job_id)
+                ok = await self._execute_slideshow_generation(sub_job.id, parent_job_id=job_id)
 
-            # Clear the iframe so the WebCodecs encoder is fully released before the
-            # next slot loads. Give the browser ~4 s to GC the previous encoding session.
-            await self._jobs.update(job_id, automation_url="")
-            await asyncio.sleep(4.0)
+                # Clear the iframe so the WebCodecs encoder is fully released before the
+                # next slot loads. Give the browser ~4 s to GC the previous encoding session.
+                await self._jobs.update(job_id, automation_url="")
+                await asyncio.sleep(4.0)
 
             if not ok:
                 logger.warning("per_slot_video_failed", slot=slot)
                 await self._jobs.update(job_id, message=f"Phone {idx}/{total}: video failed for {slot}, skipping…")
                 continue
 
-            # Step 2 — run batch for this slot.
+            # Step 2 — captions need gallery MP4s from step 1.
+            run_valcoin_encode = (
+                chain_valcoin and not self._is_warmup_slot(slot, "valcoin")
+            )
+            valcoin_encode_task: asyncio.Task[None] | None = None
+            if run_valcoin_encode:
+                await self._jobs.update(
+                    job_id,
+                    message=f"Phone {idx}/{total}: generating ValCoin video for {slot}…",
+                )
+                valcoin_encode_task = asyncio.create_task(
+                    self._generate_brand_slideshows(
+                        "valcoin", [slot], parent_job_id=job_id
+                    )
+                )
+
+            if not await self._generate_captions_for_slot(
+                job_id,
+                device,
+                brand=job.brand,
+                slot_index=idx,
+                slot_total=total,
+            ):
+                if valcoin_encode_task is not None:
+                    valcoin_encode_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await valcoin_encode_task
+                continue
+
+            if valcoin_encode_task is not None:
+                try:
+                    await valcoin_encode_task
+                except RuntimeError as exc:
+                    logger.warning("valcoin_slideshow_failed", slot=slot, error=str(exc))
+                    continue
+                if not await self._generate_captions_for_slot(
+                    job_id,
+                    device,
+                    brand="valcoin",
+                    slot_index=idx,
+                    slot_total=total,
+                ):
+                    continue
+
+            # Step 3 — run batch for this slot.
             await self._jobs.update(
                 job_id,
                 phase="batch",
@@ -665,17 +778,6 @@ class SlideshowOrchestrator:
             else:
                 logger.warning("per_slot_batch_not_started", slot=slot)
             completed += 1
-
-            # Step 3 — ValCoin video per slot (if chaining).
-            if chain_valcoin and not self._is_warmup_slot(slot, "valcoin"):
-                await self._jobs.update(
-                    job_id,
-                    message=f"Phone {idx}/{total}: generating ValCoin video for {slot}…",
-                )
-                try:
-                    await self._generate_brand_slideshows("valcoin", [slot], parent_job_id=job_id)
-                except RuntimeError as exc:
-                    logger.warning("valcoin_slideshow_failed", slot=slot, error=str(exc))
 
         await self._jobs.update(
             job_id,

@@ -102,17 +102,17 @@ def _frame_luma(frame: np.ndarray) -> float:
 
 
 def _validation_frame_indices(frame_count: int, expected_slides: int) -> list[int]:
-    """Pick frames at the start of each slide segment (plus a mid-segment sample)."""
+    """Sample near the center of each equal segment — avoids swipe transitions at boundaries."""
     if frame_count <= 0:
         return []
     slides = max(1, int(expected_slides))
-    segment = max(1, frame_count // slides)
-    indices: set[int] = {0}
+    indices: set[int] = set()
     for slide in range(slides):
-        start = min(frame_count - 1, slide * segment)
-        mid = min(frame_count - 1, start + max(1, segment // 3))
-        indices.add(start)
-        indices.add(mid)
+        center = min(
+            frame_count - 1,
+            max(0, int((slide + 0.5) * frame_count / slides)),
+        )
+        indices.add(center)
     return sorted(indices)
 
 
@@ -240,6 +240,26 @@ def clear_slot_media(
             continue
         path.unlink(missing_ok=True)
         removed += 1
+    return removed
+
+
+def clear_all_slot_media(
+    base_directory: str,
+    extensions: list[str],
+    *,
+    farm_slots: int = 20,
+    brands: tuple[str, ...] = ("labely", "valcoin"),
+) -> int:
+    """Remove gallery media for every farm slot and brand."""
+    removed = 0
+    for slot in range(1, max(1, int(farm_slots)) + 1):
+        for brand in brands:
+            removed += clear_slot_media(
+                base_directory,
+                slot,
+                extensions,
+                brand=brand,
+            )
     return removed
 
 

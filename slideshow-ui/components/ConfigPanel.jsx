@@ -43,14 +43,12 @@ import {
 import { waitForPreviewPaint } from "@/lib/waitForPreviewPaint";
 import {
   fetchFarmJobStatus,
-  getFarmJobAutoRunState,
   markFarmJobAutoRunCancelled,
   markFarmJobAutoRunStarted,
   markFarmJobDone,
   markFarmJobFailed,
   notifyAutomationDone,
   setFarmJobStatus,
-  shouldAutoRunFarmJob,
   uploadMp4ToFarm,
 } from "@/lib/farmBridge";
 import { markExportedBraveImagesUsed } from "@/lib/markExportedBraveImages";
@@ -2570,7 +2568,26 @@ ${SHARED_RULES_OUTRO}`;
                 foodTypes: plan.foodTypes,
               },
             });
-            if (savedShow) generatedShows.push(savedShow);
+            if (savedShow) {
+              generatedShows.push({
+                ...savedShow,
+                _farmShowIndex: globalShowIdx,
+                _farmGenerateOptions: {
+                  brandItemsOverride: plan.items,
+                  foodDbMatchesOverride: plan.foodDbMatches,
+                  scanSlotCountOverride: plan.items.length,
+                  batchMeta: {
+                    batchNumber: plan.batchNumber,
+                    batchSlideshowIndex: i + 1,
+                    batchFoodName: plan.foodGenre || plan.batchName || plan.items[0] || "food",
+                    phoneIndex: plan.phoneIndex,
+                    videoOnPhone: plan.videoOnPhone,
+                    foodGenre: plan.foodGenre,
+                    foodTypes: plan.foodTypes,
+                  },
+                },
+              });
+            }
             globalShowIdx++;
           }
           if (cancelGenRef.current) break;
@@ -2695,7 +2712,7 @@ ${SHARED_RULES_OUTRO}`;
         const saved = await generateOneSlideshow(i, numSlideshows);
         if (saved) {
           savedCount++;
-          generatedShows.push(saved);
+          generatedShows.push({ ...saved, _farmShowIndex: i });
         }
       }
       if (isFarmAutomation && generatedShows.length > 0 && !cancelGenRef.current) {
@@ -2734,15 +2751,6 @@ ${SHARED_RULES_OUTRO}`;
     if (!autoRunBatch || !farmUpload?.jobId) return;
 
     const jobId = farmUpload.jobId;
-    if (!shouldAutoRunFarmJob(jobId)) {
-      const state = getFarmJobAutoRunState(jobId);
-      setFarmJobStatus(
-        state === "started"
-          ? "This job already ran in this browser tab — refresh will not restart it. Start a new job from the farm dashboard."
-          : `Farm job already ${state || "finished"} in this tab — start a new job from the farm dashboard.`,
-      );
-      return;
-    }
 
     let timer = null;
     let cancelled = false;
@@ -2755,11 +2763,6 @@ ${SHARED_RULES_OUTRO}`;
         if (status === "completed") {
           markFarmJobDone(jobId);
           setFarmJobStatus("Farm job is completed — not starting automation again.");
-          return;
-        }
-        if (status === "failed") {
-          markFarmJobAutoRunCancelled(jobId);
-          setFarmJobStatus("Farm job failed on the server — start a new job from the farm dashboard.");
           return;
         }
       } catch {
@@ -2824,6 +2827,15 @@ ${SHARED_RULES_OUTRO}`;
       await waitForPreviewPaint();
 
       const info = getSlideInfo(cfg, i);
+      if (
+        info.type === "labelyShelfIntro"
+        || info.type === "labely"
+        || (info.type === "thrifty" && (cfg.appId ?? "thrifty") === "valcoin")
+      ) {
+        await waitForImagesDecoded(previewNode);
+        await new Promise((r) => setTimeout(r, 120));
+      }
+
       const bg =
         info.type === "collage"
           ? "#111111"
@@ -3259,6 +3271,8 @@ ${SHARED_RULES_OUTRO}`;
     const activeFarm = farmUpload;
     if (!activeFarm?.farmUrl || !activeFarm?.jobId || !shows?.length) return false;
 
+    const FARM_UPLOAD_BLANK_RETRIES = 3;
+
     cancelGenRef.current = false;
     setIsExporting(true);
     setExportProgress(0);
@@ -3279,34 +3293,80 @@ ${SHARED_RULES_OUTRO}`;
           console.warn("No farm slot mapped for slideshow", i + 1);
           continue;
         }
-        setExportStatus(`${statusPrefix}Encoding MP4 ${i + 1} / ${shows.length} (phone ${farmSlot} video ${videoOnPhone})…`);
-        const exportCfg = galleryShowToExportConfig(restoreConfig, show);
-        flushSync(() => setConfig(exportCfg));
-        flushSync(() => setCurrentSlide(0));
-        await waitForPreviewPaint();
-        const blob = await encodeWorkspaceVideoToBlob(exportCfg);
-        if (cancelGenRef.current) break;
-        if (!blob) continue;
-        // Brief yield so the browser can GC released canvas textures before the next encode.
-        await new Promise((r) => setTimeout(r, 300));
-        const arr = new Uint8Array(await blob.arrayBuffer());
-        if (isPngBytes(arr) || !isMp4Bytes(arr)) {
-          setExportStatus(`Skipped video ${i + 1} — invalid MP4 payload.`);
-          continue;
-        }
         const filename = farmGalleryMp4Filename(farmSlot, videoOnPhone, show);
         const clearSlot = videoOnPhone === 1;
-        uploadedSlots.add(String(farmSlot));
-        setFarmJobStatus(`Uploading ${filename} → slot ${farmSlot}…`);
-        await uploadMp4ToFarm({
-          farmUrl: activeFarm.farmUrl,
-          jobId: activeFarm.jobId,
-          secret: activeFarm.secret,
-          slot: farmSlot,
-          file: blob,
-          filename,
-          clear: clearSlot,
-        });
+        let uploaded = false;
+        let showToExport = show;
+
+        for (let attempt = 0; attempt <= FARM_UPLOAD_BLANK_RETRIES; attempt++) {
+          await waitWhilePaused();
+          if (cancelGenRef.current) break;
+          if (attempt > 0) {
+            if (show._farmShowIndex != null) {
+              setExportStatus(
+                `${statusPrefix}Blank slide — regenerating slideshow ${i + 1} (attempt ${attempt}/${FARM_UPLOAD_BLANK_RETRIES})…`,
+              );
+              const regen = await generateOneSlideshow(
+                show._farmShowIndex,
+                shows.length,
+                show._farmGenerateOptions || {},
+              );
+              if (regen) {
+                showToExport = regen;
+                shows[i] = regen;
+              }
+            } else {
+              setExportStatus(
+                `${statusPrefix}Blank slide rejected — retry ${attempt}/${FARM_UPLOAD_BLANK_RETRIES} for ${filename}…`,
+              );
+            }
+            await new Promise((r) => setTimeout(r, 500));
+          } else {
+            setExportStatus(
+              `${statusPrefix}Encoding MP4 ${i + 1} / ${shows.length} (phone ${farmSlot} video ${videoOnPhone})…`,
+            );
+          }
+          const encodeCfg = galleryShowToExportConfig(restoreConfig, showToExport);
+          flushSync(() => setConfig(encodeCfg));
+          flushSync(() => setCurrentSlide(0));
+          await waitForPreviewPaint();
+          await waitForImagesDecoded(getCaptureNode());
+          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          const blob = await encodeWorkspaceVideoToBlob(encodeCfg);
+          if (cancelGenRef.current) break;
+          if (!blob) break;
+          await new Promise((r) => setTimeout(r, 300));
+          const arr = new Uint8Array(await blob.arrayBuffer());
+          if (isPngBytes(arr) || !isMp4Bytes(arr)) {
+            setExportStatus(`Skipped video ${i + 1} — invalid MP4 payload.`);
+            break;
+          }
+          try {
+            setFarmJobStatus(`Uploading ${filename} → slot ${farmSlot}…`);
+            await uploadMp4ToFarm({
+              farmUrl: activeFarm.farmUrl,
+              jobId: activeFarm.jobId,
+              secret: activeFarm.secret,
+              slot: farmSlot,
+              file: blob,
+              filename,
+              clear: clearSlot,
+            });
+            uploaded = true;
+            uploadedSlots.add(String(farmSlot));
+            break;
+          } catch (e) {
+            if (e?.retry && attempt < FARM_UPLOAD_BLANK_RETRIES) {
+              setFarmJobStatus(
+                `${filename}: ${e.message || "blank slide"} — re-encoding…`,
+              );
+              continue;
+            }
+            throw e;
+          }
+        }
+
+        if (!uploaded) continue;
         encodedMp4Count++;
         setExportProgress(Math.round(((i + 1) / shows.length) * 100));
       }

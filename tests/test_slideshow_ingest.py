@@ -8,6 +8,7 @@ import pytest
 
 from imouse_farm.integrations.slideshow_ingest import (
     SlideshowVideoRejected,
+    clear_all_slot_media,
     clear_slot_media,
     normalize_slot,
     save_bytes_to_slot,
@@ -34,6 +35,20 @@ def test_save_and_clear_slot(tmp_path: Path) -> None:
     removed = clear_slot_media(base, "5", [".mp4"])
     assert removed == 2
     assert list(folder.iterdir()) == []
+
+
+def test_clear_all_slot_media(tmp_path: Path) -> None:
+    base = str(tmp_path / "gallery")
+    save_bytes_to_slot(b"a", base_directory=base, slot="1", filename="a.mp4", validate=False, brand="labely")
+    save_bytes_to_slot(b"b", base_directory=base, slot="1", filename="b.mp4", validate=False, brand="valcoin")
+    save_bytes_to_slot(b"c", base_directory=base, slot="2", filename="c.mp4", validate=False, brand="labely")
+
+    removed = clear_all_slot_media(base, [".mp4"], farm_slots=2)
+
+    assert removed == 3
+    assert list(slot_gallery_dir(base, "1", brand="labely").iterdir()) == []
+    assert list(slot_gallery_dir(base, "1", brand="valcoin").iterdir()) == []
+    assert list(slot_gallery_dir(base, "2", brand="labely").iterdir()) == []
 
 
 def _write_test_video(path: Path, *, luma: float, frames: int = 120) -> None:
@@ -84,7 +99,7 @@ def test_save_bytes_rejects_black_video(tmp_path: Path) -> None:
     _write_test_video(path, luma=5.0)
     data = path.read_bytes()
     base = str(tmp_path / "gallery")
-    with pytest.raises(SlideshowVideoRejected, match="blank slide"):
+    with pytest.raises(SlideshowVideoRejected, match="blank"):
         save_bytes_to_slot(data, base_directory=base, slot="2", filename="bad.mp4")
     folder = slot_gallery_dir(base, "2")
     assert not (folder / "bad.mp4").exists()

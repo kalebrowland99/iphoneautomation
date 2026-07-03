@@ -128,6 +128,10 @@ steps:
     skip_post_action: true
 
   # ── 4. Music gallery button ─────────────────────────────────────────
+  - type: wait
+    name: before_music_gallery
+    duration_seconds: 6
+
   - type: execute_action
     name: tap_music_gallery
     on_failure: pause

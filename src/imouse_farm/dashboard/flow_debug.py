@@ -55,12 +55,10 @@ def _labely_prep_steps() -> list[FlowStep]:
         ("Labely prep: home after kill", "prep-home"),
         ("Labely prep: clear gallery", "clear-album"),
         ("Labely prep: upload Labely videos", "upload-gallery"),
-        ("Labely prep: allow photo access (optional)", "tap-ocr-allow"),
         ("Labely prep: home before VPN", "prep-home"),
         ("Labely prep: open Shadowrocket", "prep-tap-shadowrocket"),
         ("Labely prep: turn VPN on", "prep-tap-vpn-on"),
         ("Labely prep: home after VPN", "prep-home"),
-        ("Labely prep: home for TikTok", "prep-home"),
         ("Labely prep: open TikTok", "tap-tiktok"),
     ]
 
@@ -74,12 +72,10 @@ def _valcoin_prep_steps() -> list[FlowStep]:
         ("ValCoin prep: home after VPN off", "prep-home"),
         ("ValCoin prep: clear gallery", "valcoin-prep-clear-album"),
         ("ValCoin prep: upload ValCoin videos", "valcoin-prep-upload-gallery"),
-        ("ValCoin prep: allow photo access (optional)", "tap-ocr-allow"),
         ("ValCoin prep: home before VPN on", "prep-home"),
         ("ValCoin prep: open Shadowrocket", "prep-tap-shadowrocket"),
         ("ValCoin prep: turn VPN on", "prep-tap-vpn-on"),
         ("ValCoin prep: home after VPN", "prep-home"),
-        ("ValCoin prep: home for TikTok", "prep-home"),
         ("ValCoin prep: open TikTok", "tap-tiktok"),
     ]
 

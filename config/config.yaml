@@ -57,7 +57,6 @@ timing:
   frozen_device_threshold_seconds: 120
   workflow_step_delay_seconds: 0.25
   unknown_screen_escalation_count: 5
-  tiktok_touch_cooldown_seconds: 3  # pause after tap/swipe/drag in tiktok_* workflows (lets AirPlay lag settle)
   permission_watcher_poll_seconds: 0.25  # background popup scan (runs until kill/disconnect)
   contacts_watcher_poll_seconds: 0.2  # dedicated fast loop: tap Don't allow on find-contacts sheet
 
@@ -118,8 +117,9 @@ batch:
   cast_connect_retry_seconds: 15
   batch_device_timeout_seconds: 7200
   disconnect_on_complete: true
-  between_phones_pause_seconds: 2
+  between_phones_pause_seconds: 0
   chain_valcoin_after_labely: true
+  skip_prep_when_valid: true  # skip album clear/upload when prep completed within 24h (invalidated on new ingest)
   warmup:
     duration_seconds: 1200
     swipe_delay_min_seconds: 0

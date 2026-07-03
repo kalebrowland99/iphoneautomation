@@ -58,7 +58,7 @@ from imouse_farm.workflows.vision_recovery import (
 
 logger = get_logger(__name__)
 
-TIKTOK_TOUCH_COOLDOWN_ACTIONS = frozenset({
+TIKTOK_TAP_LOCK_ACTIONS = frozenset({
     ActionType.TAP,
     ActionType.TAP_DETECTION,
     ActionType.TAP_OCR,
@@ -68,6 +68,21 @@ TIKTOK_TOUCH_COOLDOWN_ACTIONS = frozenset({
 POPUP_DISMISS_SETTLE_SECONDS = 1.0
 
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+# Sync full-screen OCR dismiss only where dialogs commonly block navigation.
+SYNC_POPUP_CLEAR_STEP_NAMES = frozenset({
+    "wait_for_plus",  # TikTok home feed before each post
+})
+
+
+def step_needs_sync_popup_clear(
+    workflow_name: str | None,
+    step: WorkflowStepConfig,
+) -> bool:
+    """Whether to run a sync permission OCR pass before this workflow step."""
+    if not is_tiktok_workflow(workflow_name):
+        return False
+    return step.name in SYNC_POPUP_CLEAR_STEP_NAMES
 
 
 class WorkflowRunner:
@@ -122,6 +137,7 @@ class WorkflowRunner:
         self._start_post_index = max(1, int(start_post_index))
         self._brand = str(brand or "labely").strip().lower()
         self._tiktok_post_failure_recoveries = 0
+        self._tiktok_account_switch_recoveries = 0
         self._iteration_completed_by_recovery = False
         self._captions_auto_generated_posts: set[int] = set()
         self._pending_white_background_after_restart = False
@@ -196,6 +212,7 @@ class WorkflowRunner:
 
                 self._refresh_post_variables(iteration)
                 self._tiktok_post_failure_recoveries = 0
+                self._tiktok_account_switch_recoveries = 0
                 self._iteration_completed_by_recovery = False
                 self._captions_auto_generated_posts = set()
                 await self._log_activity(
@@ -616,7 +633,7 @@ class WorkflowRunner:
                 )
             return
 
-        if is_tiktok_workflow(self._workflow.name):
+        if step_needs_sync_popup_clear(self._workflow.name, step):
             await self._ensure_popups_cleared(step.name)
 
         if not step.name.startswith("_"):
@@ -659,6 +676,13 @@ class WorkflowRunner:
             )
             if await self._try_recover_tiktok_post(step, exc):
                 return
+            account_recovery = await self._try_recover_tiktok_account_switch(step, exc)
+            if account_recovery is True:
+                return
+            if account_recovery is None:
+                failure_exc = getattr(self, "_pending_failure_exc", None) or exc
+                await self._handle_failure(step, failure_exc)
+                return
             # Ask OpenAI Vision what to do to recover, then apply normal failure policy.
             await self._vision_recover(step, exc)
             await self._handle_failure(step, exc)
@@ -689,8 +713,6 @@ class WorkflowRunner:
                 logger.warning("unknown_step_type", step_type=step.type, name=step.name)
 
     async def _step_capture(self, step: WorkflowStepConfig) -> None:
-        if is_tiktok_workflow(self._workflow.name):
-            await self._ensure_popups_cleared(step.name or "capture")
         self._last_screenshot = await self._screenshots.capture(
             self._device_id, workflow_id=self._workflow.name
         )
@@ -868,6 +890,82 @@ class WorkflowRunner:
             return False
         return await self._resume_tiktok_post_from_plus()
 
+    async def _try_recover_tiktok_account_switch(
+        self,
+        step: WorkflowStepConfig,
+        exc: Exception,
+    ) -> bool | None:
+        """Reopen TikTok via vision recovery and retry ensure_tiktok_account up to 3 times.
+
+        Returns True if a retry succeeded, None if all recoveries failed,
+        False if this path does not apply.
+        """
+        if step.type != "ensure_tiktok_account":
+            return False
+        if step.on_failure not in ("pause", "escalate"):
+            return False
+
+        max_recoveries = 3
+        if self._tiktok_account_switch_recoveries >= max_recoveries:
+            return False
+
+        last_exc: Exception = exc
+        while self._tiktok_account_switch_recoveries < max_recoveries:
+            self._tiktok_account_switch_recoveries += 1
+            await self._log_activity(
+                "warn",
+                "workflow",
+                (
+                    f"Account switch failed ({last_exc}) — reopening TikTok and retrying "
+                    f"({self._tiktok_account_switch_recoveries}/{max_recoveries})"
+                ),
+                step=step.name,
+            )
+
+            await self._vision_recover(step, last_exc)
+            await asyncio.sleep(self._config.timing.action_retry_delay_seconds)
+
+            self._step_failed = False
+            self._failure_message = ""
+            try:
+                await self._execute_step_body(step)
+                if step.screen_check:
+                    await self._verify_screen_check(step)
+                await self._log_activity(
+                    "info",
+                    "workflow",
+                    "Account switch succeeded after TikTok reopen",
+                    step=step.name,
+                )
+                return True
+            except Exception as retry_exc:
+                last_exc = retry_exc
+                logger.error(
+                    "account_switch_retry_failed",
+                    step=step.name,
+                    device_id=self._device_id,
+                    attempt=self._tiktok_account_switch_recoveries,
+                    max_recoveries=max_recoveries,
+                    error=str(retry_exc),
+                )
+                if self._tiktok_account_switch_recoveries >= max_recoveries:
+                    await self._log_activity(
+                        "error",
+                        "workflow",
+                        f"Account switch retry failed: {retry_exc}",
+                        step=step.name,
+                    )
+                    self._pending_failure_exc = retry_exc
+                    return None
+                await self._log_activity(
+                    "warn",
+                    "workflow",
+                    f"Account switch retry failed: {retry_exc} — reopening TikTok again",
+                    step=step.name,
+                )
+
+        return None
+
     async def _resume_tiktok_post_from_plus(self) -> bool:
         """Re-run from wait_for_plus through end of current post iteration."""
         self._step_failed = False
@@ -890,33 +988,19 @@ class WorkflowRunner:
         return True
 
     async def _open_tiktok_from_home(self, *, parent_step: str) -> None:
-        """Find TikTok on home and open it."""
-        step_name = f"{parent_step}_open_tiktok"
-        templates = expand_template_names(["tiktok"])
-        deadline = time.monotonic() + 30.0
-        while self._running and time.monotonic() < deadline:
-            await self._ensure_popups_cleared(step_name)
-            await self._step_capture(
-                WorkflowStepConfig(
-                    type="screenshot",
-                    name=f"{step_name}_home",
-                    templates=templates,
-                )
-            )
-            await self._step_analyze(
-                WorkflowStepConfig(
-                    type="analyze_screen",
-                    name=f"{step_name}_tiktok_icon",
-                    templates=templates,
-                )
-            )
-            if self._has_detection("tiktok"):
-                break
-            await asyncio.sleep(2.0)
-        else:
-            raise RuntimeError("TikTok icon not found on home screen")
-
-        await self._tap_detection_inline("tiktok")
+        """Open TikTok from the home screen via configured icon coordinates."""
+        nav = self._config.tiktok_navigation
+        x = nav.tiktok_home_icon_x
+        y = nav.tiktok_home_icon_y
+        await self._log_activity(
+            "info",
+            "workflow",
+            f"Opening TikTok from home at ({x}, {y})",
+            step=parent_step,
+        )
+        ok = await self._device_manager.controller.tap(self._device_id, x, y)
+        if not ok:
+            raise RuntimeError(f"TikTok icon tap failed at ({x}, {y})")
         await wait_for_tiktok_plus_visible(
             self._device_manager.controller,
             self._device_id,
@@ -924,7 +1008,7 @@ class WorkflowRunner:
             vision=self._vision,
             templates_directory=self._config.analysis.templates_directory,
             log_activity=lambda level, category, message, *args, **details: self._log_activity(
-                level, category, message, *args, step=step_name, **details
+                level, category, message, *args, step=parent_step, **details
             ),
         )
 
@@ -969,7 +1053,6 @@ class WorkflowRunner:
             )
             if not ok:
                 raise RuntimeError(f"TikTok restart failed at {action_type.value}")
-            await self._apply_tiktok_touch_cooldown(action_type)
             await asyncio.sleep(wait_s)
 
         await self._open_tiktok_from_home(parent_step=parent_step)
@@ -1244,8 +1327,6 @@ class WorkflowRunner:
             )
 
     async def _step_analyze(self, step: WorkflowStepConfig) -> None:
-        if is_tiktok_workflow(self._workflow.name):
-            await self._ensure_popups_cleared(step.name or "analyze")
         if not self._last_screenshot:
             path = await self._screenshots.get_latest_path(self._device_id)
             if not path:
@@ -1536,8 +1617,6 @@ class WorkflowRunner:
         if not success:
             raise RuntimeError(f"Action failed: {step.name}")
 
-        await self._apply_tiktok_touch_cooldown(action_type)
-
         if step.skip_post_action:
             return
 
@@ -1547,26 +1626,6 @@ class WorkflowRunner:
         await asyncio.sleep(0.5)
         await self._step_capture(WorkflowStepConfig(type="capture_screen", name="_post_action_verify"))
         await self._step_analyze(WorkflowStepConfig(type="analyze_screen", name="_post_action_analyze"))
-
-    def _immediate_next_wait_seconds(self) -> float | None:
-        idx = getattr(self, "_current_step_index", -1)
-        if idx < 0 or idx + 1 >= len(self._workflow.steps):
-            return None
-        nxt = self._workflow.steps[idx + 1]
-        if nxt.type in ("wait", "wait_random"):
-            return float(nxt.duration_seconds or 1.0)
-        return None
-
-    async def _apply_tiktok_touch_cooldown(self, action_type: ActionType) -> None:
-        cooldown = float(self._config.timing.tiktok_touch_cooldown_seconds or 0)
-        if cooldown <= 0 or not is_tiktok_workflow(self._workflow.name):
-            return
-        if action_type not in TIKTOK_TOUCH_COOLDOWN_ACTIONS:
-            return
-        next_wait = self._immediate_next_wait_seconds()
-        if next_wait is not None and next_wait >= cooldown:
-            return
-        await asyncio.sleep(cooldown)
 
     async def _step_ensure_tiktok_account(self, step: WorkflowStepConfig) -> None:
         handle = str(self._variables.get("tiktok_account") or "").strip()
@@ -1582,6 +1641,9 @@ class WorkflowRunner:
         async def _log(level: str, category: str, message: str, *args: Any, **details: Any) -> None:
             await self._log_activity(level, category, message, *args, step=step.name, **details)
 
+        async def _clear_popups(context: str) -> bool:
+            return (await self._ensure_popups_cleared(context)) > 0
+
         await ensure_tiktok_account(
             controller=self._device_manager.controller,
             device_id=self._device_id,
@@ -1592,10 +1654,10 @@ class WorkflowRunner:
             templates_dir=self._config.analysis.templates_directory,
             vision=self._vision,
             brand=self._brand,
+            clear_popups=_clear_popups,
         )
 
     async def _step_verify(self, step: WorkflowStepConfig) -> None:
-        await self._ensure_popups_cleared(step.name)
         if not self._last_analysis:
             raise RuntimeError("No analysis for verification")
         passed = self._vision.verify_condition(
@@ -1653,9 +1715,8 @@ class WorkflowRunner:
         *,
         step_name: str,
     ) -> bool:
-        """Execute a device action after clearing any visible popups."""
-        await self._ensure_popups_cleared(step_name)
-        if action_type in TIKTOK_TOUCH_COOLDOWN_ACTIONS:
+        """Execute a device action (popup clear runs once at workflow step entry)."""
+        if action_type in TIKTOK_TAP_LOCK_ACTIONS:
             tap_lock = self._device_manager.get_tap_lock(self._device_id)
             async with tap_lock:
                 return await self._actions.execute_direct(
@@ -1674,22 +1735,9 @@ class WorkflowRunner:
         )
 
     async def _sleep_with_popup_watch(self, seconds: float, context: str) -> None:
-        if (
-            seconds <= 0
-            or not self._permission_watchers
-            or not is_tiktok_workflow(self._workflow.name)
-        ):
-            await asyncio.sleep(seconds)
+        if seconds <= 0:
             return
-        deadline = time.monotonic() + seconds
-        while self._running and time.monotonic() < deadline:
-            await self._ensure_popups_cleared(context)
-            if self._device_manager:
-                await self._device_manager.record_activity(self._device_id)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            await asyncio.sleep(min(self._config.timing.permission_watcher_poll_seconds, remaining))
+        await asyncio.sleep(seconds)
 
     async def _step_wait(self, step: WorkflowStepConfig) -> None:
         if step.type == "wait_random" or (step.min_seconds and step.max_seconds):
@@ -1699,6 +1747,12 @@ class WorkflowRunner:
             )
         else:
             duration = step.duration_seconds or 1.0
+        if step.name and not step.name.startswith("_") and duration >= 1.0:
+            await self._log_activity(
+                "info",
+                "workflow",
+                f"Waiting {duration:g}s — {step.name}",
+            )
         await self._sleep_with_popup_watch(duration, step.name or "wait")
 
     async def _step_wait_for_detection(self, step: WorkflowStepConfig) -> None:
@@ -1754,7 +1808,6 @@ class WorkflowRunner:
                 continue
 
             attempt += 1
-            await self._ensure_popups_cleared(step.name)
             if samples_per_poll > 1 or action_cfg.get("ocr_fallback_texts"):
                 hit = await self._sample_best_detection(
                     step, target, templates, action_cfg
@@ -1841,6 +1894,15 @@ class WorkflowRunner:
 
         raise RuntimeError(f"Stopped while waiting for '{target}'")
 
+    def _vision_recovery_should_reopen_tiktok(self, step: WorkflowStepConfig) -> bool:
+        """Prep/end home/kill/album failures should not kill-reopen TikTok."""
+        workflow = self._workflow.name or ""
+        if workflow in ("tiktok_prep", "tiktok_valcoin_prep"):
+            return (step.name or "") in ("open_tiktok", "wait_for_tiktok_icon")
+        if workflow == "tiktok_end":
+            return False
+        return True
+
     async def _vision_recover(self, step: WorkflowStepConfig, exc: Exception) -> None:
         """On step failure: check for a blocking popup via OpenAI Vision.
 
@@ -1869,13 +1931,20 @@ class WorkflowRunner:
                     log_activity=self._log_activity,
                 )
             else:
-                # No popup — kill and reopen TikTok.
-                await kill_and_reopen_tiktok(
-                    controller,
-                    self._device_id,
-                    self._config,
-                    log_activity=self._log_activity,
-                )
+                if self._vision_recovery_should_reopen_tiktok(step):
+                    await kill_and_reopen_tiktok(
+                        controller,
+                        self._device_id,
+                        self._config,
+                        log_activity=self._log_activity,
+                    )
+                else:
+                    await self._log_activity(
+                        "info",
+                        "workflow",
+                        "Vision recovery: no popup — skipping TikTok reopen for this step",
+                        step=step.name,
+                    )
         except Exception as recovery_exc:
             logger.warning(
                 "vision_recovery_skipped",

@@ -161,23 +161,29 @@ async def kill_and_reopen_tiktok(
     await controller.press_home(device_id)
     await asyncio.sleep(1.5)
 
-    # Use vision to find and tap the TikTok icon.
-    try:
-        x, y, reason = await ask_vision_for_tap(
-            controller,
+    # Tap the TikTok icon at the configured home-screen coordinate.
+    nav = app_config.tiktok_navigation
+    x = nav.tiktok_home_icon_x
+    y = nav.tiktok_home_icon_y
+    if log_activity:
+        await log_activity(
+            "info",
+            "workflow",
+            f"Vision recovery: tapping TikTok icon at ({x}, {y})",
             device_id,
-            goal="Tap the TikTok app icon to open TikTok",
-            app_config=app_config,
         )
-        if x is not None:
-            if log_activity:
-                await log_activity("info", "workflow", f"Vision recovery: tapping TikTok icon at ({x}, {y}) — {reason}", device_id)
-            await controller.tap(device_id, x, y)
-            await asyncio.sleep(3.0)
-    except Exception as exc:
-        logger.warning("vision_recovery_reopen_failed", device_id=device_id, error=str(exc))
+    ok = await controller.tap(device_id, x, y)
+    if not ok:
+        logger.warning("vision_recovery_reopen_tap_failed", device_id=device_id, x=x, y=y)
         if log_activity:
-            await log_activity("warn", "workflow", f"Vision recovery: could not find TikTok icon — {exc}", device_id)
+            await log_activity(
+                "warn",
+                "workflow",
+                f"Vision recovery: TikTok icon tap failed at ({x}, {y})",
+                device_id,
+            )
+        return
+    await asyncio.sleep(3.0)
 
 
 async def ask_vision_for_tap(

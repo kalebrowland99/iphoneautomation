@@ -7,6 +7,8 @@ from typing import Any, Awaitable, Callable
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.permissions.watcher import PermissionWatcherManager
+from imouse_farm.post.account_profile_store import is_prep_valid, mark_prep_completed
+from imouse_farm.post.brand_keys import device_storage_key
 from imouse_farm.post.post_caption_store import POST_COUNT
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.workflows.engine import WorkflowEngine
@@ -53,27 +55,45 @@ TIKTOK_POST_END_PIPELINE = _workflow_names(
 EventCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
+_PREP_WORKFLOWS = frozenset({"tiktok_prep", "tiktok_valcoin_prep"})
+
+
 def _build_steps(
     *,
     from_post: int | None,
     brand: str,
     chain_valcoin_after_labely: bool,
+    skip_prep_brands: frozenset[str] = frozenset(),
+    skip_labely_end_for_valcoin_warmup: bool = False,
 ) -> list[PipelineStep]:
     run_brand = str(brand or "labely").strip().lower()
     if from_post is not None:
-        return [
+        steps = [
             _step("tiktok_account_switch", run_brand),
             _step("tiktok_post", run_brand),
             _step("tiktok_end", run_brand),
         ]
-    if run_brand == "labely" and chain_valcoin_after_labely:
-        return list(TIKTOK_LABELY_THEN_VALCOIN_STEPS)
-    return [
-        _step("tiktok_prep", run_brand),
-        _step("tiktok_account_switch", run_brand),
-        _step("tiktok_post", run_brand),
-        _step("tiktok_end", run_brand),
-    ]
+    elif run_brand == "labely" and chain_valcoin_after_labely:
+        steps = list(TIKTOK_LABELY_THEN_VALCOIN_STEPS)
+    else:
+        steps = [
+            _step("tiktok_prep", run_brand),
+            _step("tiktok_account_switch", run_brand),
+            _step("tiktok_post", run_brand),
+        ]
+        if not (run_brand == "labely" and skip_labely_end_for_valcoin_warmup):
+            steps.append(_step("tiktok_end", run_brand))
+    if skip_prep_brands:
+        steps = [
+            s
+            for s in steps
+            if not (
+                s["workflow"] in _PREP_WORKFLOWS and s["brand"] in skip_prep_brands
+            )
+        ]
+    if not steps:
+        raise ValueError("pipeline has no steps after prep skip")
+    return steps
 
 
 def _post_start_for_step(pipe: dict[str, Any], step_index: int) -> int | None:
@@ -146,6 +166,8 @@ class WorkflowPipeline:
         from_post: int | None = None,
         brand: str = "labely",
         chain_valcoin_after_labely: bool = False,
+        skip_prep_when_valid: bool = True,
+        skip_labely_end_for_valcoin_warmup: bool = False,
     ) -> bool:
         if self.is_active(device_id):
             return False
@@ -161,10 +183,19 @@ class WorkflowPipeline:
             await self._permission_watchers.ensure_watching(device_id)
 
         run_brand = str(brand or "labely").strip().lower()
+        skip_prep_brands: frozenset[str] = frozenset()
+        if from_post is None and skip_prep_when_valid:
+            device = self._dm.get_device(device_id)
+            if device:
+                storage_key = device_storage_key(device_id, device.user_name)
+                if is_prep_valid(storage_key, brand=run_brand):
+                    skip_prep_brands = frozenset({run_brand})
         steps = _build_steps(
             from_post=from_post,
             brand=run_brand,
             chain_valcoin_after_labely=chain_valcoin_after_labely,
+            skip_prep_brands=skip_prep_brands,
+            skip_labely_end_for_valcoin_warmup=skip_labely_end_for_valcoin_warmup,
         )
         first = steps[0]
         self._pipelines[device_id] = {
@@ -183,7 +214,12 @@ class WorkflowPipeline:
 
         workflow_names = [s["workflow"] for s in steps]
         if from_post is None:
-            if chain_valcoin_after_labely and run_brand == "labely":
+            if skip_prep_brands:
+                label = (
+                    f"Full run ({' → '.join(workflow_names)}) — "
+                    f"skipped {run_brand} prep (gallery still on device)"
+                )
+            elif chain_valcoin_after_labely and run_brand == "labely":
                 label = "Labely + ValCoin run (prep → Labely posts → clear → ValCoin upload → ValCoin posts → end)"
             else:
                 label = f"Full run ({' → '.join(workflow_names)})"
@@ -287,18 +323,11 @@ class WorkflowPipeline:
             if workflow != current:
                 return
 
-            # Track that prep finished so a restart can skip re-uploading videos.
-            if workflow == "tiktok_prep":
-                try:
-                    from imouse_farm.post.account_profile_store import mark_prep_completed
-                    from imouse_farm.post.brand_keys import brand_profile_key, device_storage_key
-                    device = self._dm.get_device(device_id)
-                    if device:
-                        base_key = device_storage_key(device_id, device.user_name)
-                        run_brand = pipe.get("brand", "labely")
-                        mark_prep_completed(base_key, brand=run_brand)
-                except Exception:  # noqa: BLE001
-                    pass
+            if current_step and workflow in _PREP_WORKFLOWS:
+                device = self._dm.get_device(device_id)
+                if device:
+                    storage_key = device_storage_key(device_id, device.user_name)
+                    mark_prep_completed(storage_key, brand=current_step["brand"])
 
             pipe["index"] += 1
             if pipe["index"] >= len(steps):

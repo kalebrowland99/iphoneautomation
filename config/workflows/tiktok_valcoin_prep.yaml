@@ -13,10 +13,6 @@ steps:
       type: home
     skip_post_action: true
 
-  - type: wait
-    name: settle_before_vpn_off
-    duration_seconds: 0.5
-
   - type: execute_action
     name: open_shadowrocket_off
     on_failure: pause
@@ -28,7 +24,7 @@ steps:
 
   - type: wait
     name: shadowrocket_open_off
-    duration_seconds: 2
+    duration_seconds: 1
 
   - type: execute_action
     name: tap_vpn_off_coord
@@ -41,17 +37,13 @@ steps:
 
   - type: wait
     name: after_vpn_off_coord
-    duration_seconds: 3
+    duration_seconds: 1
 
   - type: execute_action
     name: go_home_after_vpn_off
     action:
       type: home
     skip_post_action: true
-
-  - type: wait
-    name: after_vpn_off_home
-    duration_seconds: 2
 
   # ── 2. Clear Labely videos + upload ValCoin gallery ─────────────────
   - type: execute_action
@@ -105,10 +97,6 @@ steps:
       type: home
     skip_post_action: true
 
-  - type: wait
-    name: settle_home_vpn
-    duration_seconds: 0.5
-
   - type: execute_action
     name: open_shadowrocket
     on_failure: pause
@@ -120,7 +108,7 @@ steps:
 
   - type: wait
     name: shadowrocket_open
-    duration_seconds: 2
+    duration_seconds: 1
 
   - type: execute_action
     name: tap_vpn_toggle_coord
@@ -133,7 +121,7 @@ steps:
 
   - type: wait
     name: after_vpn_toggle_coord
-    duration_seconds: 5
+    duration_seconds: 2
 
   - type: execute_action
     name: go_home_after_vpn
@@ -143,46 +131,17 @@ steps:
 
   - type: wait
     name: after_vpn_home
-    duration_seconds: 2
-
-  # ── 4. Open TikTok for ValCoin account switch + posts ───────────────
-  - type: execute_action
-    name: go_home_for_tiktok
-    action:
-      type: home
-    skip_post_action: true
-
-  - type: wait
-    name: settle_for_tiktok
-    duration_seconds: 3
-
-  - type: wait_for_detection
-    name: wait_for_tiktok_icon
-    templates: [tiktok]
-    when_detection: tiktok
-    duration_seconds: 60
-    min_seconds: 2
-    on_failure: pause
-
-  - type: screenshot
-    name: fresh_tiktok_screen
-    templates: [tiktok]
-
-  - type: analyze_screen
-    name: fresh_tiktok_analyze
-    templates: [tiktok]
-
-  - type: verify
-    name: confirm_tiktok_before_tap
-    condition: template_match
-    template: tiktok
-    on_failure: pause
+    duration_seconds: 0.5
 
   - type: execute_action
     name: open_tiktok
-    requires_analysis: true
     on_failure: pause
     action:
-      type: tap_detection
-      detection: tiktok
+      type: tap
+      x: 507
+      y: 1011
     skip_post_action: true
+
+  - type: wait
+    name: after_open_tiktok
+    duration_seconds: 2

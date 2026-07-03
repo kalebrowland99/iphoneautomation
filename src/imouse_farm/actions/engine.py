@@ -478,10 +478,26 @@ class ActionEngine:
                             return True
                     return False
 
+                async def _dismiss_ai_pick_if_visible() -> bool:
+                    from imouse_farm.actions.permission_prompts import (
+                        dismiss_tiktok_ai_pick_if_visible,
+                    )
+
+                    if not await dismiss_tiktok_ai_pick_if_visible(
+                        ctrl,
+                        device_id,
+                        device_manager=self._device_manager,
+                    ):
+                        return False
+                    logger.info("tap_ocr_dismiss_ai_pick", device_id=device_id)
+                    await asyncio.sleep(0.5)
+                    return True
+
                 async def _wait_for_ocr(deadline: float) -> bool:
                     while True:
                         if is_cancelled(device_id):
                             return False
+                        await _dismiss_ai_pick_if_visible()
                         if await _try_tap_once():
                             return True
                         if wait_timeout <= 0 or time.monotonic() >= deadline:
@@ -493,6 +509,7 @@ class ActionEngine:
                     while True:
                         if is_cancelled(device_id):
                             return False
+                        await _dismiss_ai_pick_if_visible()
                         if await _try_tap_once():
                             return True
                         if time.monotonic() >= deadline:
@@ -566,6 +583,7 @@ class ActionEngine:
                     while time.monotonic() < deadline:
                         if is_cancelled(device_id):
                             return False
+                        await _dismiss_ai_pick_if_visible()
                         if await _try_tap_once():
                             return True
                         if retry_texts:
@@ -761,6 +779,8 @@ class ActionEngine:
                     ("sheet_appear_timeout_seconds", "sheet_appear_timeout"),
                     ("round_active_timeout_seconds", "round_active_timeout"),
                     ("sheet_poll_interval_seconds", "sheet_poll_interval_seconds"),
+                    ("round_gap_seconds", "round_gap_seconds"),
+                    ("delete_settle_seconds", "settle_after_delete"),
                 ):
                     if src in params:
                         clear_kw[dst] = float(params[src])
@@ -784,14 +804,19 @@ class ActionEngine:
                 files = list_media_files(folder, extensions)
                 if not files:
                     raise RuntimeError(f"No media files in {folder}")
-                return await ctrl.album_upload(
-                    device_id,
-                    files,
-                    album_name=params.get("album_name"),
-                    timeout_ms=int(params.get("timeout_ms", 300000)),
-                    zip_files=bool(params.get("zip", False)),
-                    verify=bool(params.get("verify", True)),
-                )
+                upload_kw: dict[str, Any] = {
+                    "album_name": params.get("album_name"),
+                    "timeout_ms": int(params.get("timeout_ms", 300000)),
+                    "zip_files": bool(params.get("zip", False)),
+                    "verify": bool(params.get("verify", True)),
+                }
+                if "post_grace_seconds" in params:
+                    upload_kw["post_grace_seconds"] = float(params["post_grace_seconds"])
+                if "inter_file_delay_seconds" in params:
+                    upload_kw["inter_file_delay_seconds"] = float(
+                        params["inter_file_delay_seconds"]
+                    )
+                return await ctrl.album_upload(device_id, files, **upload_kw)
             case _:
                 raise ValueError(f"Unknown action type: {action}")
 

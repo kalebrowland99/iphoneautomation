@@ -54,7 +54,9 @@ def test_list_debug_tests() -> None:
 def test_template_taps_auto_registered_from_screen_states() -> None:
     registry = get_debug_registry()
     assert "tap-tiktok" in registry
-    assert registry["tap-tiktok"]["detection"] == "tiktok"
+    assert registry["tap-tiktok"]["kind"] == "tap_xy"
+    assert registry["tap-tiktok"]["x"] == 507
+    assert registry["tap-tiktok"]["y"] == 1011
 
 
 def test_debug_tests_have_required_fields() -> None:
@@ -119,6 +121,7 @@ def test_list_account_switch_debug_tests() -> None:
     assert "account-ensure-full" in ids
     assert "account-tap-profile-tab" in ids
     assert "account-dismiss-security-checkup" in ids
+    assert "account-dismiss-add-phone" in ids
     assert all(t["group"] == "account_switch" for t in tests)
 
 
@@ -129,6 +132,15 @@ def test_security_checkup_debug_tests_registered() -> None:
         assert spec["kind"] == "tap_xy"
         assert spec["x"] == 570
         assert spec["y"] == 501
+
+
+def test_add_phone_debug_tests_registered() -> None:
+    registry = get_debug_registry()
+    for test_id in ("post-dismiss-add-phone", "account-dismiss-add-phone"):
+        spec = registry[test_id]
+        assert spec["kind"] == "tap_xy"
+        assert spec["x"] == 564
+        assert spec["y"] == 260
 
 
 def test_permission_watcher_run_debug_registered() -> None:

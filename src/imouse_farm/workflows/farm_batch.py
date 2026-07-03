@@ -12,7 +12,6 @@ from imouse_farm.permissions.watcher import PermissionWatcherManager
 from imouse_farm.post.post_caption_store import validate_post_texts, text_key_for_device
 from imouse_farm.post.account_profile_store import (
     get_profile_for_device,
-    is_prep_valid,
     is_cant_cast_imouse,
     set_cant_cast_imouse,
 )
@@ -281,23 +280,8 @@ class FarmBatchRunner:
                         device.device_id, device.user_name, brand=brand
                     )
 
-                    # Auto-resume: if the user stopped and restarted within 24h, skip
-                    # re-uploading videos that are already on the device.
                     effective_from_post = from_post
                     base_key = device_storage_key(device.device_id, device.user_name)
-                    if from_post is None and is_prep_valid(base_key, brand=brand):
-                        posts_done = int(profile.get("posts_completed", 0) or 0)
-                        if posts_done < 3:
-                            effective_from_post = posts_done + 1
-                            await self._db.log_activity(
-                                "info",
-                                "batch",
-                                f"Resuming from post {effective_from_post} "
-                                f"(prep already done, skipping re-upload)",
-                                device.device_id,
-                                {"from_post": effective_from_post, "posts_done": posts_done},
-                            )
-                        # posts_done == 3 means last run fully posted; run fresh
                     chain_valcoin = (
                         brand == "labely"
                         and effective_from_post is None
@@ -318,6 +302,7 @@ class FarmBatchRunner:
                                 device_manager=self._dm,
                                 stop_check=lambda: self._stop_requested,
                                 log_activity=self._db.log_activity,
+                                permission_watchers=self._permission_watchers,
                             )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(
@@ -401,12 +386,18 @@ class FarmBatchRunner:
                         await self._dm.disconnect_airplay(device.device_id)
                         continue
 
+                    valcoin_warmup_after_labely = (
+                        brand == "labely"
+                        and bool(valcoin_profile.get("warmup_enabled"))
+                    )
                     self._batch_done_events[device.device_id] = asyncio.Event()
                     started = await self._pipeline.start(
                         device.device_id,
                         from_post=effective_from_post,
                         brand=brand,
                         chain_valcoin_after_labely=chain_valcoin,
+                        skip_prep_when_valid=self._config.skip_prep_when_valid,
+                        skip_labely_end_for_valcoin_warmup=valcoin_warmup_after_labely,
                     )
                     if not started:
                         self._batch_done_events.pop(device.device_id, None)
@@ -466,8 +457,7 @@ class FarmBatchRunner:
                         )
                         await self._emit("batch_running", self.get_status())
 
-                        # Ensure AirPlay is still live — the Labely pipeline's tiktok_end
-                        # workflow disconnects on some code paths before we get here.
+                        # Ensure AirPlay is still live before ValCoin warmup scroll.
                         cast_ok = await self._ensure_cast(device.device_id)
                         if not cast_ok:
                             logger.warning(
@@ -493,6 +483,7 @@ class FarmBatchRunner:
                                 stop_check=lambda: self._stop_requested,
                                 log_activity=self._db.log_activity,
                                 after_labely=True,
+                                permission_watchers=self._permission_watchers,
                             )
                         except Exception as exc:  # noqa: BLE001
                             logger.warning(

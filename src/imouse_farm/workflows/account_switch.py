@@ -17,6 +17,16 @@ from imouse_farm.workflows.tiktok_plus_ready import wait_for_tiktok_plus_visible
 logger = get_logger(__name__)
 
 LogFn = Callable[..., Awaitable[None]]
+ClearPopupsFn = Callable[[str], Awaitable[bool]]
+
+
+async def _clear_popups_if_needed(
+    clear_popups: ClearPopupsFn | None,
+    context: str,
+) -> bool:
+    if clear_popups is None:
+        return False
+    return bool(await clear_popups(context))
 
 
 async def ensure_tiktok_account(
@@ -33,6 +43,7 @@ async def ensure_tiktok_account(
     device_user_name: str = "",
     toggle_to_opposite: bool = False,
     tiktok_ready_timeout_seconds: float = 90.0,
+    clear_popups: ClearPopupsFn | None = None,
 ) -> bool:
     """Tap profile, switch account if needed, then tap home. Returns True if ready."""
     target_handle = normalize_handle(tiktok_handle)
@@ -71,6 +82,7 @@ async def ensure_tiktok_account(
             device_id,
         )
 
+    await _clear_popups_if_needed(clear_popups, "account_home_ready")
     await wait_for_tiktok_plus_visible(
         controller,
         device_id,
@@ -84,8 +96,18 @@ async def ensure_tiktok_account(
     if log_activity:
         await log_activity("info", "workflow", "Settling 3s — home feed loading after + detected", device_id)
     await _sleep(3.0)
-    await controller.tap(device_id, navigation.profile_tab_x, navigation.profile_tab_y)
-    await _sleep(2.0)
+    await _clear_popups_if_needed(clear_popups, "account_profile_tab")
+    profile_x = navigation.profile_tab_x
+    profile_y = navigation.profile_tab_y
+    await _double_tap_profile_with_popup_safeguard(
+        controller,
+        device_id,
+        profile_x,
+        profile_y,
+        dest_handle=dest_handle,
+        clear_popups=clear_popups,
+        log_activity=log_activity,
+    )
 
     rect = _search_rect(device_manager, device_id, navigation.account_name_search_rect_pct)
     if await _screen_shows_handle(controller, device_id, dest_queries, rect):
@@ -102,6 +124,7 @@ async def ensure_tiktok_account(
             f"Switching to {dest_handle}",
         )
 
+    await _clear_popups_if_needed(clear_popups, "account_switcher")
     if not await _open_account_switcher(
         controller, device_id, navigation, dest_queries
     ):
@@ -200,18 +223,28 @@ async def _open_account_switcher(
     navigation: TikTokNavigationConfig,
     switch_queries: list[str],
 ) -> bool:
-    """Open account switcher; recover from Total Likes modal on alternate TikTok UI."""
-    x = navigation.account_switcher_opener_x
-    y = navigation.account_switcher_opener_y
-    ok = await controller.tap(device_id, x, y)
-    logger.info("account_switcher_opener_tap", x=x, y=y, ok=ok)
-    if not ok:
-        return False
-
-    await _sleep(1.0)
-    if await _switcher_shows_account(controller, device_id, switch_queries):
-        logger.info("account_switcher_open", mode="primary")
-        return True
+    """Open account switcher; try primary then alt opener before Total Likes recovery."""
+    openers = (
+        (
+            navigation.account_switcher_opener_x,
+            navigation.account_switcher_opener_y,
+            "primary",
+        ),
+        (
+            navigation.account_switcher_opener_alt_x,
+            navigation.account_switcher_opener_alt_y,
+            "alt",
+        ),
+    )
+    for x, y, mode in openers:
+        ok = await controller.tap(device_id, x, y)
+        logger.info("account_switcher_opener_tap", x=x, y=y, ok=ok, mode=mode)
+        if not ok:
+            return False
+        await _sleep(1.0)
+        if await _switcher_shows_account(controller, device_id, switch_queries):
+            logger.info("account_switcher_open", mode=mode)
+            return True
 
     dismiss = navigation.account_likes_dismiss_ok
     dx = int(dismiss.x)
@@ -287,6 +320,54 @@ async def _tap_handle_in_list(
         best = max(matches, key=lambda m: float(m.get("confidence", 0)))
         return await controller.tap(device_id, int(best["x"]), int(best["y"]))
     return False
+
+
+async def _double_tap_profile_with_popup_safeguard(
+    controller: Any,
+    device_id: str,
+    x: int,
+    y: int,
+    *,
+    dest_handle: str,
+    clear_popups: ClearPopupsFn | None,
+    log_activity: LogFn | None = None,
+) -> None:
+    """Double-tap profile, run popup watcher, then re-tap if a popup was dismissed."""
+    if log_activity:
+        await log_activity(
+            "info",
+            "workflow",
+            f"Double-tapping profile tab ({x}, {y}) to check @{dest_handle.lstrip('@')}",
+            device_id,
+        )
+    await _double_tap(controller, device_id, x, y)
+
+    if await _clear_popups_if_needed(clear_popups, "account_profile_tab_after_tap"):
+        if log_activity:
+            await log_activity(
+                "info",
+                "workflow",
+                "Popup dismissed after profile tap — double-tapping profile tab again",
+                device_id,
+            )
+        await _double_tap(controller, device_id, x, y)
+
+    await _sleep(2.0)
+
+
+async def _double_tap(
+    controller: Any,
+    device_id: str,
+    x: int,
+    y: int,
+    *,
+    interval_seconds: float = 0.5,
+) -> bool:
+    ok = await controller.tap(device_id, x, y)
+    if not ok:
+        return False
+    await _sleep(interval_seconds)
+    return await controller.tap(device_id, x, y)
 
 
 async def _sleep(seconds: float) -> None:

@@ -462,19 +462,32 @@ class DeviceController:
         return await self.send_key(device_id, "\b")
 
     async def press_home(self, device_id: str) -> bool:
-        def _home() -> bool:
-            response = self._api.key_sendkey(self._ids(device_id), fn_key="home")
-            if self._ok(response):
-                return True
-            logger.error(
-                "home_failed",
-                device_id=device_id,
-                message=self._error_message(response),
-            )
-            return False
-
         logger.info("action_home", device_id=device_id)
-        return await self._run_sync(_home)
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            def _home(try_num: int = attempt) -> bool:
+                response = self._api.key_sendkey(self._ids(device_id), fn_key="home")
+                if self._ok(response):
+                    return True
+                logger.error(
+                    "home_failed",
+                    device_id=device_id,
+                    attempt=try_num,
+                    message=self._error_message(response),
+                )
+                return False
+
+            if await self._run_sync(_home):
+                if attempt > 1:
+                    logger.info(
+                        "home_succeeded_after_retry",
+                        device_id=device_id,
+                        attempt=attempt,
+                    )
+                return True
+            if attempt < max_attempts:
+                await asyncio.sleep(0.5)
+        return False
 
     async def reset_cursor(self, device_id: str) -> bool:
         def _reset() -> bool:
@@ -634,6 +647,7 @@ class DeviceController:
         sheet_poll_interval_seconds: float = 5.0,
         max_rounds: int = 12,
         list_check_num: int = 100,
+        round_gap_seconds: float = 1.5,
     ) -> bool:
         """Clear the album via shortcut_album_clear, tapping the iOS delete dialog.
 
@@ -664,6 +678,20 @@ class DeviceController:
         last_error = ""
 
         logger.info("album_clear", device_id=device_id, album=label)
+
+        async def _album_empty_quick() -> bool:
+            items = await self.album_list(
+                device_id, album_name=album_name, num=5
+            )
+            return len(items) == 0
+
+        if await _album_empty_quick():
+            logger.info(
+                "album_clear_skip_already_empty",
+                device_id=device_id,
+                album=label,
+            )
+            return True
 
         def _fire_clear() -> None:
             self._fire_album_clear_shortcut(device_id, album_name, timeout_ms)
@@ -736,12 +764,6 @@ class DeviceController:
             )
             bulk = is_final_bulk_delete_label(label)
             return True, bulk
-
-        async def _album_empty_quick() -> bool:
-            items = await self.album_list(
-                device_id, album_name=album_name, num=5
-            )
-            return len(items) == 0
 
         async def _run_clear_round(round_num: int) -> tuple[bool, int, bool]:
             """Fire shortcut_album_clear async and drive the round via OCR detection."""
@@ -930,7 +952,7 @@ class DeviceController:
                     or "album clear failed — delete sheet not handled (no Delete tap)"
                 )
 
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(round_gap_seconds)
             remaining = await self.album_list(
                 device_id, album_name=album_name, num=list_check_num
             )
@@ -984,6 +1006,7 @@ class DeviceController:
         *,
         verify: bool = True,
         post_grace_seconds: float = 8.0,
+        inter_file_delay_seconds: float = 1.5,
     ) -> bool:
         """Upload files to the album and confirm they actually landed.
 
@@ -1074,7 +1097,7 @@ class DeviceController:
                 batch_reported = await self._run_sync(lambda p=path: _upload_batch([p]))
                 reported = max(reported, batch_reported)
                 if i + 1 < len(abs_files):
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(inter_file_delay_seconds)
             # Permission dialogs can appear just after the API returns too.
             await asyncio.sleep(post_grace_seconds)
         finally:

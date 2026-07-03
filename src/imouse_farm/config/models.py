@@ -99,7 +99,6 @@ class TimingConfig(BaseModel):
     frozen_device_threshold_seconds: float = 120.0
     workflow_step_delay_seconds: float = 0.25
     unknown_screen_escalation_count: int = 5
-    tiktok_touch_cooldown_seconds: float = 3.0
     permission_watcher_poll_seconds: float = 0.25
     contacts_watcher_poll_seconds: float = 0.2
 
@@ -160,10 +159,14 @@ class TabCoord(BaseModel):
 
 
 class TikTokNavigationConfig(BaseModel):
-    profile_tab: TabCoord = Field(default_factory=lambda: TabCoord(x=550, y=1037))
+    tiktok_home_icon: TabCoord = Field(default_factory=lambda: TabCoord(x=507, y=1011))
+    profile_tab: TabCoord = Field(default_factory=lambda: TabCoord(x=559, y=1037))
     home_tab: TabCoord = Field(default_factory=lambda: TabCoord(x=60, y=1041))
     account_switcher_opener: TabCoord = Field(
         default_factory=lambda: TabCoord(x=301, y=288)
+    )
+    account_switcher_opener_alt: TabCoord = Field(
+        default_factory=lambda: TabCoord(x=293, y=249)
     )
     account_switcher_opener_fallback: TabCoord = Field(
         default_factory=lambda: TabCoord(x=136, y=156)
@@ -174,6 +177,14 @@ class TikTokNavigationConfig(BaseModel):
     account_name_search_rect_pct: list[float] = Field(
         default_factory=lambda: [0.0, 0.0, 1.0, 0.35]
     )
+
+    @property
+    def tiktok_home_icon_x(self) -> int:
+        return int(self.tiktok_home_icon.x)
+
+    @property
+    def tiktok_home_icon_y(self) -> int:
+        return int(self.tiktok_home_icon.y)
 
     @property
     def profile_tab_x(self) -> int:
@@ -198,6 +209,14 @@ class TikTokNavigationConfig(BaseModel):
     @property
     def account_switcher_opener_y(self) -> int:
         return int(self.account_switcher_opener.y)
+
+    @property
+    def account_switcher_opener_alt_x(self) -> int:
+        return int(self.account_switcher_opener_alt.x)
+
+    @property
+    def account_switcher_opener_alt_y(self) -> int:
+        return int(self.account_switcher_opener_alt.y)
 
 
 class SlideshowConfig(BaseModel):
@@ -238,6 +257,7 @@ class BatchConfig(BaseModel):
     disconnect_on_complete: bool = True
     between_phones_pause_seconds: float = 2.0
     chain_valcoin_after_labely: bool = True
+    skip_prep_when_valid: bool = True
     warmup: WarmupConfig = Field(default_factory=WarmupConfig)
 
 

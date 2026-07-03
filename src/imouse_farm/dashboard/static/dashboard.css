@@ -70,6 +70,15 @@
   text-align: center;
 }
 
+.warmup-th-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  user-select: none;
+}
+
 .phones-td-warmup {
   text-align: center;
 }

@@ -11,6 +11,7 @@ from imouse_farm.workflows.pipeline import (
     TIKTOK_LABELY_THEN_VALCOIN_STEPS,
     TIKTOK_POST_END_PIPELINE,
     WorkflowPipeline,
+    _build_steps,
 )
 
 
@@ -81,3 +82,54 @@ async def test_start_from_post_3_skips_prep() -> None:
     assert pipe._pipelines["dev-1"]["workflows"] == list(TIKTOK_POST_END_PIPELINE)
     assert len(pipe._pipelines["dev-1"]["workflows"]) == 3
     assert pipe._pipelines["dev-1"]["from_post"] == 3
+
+
+def test_build_steps_skips_labely_prep_when_flagged() -> None:
+    steps = _build_steps(
+        from_post=None,
+        brand="labely",
+        chain_valcoin_after_labely=False,
+        skip_prep_brands=frozenset({"labely"}),
+    )
+    assert steps[0]["workflow"] == "tiktok_account_switch"
+    assert all(s["workflow"] != "tiktok_prep" for s in steps)
+
+
+def test_build_steps_omits_labely_end_before_valcoin_warmup() -> None:
+    steps = _build_steps(
+        from_post=None,
+        brand="labely",
+        chain_valcoin_after_labely=False,
+        skip_labely_end_for_valcoin_warmup=True,
+    )
+    workflows = [s["workflow"] for s in steps]
+    assert workflows == [
+        "tiktok_prep",
+        "tiktok_account_switch",
+        "tiktok_post",
+    ]
+    assert "tiktok_end" not in workflows
+
+
+@pytest.mark.asyncio
+async def test_start_skips_prep_when_valid(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = MagicMock()
+    engine.list_running.return_value = []
+    engine.start_workflow = AsyncMock(return_value=True)
+    db = MagicMock()
+    db.log_activity = AsyncMock()
+    dm = MagicMock()
+    dm.get_device.return_value = MagicMock(user_name="2")
+    monkeypatch.setattr(
+        "imouse_farm.workflows.pipeline.is_prep_valid",
+        lambda _key, *, brand: brand == "labely",
+    )
+    pipe = WorkflowPipeline(engine, dm, db)
+
+    assert await pipe.start("dev-1", skip_prep_when_valid=True) is True
+
+    engine.start_workflow.assert_awaited_once_with(
+        "tiktok_account_switch", "dev-1", brand="labely"
+    )
+    assert pipe._pipelines["dev-1"]["workflows"][0] == "tiktok_account_switch"
+    assert "tiktok_prep" not in pipe._pipelines["dev-1"]["workflows"]

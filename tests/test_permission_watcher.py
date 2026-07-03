@@ -94,14 +94,10 @@ def test_post_notify_dismiss_coords() -> None:
 
 
 def test_detects_ios_passkeys_passcode_dialog() -> None:
-    from imouse_farm.actions.permission_prompts import (
-        ios_passkeys_passcode_dismiss_coords,
-        is_ios_passkeys_passcode_dialog,
-    )
+    from imouse_farm.actions.permission_prompts import is_ios_passkeys_passcode_dialog
 
     text = "Passkeys require a passcode and work best with Touch ID"
     assert is_ios_passkeys_passcode_dialog(text)
-    assert ios_passkeys_passcode_dismiss_coords() == (563, 592)
 
 
 def test_detects_tiktok_security_checkup_dialog() -> None:
@@ -175,6 +171,51 @@ async def test_permission_watcher_dismisses_security_checkup() -> None:
     controller.tap.assert_awaited_once_with("phone-1", 570, 501)
 
 
+def test_detects_tiktok_add_phone_dialog() -> None:
+    from imouse_farm.actions.permission_prompts import (
+        is_tiktok_add_phone_dialog,
+        tiktok_add_phone_dismiss_coords,
+    )
+
+    assert is_tiktok_add_phone_dialog("Add phone")
+    assert tiktok_add_phone_dismiss_coords() == (564, 260)
+
+
+@pytest.mark.asyncio
+async def test_detect_add_phone_uses_find_text_fallback() -> None:
+    from imouse_farm.permissions.watcher import detect_tiktok_add_phone_on_device
+
+    controller = MagicMock()
+    controller.ocr_on_device = AsyncMock(return_value="Tony.r12 Edit profile")
+    controller.ocr_items_on_device = AsyncMock(return_value=[])
+    controller.find_text_on_device = AsyncMock(
+        return_value=[{"text": "Add phone", "x": 200, "y": 300, "confidence": 0.9}]
+    )
+    visible, sample = await detect_tiktok_add_phone_on_device(
+        controller,
+        "phone-10",
+        screen="Tony.r12 Edit profile",
+    )
+    assert visible is True
+    assert "add phone" in sample.lower()
+    controller.find_text_on_device.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_permission_watcher_dismisses_add_phone() -> None:
+    from imouse_farm.permissions.watcher import PermissionWatcher
+
+    controller = MagicMock()
+    controller.ocr_on_device = AsyncMock(return_value="Add phone")
+    controller.ocr_items_on_device = AsyncMock(return_value=[])
+    controller.find_text_on_device = AsyncMock(return_value=[])
+    controller.tap = AsyncMock(return_value=True)
+    watcher = PermissionWatcher(controller, "phone-1", poll_interval_seconds=0.25)
+
+    assert await watcher._check_once() is True
+    controller.tap.assert_awaited_once_with("phone-1", 564, 260)
+
+
 @pytest.mark.asyncio
 async def test_permission_watcher_dismisses_passkeys_passcode() -> None:
     from imouse_farm.permissions.watcher import PermissionWatcher
@@ -183,11 +224,13 @@ async def test_permission_watcher_dismisses_passkeys_passcode() -> None:
     controller.ocr_on_device = AsyncMock(
         return_value="Passkeys require a passcode and work best with Touch ID"
     )
-    controller.tap = AsyncMock(return_value=True)
+    controller.ocr_items_on_device = AsyncMock(return_value=[])
+    controller.find_text_on_device = AsyncMock(return_value=[])
+    controller.press_home = AsyncMock(return_value=True)
     watcher = PermissionWatcher(controller, "phone-1", poll_interval_seconds=0.25)
 
     assert await watcher._check_once() is True
-    controller.tap.assert_awaited_once_with("phone-1", 563, 592)
+    controller.press_home.assert_awaited_once_with("phone-1")
 
 
 @pytest.mark.asyncio
@@ -221,6 +264,23 @@ async def test_permission_watcher_dismisses_avatar_style() -> None:
 
     assert await watcher._check_once() is True
     controller.tap.assert_awaited_once_with("phone-1", 563, 92)
+
+
+@pytest.mark.asyncio
+async def test_permission_watcher_dismisses_ai_pick() -> None:
+    from imouse_farm.permissions.watcher import PermissionWatcher
+
+    controller = MagicMock()
+    controller.ocr_on_device = AsyncMock(return_value="Recents")
+    controller.ocr_items_on_device = AsyncMock(
+        return_value=[{"text": "Let AI pick for you"}]
+    )
+    controller.find_text_on_device = AsyncMock(return_value=[])
+    controller.tap = AsyncMock(return_value=True)
+    watcher = PermissionWatcher(controller, "phone-1", poll_interval_seconds=0.25)
+
+    assert await watcher._check_once() is True
+    controller.tap.assert_awaited_once_with("phone-1", 184, 972)
 
 
 @pytest.mark.asyncio

@@ -258,6 +258,35 @@ def clear_prep_completed(device_key: str, *, brand: str = "labely") -> None:
     _save_store()
 
 
+def reset_last_run_state(device_key: str, *, brand: str = "labely") -> None:
+    """Clear last-run sticker fields so the dashboard shows Never / idle."""
+    key = brand_profile_key(device_key, brand)
+    profile = get_profile(key, brand=brand)
+    profile["last_run_status"] = "idle"
+    profile["last_run_at"] = None
+    profile["last_error"] = ""
+    profile["posts_completed"] = 0
+    _store[key] = profile
+    _save_store()
+
+
+def reset_session_for_slot(base_key: str, *, brand: str = "labely") -> None:
+    """Clear prep + last-run state for one slot profile."""
+    clear_prep_completed(base_key, brand=brand)
+    reset_last_run_state(base_key, brand=brand)
+
+
+def reset_all_session_states(*, farm_slots: int = 20) -> list[str]:
+    """Reset prep and last-run fields for every farm slot (both brands)."""
+    cleared: list[str] = []
+    for slot in range(1, max(1, int(farm_slots)) + 1):
+        base_key = f"slot:{slot}"
+        for brand in VALID_BRANDS:
+            reset_session_for_slot(base_key, brand=brand)
+        cleared.append(str(slot))
+    return cleared
+
+
 def mark_run_started(device_key: str, *, brand: str = "labely") -> None:
     key = brand_profile_key(device_key, brand)
     profile = get_profile(key, brand=brand)

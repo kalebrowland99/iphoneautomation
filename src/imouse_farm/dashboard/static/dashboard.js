@@ -188,7 +188,10 @@ function showSlideshowEmbed(url, statusText) {
     const urlChanged = slideshowEmbedUrl !== nextUrl;
     if (urlChanged) {
         slideshowEmbedUrl = nextUrl;
-        frame.src = nextUrl;
+        frame.src = 'about:blank';
+        window.setTimeout(() => {
+            frame.src = nextUrl;
+        }, 0);
     }
     // Scroll only when the embed first opens or the URL changes — not on every status poll.
     if (wasHidden || urlChanged) {
@@ -240,7 +243,6 @@ function syncSlideshowEmbedFromJob(job) {
 function updateSlideshowUI(job) {
     currentSlideshowJob = job;
     syncSlideshowEmbedFromJob(job);
-    if (job?.message) appendRunLog(job.message, job.status === 'failed' ? 'error' : 'info', 'slideshow');
     void refreshRunConsole();
 }
 
@@ -478,6 +480,55 @@ async function stopDailyRun() {
             }
         }
 
+        async function setWarmupForAll(enabled) {
+            if (BRAND_ID !== 'valcoin') return;
+            const slots = registeredSlots();
+            if (!slots.length) return;
+            try {
+                await Promise.all(slots.map(async (slot) => {
+                    const profile = slotProfiles[`slot:${slot}`] || {};
+                    const body = {
+                        brand: BRAND_ID,
+                        warmup_enabled: Boolean(enabled),
+                    };
+                    if (profile.tiktok_handle) {
+                        body.tiktok_handle = profile.tiktok_handle;
+                    }
+                    const res = await api(`/slots/${enc(slot)}/account-profile`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    const updated = res.profile || {};
+                    slotProfiles[`slot:${slot}`] = updated;
+                    const d = slotToDevice[slot];
+                    if (d) d.account_profile = updated;
+                }));
+                renderFarmGrid();
+            } catch (err) {
+                alert(`Failed to save warmup settings: ${err.message}`);
+                renderFarmGrid();
+            }
+        }
+
+        function onWarmupSelectAllChange(checked) {
+            void setWarmupForAll(checked);
+        }
+
+        function updateWarmupSelectAllCheckbox() {
+            if (BRAND_ID !== 'valcoin') return;
+            const master = document.getElementById('warmup-select-all');
+            if (!master) return;
+            const reg = registeredSlots();
+            const warmed = reg.filter((slot) => {
+                const profile = slotProfiles[`slot:${slot}`] || slotToDevice[slot]?.account_profile || {};
+                return Boolean(profile.warmup_enabled);
+            });
+            master.checked = reg.length > 0 && warmed.length === reg.length;
+            master.indeterminate = warmed.length > 0 && warmed.length < reg.length;
+            master.disabled = !reg.length;
+        }
+
         function loadBatchSelection() {
             try {
                 const saved = localStorage.getItem('batchSelectedSlots');
@@ -693,6 +744,7 @@ async function stopDailyRun() {
             grid.innerHTML = rows.join('');
             updateBatchSlotCount();
             updateBatchSelectAllCheckbox();
+            updateWarmupSelectAllCheckbox();
         }
 
         function connectWS() {
@@ -1446,7 +1498,12 @@ async function stopDailyRun() {
             try {
                 const res = await api('/batch/reset-session', { method: 'POST' });
                 const slots = (res.cleared_slots || []).join(', ') || 'none';
-                appendRunLog(`Session reset — next run will re-upload videos (slots: ${slots})`, 'info', 'batch');
+                const videos = res.videos_removed ?? 0;
+                appendRunLog(
+                    `Session reset — cleared last run, upload state, and ${videos} gallery video(s) for all phones (slots: ${slots})`,
+                    'info',
+                    'batch',
+                );
                 refreshFarmDevices({ quiet: true });
             } catch (err) { alert(`Reset failed: ${err.message}`); }
         }

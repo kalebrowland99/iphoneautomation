@@ -1,7 +1,11 @@
+tiktok_home_icon:
+  x: 507
+  y: 1011
+
 # TikTok bottom-nav + account switcher coordinates.
 
 profile_tab:
-  x: 550
+  x: 559
   y: 1037
 
 home_tab:
@@ -12,6 +16,11 @@ home_tab:
 account_switcher_opener:
   x: 301
   y: 288
+
+# Retry if the first opener tap misses or opens the wrong sheet.
+account_switcher_opener_alt:
+  x: 293
+  y: 249
 
 # UI 2: if primary hits Total Likes instead, dismiss OK then tap here.
 account_likes_dismiss_ok:
