@@ -41,6 +41,16 @@ def test_debug_override_single_video() -> None:
     assert "slidesPerSlideshow=1" in url
 
 
+def test_slot_chains_valcoin_post_only_when_explicitly_selected() -> None:
+    orch = _orchestrator()
+    from imouse_farm.integrations.slideshow_jobs import SlideshowJob
+
+    job_selected = SlideshowJob(id="j1", brand="labely", slots=["2"], valcoin_slots=["2"])
+    job_skipped = SlideshowJob(id="j2", brand="labely", slots=["2"], valcoin_slots=[])
+    assert orch._slot_chains_valcoin_post(job_selected, "2") is True
+    assert orch._slot_chains_valcoin_post(job_skipped, "2") is False
+
+
 @pytest.mark.asyncio
 async def test_generate_captions_for_slot_runs_after_gallery_exists(monkeypatch) -> None:
     from unittest.mock import AsyncMock, MagicMock
@@ -68,3 +78,24 @@ async def test_generate_captions_for_slot_runs_after_gallery_exists(monkeypatch)
     generate.assert_awaited_once()
     assert generate.await_args.kwargs["brand"] == "labely"
     assert generate.await_args.args[1] == [device]
+
+
+@pytest.mark.asyncio
+async def test_on_automation_failed_marks_sub_job_failed() -> None:
+    orch = _orchestrator()
+    parent = await orch._jobs.create(brand="labely", slots=["13", "14"], run_batch=True)
+    sub = await orch._jobs.create(
+        brand="labely",
+        slots=["13"],
+        run_batch=False,
+        parent_job_id=parent.id,
+    )
+    await orch._jobs.update(sub.id, status="running", phase="automation")
+
+    result = await orch.on_automation_failed(sub.id, "Internal Server Error")
+
+    assert result["status"] == "failed"
+    assert "Internal Server Error" in str(result.get("error") or "")
+    updated_sub = await orch._jobs.get(sub.id)
+    assert updated_sub is not None
+    assert str(updated_sub.status).lower() == "failed"

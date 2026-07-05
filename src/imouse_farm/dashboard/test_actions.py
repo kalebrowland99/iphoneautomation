@@ -16,6 +16,7 @@ Add a new debug test
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from pathlib import Path
 from typing import Any, Literal, TypedDict
@@ -48,7 +49,7 @@ from imouse_farm.post.post_caption_store import (
     get_final_caption,
     get_onscreen_text,
 )
-from imouse_farm.utils.gallery import list_media_files, phone_gallery_folder
+from imouse_farm.utils.gallery import list_media_files, phone_gallery_folder, slots_with_media
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.actions.vpn_shadowrocket import (
     SHADOWROCKET_ICON_X,
@@ -2092,35 +2093,60 @@ async def clear_album_debug(
     if not device.is_online:
         raise HTTPException(503, spec.get("offline_hint", OFFLINE_HINT))
 
-    success = await _debug_execute_direct(
-        app,
-        device_id,
-        spec,
-        test_id,
-        ActionType.ALBUM_CLEAR,
-        {
-            "timeout_ms": 60000,
-            "sheet_appear_timeout_seconds": 18,
-            "round_active_timeout_seconds": 60,
-            "sheet_poll_interval_seconds": 5,
-            **({"skip_vpn_off": True} if spec.get("skip_vpn_off") else {}),
-        },
-    )
+    timeout_ms = 60000
+    params: dict[str, Any] = {
+        "timeout_ms": timeout_ms,
+        "sheet_appear_timeout_seconds": 18,
+        "round_active_timeout_seconds": 60,
+        "sheet_poll_interval_seconds": 5,
+    }
+    if spec.get("skip_vpn_off"):
+        params["skip_vpn_off"] = True
+
+    ctrl = dm.controller
+    start = time.monotonic()
+    error_detail = ""
+    success = False
+    try:
+        success = await ctrl.album_clear(
+            device_id,
+            timeout_ms=timeout_ms,
+            sheet_appear_timeout=float(params["sheet_appear_timeout_seconds"]),
+            round_active_timeout=float(params["round_active_timeout_seconds"]),
+            sheet_poll_interval_seconds=float(params["sheet_poll_interval_seconds"]),
+        )
+        if not success:
+            error_detail = "album_clear returned false (items may remain in Recents)"
+    except Exception as exc:
+        error_detail = str(exc)
+        success = False
+    duration_ms = int((time.monotonic() - start) * 1000)
 
     if success:
         await app.screenshot_service.capture(device_id)
 
+    if success:
+        message = f"Cleared photo library on slot {device.user_name}"
+    else:
+        message = f"Album clear failed after {duration_ms // 1000}s"
+        if error_detail:
+            message += f" — {error_detail}"
+
     await app.db.log_activity(
         "info" if success else "warn",
         "test",
-        f"Debug clear album {'OK' if success else 'failed'}",
+        f"Debug clear album {'OK' if success else 'failed'} — {message}",
         device_id,
-        {"test_id": test_id},
+        {"test_id": test_id, "duration_ms": duration_ms, "error": error_detail or None},
     )
 
     return {
         "success": success,
-        "message": "Cleared photo library" if success else "Album clear failed",
+        "message": message,
+        "error": error_detail or None,
+        "timeout_ms": timeout_ms,
+        "duration_ms": duration_ms,
+        "slot": str(device.user_name or ""),
     }
 
 
@@ -2178,6 +2204,38 @@ async def slideshow_generate_debug(
     }
 
 
+def _file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+async def _latest_action_error(app: Any, device_id: str, action_type: str) -> str:
+    history = await app.db.get_action_history(device_id, limit=8)
+    for row in history:
+        if str(row.get("action_type") or "") == action_type and row.get("status") == "failed":
+            return str(row.get("error_message") or "").strip()
+    return ""
+
+
+def _upload_file_details(files: list[str]) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    for raw in files:
+        path = Path(raw)
+        size_bytes = path.stat().st_size if path.is_file() else 0
+        details.append(
+            {
+                "name": path.name,
+                "path": str(path.resolve()),
+                "size_bytes": size_bytes,
+                "size_mb": round(size_bytes / (1024 * 1024), 2),
+            }
+        )
+    return details
+
+
 async def upload_gallery_debug(
     app: Any,
     device_id: str,
@@ -2202,29 +2260,82 @@ async def upload_gallery_debug(
     )
     files = list_media_files(folder, gallery.media_extensions)
     if not files:
-        message = f"No media files in {folder} — add videos/images for slot {device.user_name}"
+        other_slots = slots_with_media(
+            gallery.base_directory,
+            gallery.media_extensions,
+            brand=brand,
+        )
+        hint = (
+            f"Run Generate & Run with slot {device.user_name} ticked, "
+            f"or copy MP4s into {folder}"
+        )
+        if other_slots:
+            slots_line = ", ".join(
+                f"{item['slot']} ({item['file_count']} file(s))"
+                for item in other_slots[:8]
+            )
+            hint += f". Media exists for other slot(s): {slots_line}"
+        message = (
+            f"No media files in {folder} — add videos/images for slot {device.user_name}. "
+            f"{hint}"
+        )
         await app.db.log_activity(
             "warn",
             "test",
             f"Debug upload: {message}",
             device_id,
-            {"test_id": test_id, "folder": str(folder), "brand": brand},
+            {
+                "test_id": test_id,
+                "folder": str(folder),
+                "brand": brand,
+                "slots_with_media": other_slots,
+            },
         )
         return {
             "success": False,
             "message": message,
             "folder": str(folder),
             "file_count": 0,
+            "brand": brand,
+            "hint": hint,
+            "slots_with_media": other_slots,
         }
 
+    file_details = _upload_file_details(files)
+    total_bytes = sum(int(item["size_bytes"]) for item in file_details)
+    timeout_ms = int(gallery.upload_timeout_ms)
+    file_sha256 = _file_sha256(files[0]) if files else ""
+
+    # Match tiktok_prep.yaml upload_gallery exactly (folder + skip_vpn_off only).
     upload_params: dict[str, Any] = {
         "folder": str(folder),
-        "extensions": gallery.media_extensions,
-        "timeout_ms": gallery.upload_timeout_ms,
+        "skip_vpn_off": True,
     }
-    if spec.get("skip_vpn_off"):
-        upload_params["skip_vpn_off"] = True
 
+    await app.db.log_activity(
+        "info",
+        "test",
+        (
+            f"Debug upload: {len(files)} file(s), "
+            f"{round(total_bytes / (1024 * 1024), 1)} MB from {folder} "
+            f"(timeout {timeout_ms // 1000}s, sha256={file_sha256[:12]}…)"
+        ),
+        device_id,
+        {
+            "test_id": test_id,
+            "folder": str(folder),
+            "brand": brand,
+            "file_count": len(files),
+            "files": [item["name"] for item in file_details],
+            "total_bytes": total_bytes,
+            "timeout_ms": timeout_ms,
+            "file_sha256": file_sha256,
+            "upload_params": upload_params,
+        },
+    )
+
+    ctrl = dm.controller
+    start = time.monotonic()
     success = await _debug_execute_direct(
         app,
         device_id,
@@ -2232,35 +2343,72 @@ async def upload_gallery_debug(
         test_id,
         ActionType.ALBUM_UPLOAD,
         upload_params,
+        step_name="upload_gallery",
     )
+    duration_ms = int((time.monotonic() - start) * 1000)
+    error_detail = ""
+    if not success:
+        error_detail = await _latest_action_error(app, device_id, "album_upload")
+        if not error_detail:
+            error_detail = "album_upload returned false (files not confirmed on device)"
 
-    await app.db.log_activity(
-        "info" if success else "warn",
-        "test",
-        f"Debug upload gallery {'OK' if success else 'failed'} — {len(files)} file(s) from {folder}",
-        device_id,
-        {"test_id": test_id, "folder": str(folder), "file_count": len(files)},
-    )
-
+    album_count: int | None = None
     tapped_permissions: list[str] = []
     if success:
+        try:
+            album_count = len(await ctrl.album_list(device_id, album_name=None))
+        except Exception as exc:
+            logger.warning("debug_upload_album_list_failed", device_id=device_id, error=str(exc))
         await asyncio.sleep(10)
         tapped_permissions = await tap_permission_prompts(
             app, device_id, UPLOAD_PERMISSION_TEXTS, test_id=test_id
         )
         await app.screenshot_service.capture(device_id)
 
-    message = f"Uploaded {len(files)} file(s) from {folder}" if success else "Gallery upload failed"
+    if success:
+        message = f"Uploaded {len(files)} file(s) from {folder}"
+        if album_count is not None:
+            message += f" — Recents has {album_count} item(s)"
+    else:
+        message = f"Gallery upload failed after {duration_ms // 1000}s"
+        if error_detail:
+            message += f" — {error_detail}"
+
+    await app.db.log_activity(
+        "info" if success else "warn",
+        "test",
+        f"Debug upload gallery {'OK' if success else 'failed'} — {message}",
+        device_id,
+        {
+            "test_id": test_id,
+            "folder": str(folder),
+            "file_count": len(files),
+            "duration_ms": duration_ms,
+            "error": error_detail or None,
+            "album_count": album_count,
+        },
+    )
+
     if tapped_permissions:
         message += f" — tapped {', '.join(tapped_permissions)}"
 
     return {
         "success": success,
         "message": message,
+        "error": error_detail or None,
         "folder": str(folder),
+        "brand": brand,
         "file_count": len(files),
-        "files": [Path(f).name for f in files],
+        "files": [item["name"] for item in file_details],
+        "file_details": file_details,
+        "total_bytes": total_bytes,
+        "total_mb": round(total_bytes / (1024 * 1024), 2),
+        "timeout_ms": timeout_ms,
+        "duration_ms": duration_ms,
+        "album_count": album_count,
         "tapped_permissions": tapped_permissions,
+        "file_sha256": file_sha256,
+        "upload_params": upload_params,
     }
 
 

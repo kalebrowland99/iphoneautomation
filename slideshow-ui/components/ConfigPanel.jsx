@@ -3153,6 +3153,7 @@ ${SHARED_RULES_OUTRO}`;
     setExportStatus("Finalizing MP4…");
     setExportProgress(97);
     await encoder.flush();
+    try { encoder.close(); } catch {}
 
     await waitWhilePaused();
     if (cancelGenRef.current) {
@@ -3216,6 +3217,7 @@ ${SHARED_RULES_OUTRO}`;
           audioOffset += size;
         }
         await audioEncoder.flush();
+        try { audioEncoder.close(); } catch {}
       } catch (e) {
         console.warn("Audio encode failed, video will be silent:", e);
       }
@@ -4152,7 +4154,7 @@ ${SHARED_RULES_OUTRO}`;
           <div className="adv-section mt-3">
             <Label className="!mb-1">Farm food plan</Label>
             <p className="text-muted-foreground/70 text-[10px] mb-2 leading-relaxed">
-              Each phone gets 3 videos — one genre per video (e.g. chips, cereal, soda). All 3 scan slides in a video use brands from that same genre. Genres rotate daily from {`unhealthyAmericanFoods.js`}. Brave photos reuse per product name across phones.
+              Each phone gets 3 videos — one genre per video (e.g. chips, cereal, soda). All 3 scan slides in a video use brands from that same genre. Genres and products are picked fresh on every Run from {`unhealthyAmericanFoods.js`}. Brave photos reuse per product name across phones within the same run.
             </p>
             {isLabely && config.labelyUseBraveImages !== false ? (
               <BraveSearchUsageBar enabled className="mb-2" />

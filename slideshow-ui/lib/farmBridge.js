@@ -2,6 +2,79 @@
 
 import { appendAutomationLog } from "@/lib/automationLog";
 
+const FARM_UPLOAD_RETRIES = 3;
+const FARM_UPLOAD_RETRY_MS = 1500;
+
+let _farmNotifyContext = { farmUrl: "", secret: "" };
+
+/** Set once from /automation so markFarmJobFailed can notify the farm server. */
+export function setFarmNotifyContext({ farmUrl, secret } = {}) {
+  _farmNotifyContext = {
+    farmUrl: String(farmUrl || "").trim(),
+    secret: String(secret || "").trim(),
+  };
+}
+
+/** Local dev: route farm API through Next.js (/farm-api) to avoid cross-origin fetch failures. */
+export function resolveFarmApiBase(farmUrl) {
+  const base = String(farmUrl || "").replace(/\/+$/, "");
+  if (!base || typeof window === "undefined") return base;
+  try {
+    const target = new URL(base);
+    const localFarm =
+      (target.hostname === "localhost" || target.hostname === "127.0.0.1") &&
+      (!target.port || target.port === "8080");
+    const onSlideshowUi =
+      window.location.port === "3000" ||
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (localFarm && onSlideshowUi) {
+      return "/farm-api";
+    }
+  } catch {
+    /* use absolute farmUrl */
+  }
+  return base;
+}
+
+function farmApiUrl(farmUrl, path) {
+  const base = resolveFarmApiBase(farmUrl);
+  const suffix = String(path || "").replace(/^\/+/, "");
+  if (base.startsWith("/")) {
+    return `${base}/${suffix}`;
+  }
+  return `${base}/api/${suffix}`;
+}
+
+function isNetworkFetchError(err) {
+  return (
+    err instanceof TypeError ||
+    String(err?.message || err).toLowerCase().includes("failed to fetch")
+  );
+}
+
+async function farmFetch(url, options, { retries = 0, retryOn = null } = {}) {
+  let lastErr;
+  const attempts = Math.max(1, Number(retries) + 1);
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (retryOn?.(res.status) && attempt < attempts) {
+        await new Promise((r) => setTimeout(r, FARM_UPLOAD_RETRY_MS * attempt));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (!isNetworkFetchError(err) || attempt >= attempts) break;
+      await new Promise((r) => setTimeout(r, FARM_UPLOAD_RETRY_MS * attempt));
+    }
+  }
+  const hint =
+    "Could not reach the farm dashboard — confirm it is running on port 8080, then retry.";
+  throw new Error(lastErr?.message ? `${lastErr.message}. ${hint}` : hint);
+}
+
 const FARM_AUTORUN_PREFIX = "autoslide_farm_autorun_v1:";
 
 function farmAutoRunKey(jobId) {
@@ -60,14 +133,16 @@ export function markFarmJobAutoRunFailed(jobId) {
 }
 
 export async function fetchFarmJobStatus({ farmUrl, jobId, secret }) {
-  const base = String(farmUrl || "").replace(/\/+$/, "");
-  if (!base || !jobId) return null;
+  if (!farmUrl || !jobId) return null;
   const headers = {};
   if (secret) headers["X-Farm-Secret"] = secret;
-  const res = await fetch(`${base}/api/slideshow/jobs/${encodeURIComponent(jobId)}`, {
-    headers,
-    cache: "no-store",
-  });
+  const res = await farmFetch(
+    farmApiUrl(farmUrl, `slideshow/jobs/${encodeURIComponent(jobId)}`),
+    {
+      headers,
+      cache: "no-store",
+    },
+  );
   if (!res.ok) return null;
   return res.json();
 }
@@ -83,7 +158,14 @@ export class FarmUploadError extends Error {
 }
 
 function farmUploadErrorFromBody(text, status) {
-  if (!text) return new FarmUploadError(`HTTP ${status}`);
+  const trimmed = String(text || "").trim();
+  if (/^internal server error$/i.test(trimmed)) {
+    return new FarmUploadError(
+      "Farm server error during upload — the dashboard may have restarted. Retry this phone.",
+      { reason: "server_error" },
+    );
+  }
+  if (!trimmed) return new FarmUploadError(`HTTP ${status}`);
   try {
     const body = JSON.parse(text);
     const detail = body?.detail;
@@ -99,7 +181,11 @@ function farmUploadErrorFromBody(text, status) {
   } catch {
     /* plain text */
   }
-  return new FarmUploadError(text);
+  return new FarmUploadError(trimmed);
+}
+
+function shouldRetryUpload(status) {
+  return !status || status >= 500 || status === 408 || status === 429;
 }
 
 /** Parse FastAPI / farm error bodies into a short user-facing string. */
@@ -139,15 +225,36 @@ export async function uploadMp4ToFarm({
   const headers = {};
   if (secret) headers["X-Farm-Secret"] = secret;
 
-  const base = String(farmUrl || "").replace(/\/+$/, "");
-  const res = await fetch(`${base}/api/slideshow/ingest`, {
-    method: "POST",
-    headers,
-    body: form,
-  });
+  const res = await farmFetch(
+    farmApiUrl(farmUrl, "slideshow/ingest"),
+    {
+      method: "POST",
+      headers,
+      body: form,
+    },
+    { retries: FARM_UPLOAD_RETRIES, retryOn: shouldRetryUpload },
+  );
   if (!res.ok) {
     const text = await res.text();
     throw farmUploadErrorFromBody(text, res.status);
+  }
+  return res.json();
+}
+
+export async function notifyAutomationFailed({ farmUrl, jobId, secret, error }) {
+  const headers = { "Content-Type": "application/json" };
+  if (secret) headers["X-Farm-Secret"] = secret;
+  const res = await farmFetch(
+    farmApiUrl(farmUrl, `slideshow/jobs/${encodeURIComponent(jobId)}/automation-failed`),
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ error: String(error || "Automation failed") }),
+    },
+    { retries: 2 },
+  );
+  if (!res.ok) {
+    throw new Error(await readFarmErrorResponse(res));
   }
   return res.json();
 }
@@ -156,10 +263,10 @@ export async function notifyAutomationDone({ farmUrl, jobId, secret }) {
   const headers = {};
   if (secret) headers["X-Farm-Secret"] = secret;
 
-  const base = String(farmUrl || "").replace(/\/+$/, "");
-  const res = await fetch(
-    `${base}/api/slideshow/jobs/${encodeURIComponent(jobId)}/automation-done`,
+  const res = await farmFetch(
+    farmApiUrl(farmUrl, `slideshow/jobs/${encodeURIComponent(jobId)}/automation-done`),
     { method: "POST", headers },
+    { retries: FARM_UPLOAD_RETRIES },
   );
   if (!res.ok) {
     throw new Error(await readFarmErrorResponse(res));
@@ -190,4 +297,15 @@ export function markFarmJobFailed(message, jobId) {
   }
   appendAutomationLog(text, "error");
   if (jobId) markFarmJobAutoRunFailed(jobId);
+  const ctx = _farmNotifyContext;
+  if (jobId && ctx.farmUrl) {
+    void notifyAutomationFailed({
+      farmUrl: ctx.farmUrl,
+      jobId,
+      secret: ctx.secret,
+      error: text,
+    }).catch(() => {
+      /* server may be down; orchestrator wait will still time out */
+    });
+  }
 }

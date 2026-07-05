@@ -277,12 +277,13 @@ def reset_session_for_slot(base_key: str, *, brand: str = "labely") -> None:
 
 
 def reset_all_session_states(*, farm_slots: int = 20) -> list[str]:
-    """Reset prep and last-run fields for every farm slot (both brands)."""
+    """Reset prep, last-run, and cant-cast tags for every farm slot (both brands)."""
     cleared: list[str] = []
     for slot in range(1, max(1, int(farm_slots)) + 1):
         base_key = f"slot:{slot}"
         for brand in VALID_BRANDS:
             reset_session_for_slot(base_key, brand=brand)
+        clear_cant_cast_imouse(base_key)
         cleared.append(str(slot))
     return cleared
 

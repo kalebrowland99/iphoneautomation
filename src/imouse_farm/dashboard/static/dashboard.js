@@ -27,6 +27,19 @@ let currentSlideshowJob = null;
 let currentBatchStatus = { status: 'idle' };
 let slideshowConfig = { use_embedded_runner: true };
 let slideshowEmbedUrl = '';
+let runConsolePollInFlight = false;
+let runConsolePollPending = false;
+let slideshowJobPollInFlight = false;
+let slideshowJobPollPending = false;
+let embedLoadToken = 0;
+
+window.addEventListener('message', (ev) => {
+    if (ev?.data?.type !== 'autoslideshow:encode-done') return;
+    const statusEl = document.getElementById('slideshow-embed-status');
+    if (statusEl) {
+        statusEl.textContent = 'Upload complete — preparing next phone…';
+    }
+});
 
 const RUN_STEPS = ['slideshow', 'ingest', 'captions', 'batch'];
 
@@ -117,6 +130,11 @@ function applyRunProgress(progress) {
 }
 
 async function refreshRunConsole() {
+    if (runConsolePollInFlight) {
+        runConsolePollPending = true;
+        return;
+    }
+    runConsolePollInFlight = true;
     try {
         const q = slideshowJobId ? `?job_id=${encodeURIComponent(slideshowJobId)}` : '';
         const res = await api(`/run/status${q}`);
@@ -131,24 +149,23 @@ async function refreshRunConsole() {
             orchestratorBusy: res.slideshow_orchestrator_busy,
         });
         if (res.batch) updateBatchUI(res.batch);
-        if (
-            slideshowConfig.use_embedded_runner
-            && currentSlideshowJob?.automation_url
-            && String(currentSlideshowJob.status || '').toLowerCase() === 'running'
-            && ['automation', 'ingesting'].includes(String(currentSlideshowJob.phase || '').toLowerCase())
-        ) {
-            showSlideshowEmbed(
-                currentSlideshowJob.automation_url,
-                currentSlideshowJob.message || 'Generating slideshows…',
-            );
+        if (currentSlideshowJob) {
+            syncSlideshowEmbedFromJob(currentSlideshowJob);
         }
     } catch (_) {}
+    finally {
+        runConsolePollInFlight = false;
+        if (runConsolePollPending) {
+            runConsolePollPending = false;
+            void refreshRunConsole();
+        }
+    }
 }
 
 function startRunConsolePoll() {
     if (runConsoleTimer) return;
     void refreshRunConsole();
-    runConsoleTimer = setInterval(refreshRunConsole, 2500);
+    runConsoleTimer = setInterval(refreshRunConsole, 4000);
 }
 
 function stopRunConsolePoll() {
@@ -170,6 +187,26 @@ async function refreshSlideshowConfig() {
     } catch (_) {}
 }
 
+function loadSlideshowEmbedFrame(url) {
+    const frame = document.getElementById('slideshow-embed-frame');
+    const placeholder = document.getElementById('slideshow-embed-placeholder');
+    const nextUrl = String(url || '').trim();
+    if (!frame || !nextUrl) return;
+
+    const token = ++embedLoadToken;
+    stopSlideshowEmbedGeneration();
+    slideshowEmbedUrl = nextUrl;
+
+    if (placeholder) placeholder.classList.remove('hidden');
+    const reveal = () => {
+        if (token !== embedLoadToken) return;
+        if (placeholder) placeholder.classList.add('hidden');
+    };
+    frame.addEventListener('load', reveal, { once: true });
+    window.setTimeout(reveal, 3000);
+    frame.src = nextUrl;
+}
+
 function showSlideshowEmbed(url, statusText) {
     const panel = document.getElementById('slideshow-embed-panel');
     const frame = document.getElementById('slideshow-embed-frame');
@@ -178,22 +215,18 @@ function showSlideshowEmbed(url, statusText) {
     if (!panel || !frame) return;
     const nextUrl = String(url || '').trim();
     if (!nextUrl) return;
+
     const wasHidden = panel.classList.contains('hidden');
+    const urlChanged = slideshowEmbedUrl !== nextUrl;
     panel.classList.remove('hidden');
     if (statusEl) statusEl.textContent = statusText || 'Generating slideshows…';
     if (openLink) {
         openLink.href = nextUrl;
         openLink.classList.remove('hidden');
     }
-    const urlChanged = slideshowEmbedUrl !== nextUrl;
     if (urlChanged) {
-        slideshowEmbedUrl = nextUrl;
-        frame.src = 'about:blank';
-        window.setTimeout(() => {
-            frame.src = nextUrl;
-        }, 0);
+        loadSlideshowEmbedFrame(nextUrl);
     }
-    // Scroll only when the embed first opens or the URL changes — not on every status poll.
     if (wasHidden || urlChanged) {
         panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
@@ -220,8 +253,11 @@ function hideSlideshowEmbed() {
     const panel = document.getElementById('slideshow-embed-panel');
     const frame = document.getElementById('slideshow-embed-frame');
     const openLink = document.getElementById('slideshow-embed-open-tab');
+    const placeholder = document.getElementById('slideshow-embed-placeholder');
+    embedLoadToken += 1;
     if (panel) panel.classList.add('hidden');
     if (frame) frame.src = 'about:blank';
+    if (placeholder) placeholder.classList.add('hidden');
     if (openLink) openLink.classList.add('hidden');
     slideshowEmbedUrl = '';
 }
@@ -231,6 +267,17 @@ function syncSlideshowEmbedFromJob(job) {
     const phase = String(job?.phase || '').toLowerCase();
     const status = String(job?.status || '').toLowerCase();
     const url = String(job?.automation_url || '').trim();
+    const statusEl = document.getElementById('slideshow-embed-status');
+    const panel = document.getElementById('slideshow-embed-panel');
+
+    if (!url) {
+        if (status === 'running' && (phase === 'automation' || phase === 'ingesting')) {
+            if (panel) panel.classList.remove('hidden');
+            if (statusEl) statusEl.textContent = job?.message || 'Preparing next phone…';
+            return;
+        }
+        return;
+    }
     if (url && (phase === 'automation' || phase === 'ingesting') && status === 'running') {
         showSlideshowEmbed(url, job?.message || 'Generating slideshows…');
         return;
@@ -243,7 +290,6 @@ function syncSlideshowEmbedFromJob(job) {
 function updateSlideshowUI(job) {
     currentSlideshowJob = job;
     syncSlideshowEmbedFromJob(job);
-    void refreshRunConsole();
 }
 
 function stopSlideshowPoll() {
@@ -256,20 +302,33 @@ function stopSlideshowPoll() {
         function startSlideshowPoll(jobId) {
             slideshowJobId = jobId;
             stopSlideshowPoll();
-        const tick = async () => {
-            try {
-                const job = await api(`/slideshow/jobs/${encodeURIComponent(jobId)}`);
-                updateSlideshowUI(job);
-                if (job.status === 'completed' || job.status === 'failed') {
-                    stopSlideshowPoll();
-                    if (job.status === 'failed') appendRunLog(job.error || 'Slideshow job failed', 'error', 'slideshow');
-                    slideshowJobId = null;
-                    void refreshRunConsole();
+            const tick = async () => {
+                if (slideshowJobPollInFlight) {
+                    slideshowJobPollPending = true;
+                    return;
                 }
-            } catch (_) {}
-        };
+                slideshowJobPollInFlight = true;
+                try {
+                    const job = await api(`/slideshow/jobs/${encodeURIComponent(jobId)}`);
+                    updateSlideshowUI(job);
+                    if (job.status === 'completed' || job.status === 'failed') {
+                        stopSlideshowPoll();
+                        if (job.status === 'failed') {
+                            appendRunLog(job.error || 'Slideshow job failed', 'error', 'slideshow');
+                        }
+                        slideshowJobId = null;
+                    }
+                } catch (_) {}
+                finally {
+                    slideshowJobPollInFlight = false;
+                    if (slideshowJobPollPending) {
+                        slideshowJobPollPending = false;
+                        void tick();
+                    }
+                }
+            };
             void tick();
-            slideshowPollTimer = setInterval(tick, 4000);
+            slideshowPollTimer = setInterval(tick, 5000);
         }
 
         async function tileSplitWindows() {
@@ -311,10 +370,18 @@ function stopSlideshowPoll() {
     if (btn) btn.disabled = true;
     startRunConsolePoll();
     try {
+        const body = {
+            brand: BRAND_ID,
+            slots,
+            run_batch: true,
+        };
+        if (BRAND_ID === 'labely') {
+            body.valcoin_slots = valcoinPostSlotsForLabelyRun(slots).map((s) => parseInt(s, 10));
+        }
         const res = await api('/slideshow/generate-and-run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ brand: BRAND_ID, slots, run_batch: true }),
+            body: JSON.stringify(body),
         });
         updateSlideshowUI(res.job);
         if (res.automation_url && slideshowConfig.use_embedded_runner) {
@@ -529,17 +596,46 @@ async function stopDailyRun() {
             master.disabled = !reg.length;
         }
 
-        function loadBatchSelection() {
+        function loadBrandBatchSelection(brand) {
             try {
-                const saved = localStorage.getItem('batchSelectedSlots');
-                if (saved) batchSelectedSlots = new Set(JSON.parse(saved));
+                const saved = localStorage.getItem(`batchSelectedSlots:${brand}`);
+                return saved ? new Set(JSON.parse(saved)) : new Set();
+            } catch (_) {
+                return new Set();
+            }
+        }
+
+        function valcoinPostSlotsForLabelyRun(labelySlots) {
+            const labelySet = new Set(labelySlots.map(String));
+            return [...loadBrandBatchSelection('valcoin')].filter((s) => labelySet.has(String(s)));
+        }
+
+        function batchSelectionStorageKey() {
+            return `batchSelectedSlots:${BRAND_ID}`;
+        }
+
+        function loadBatchSelection() {
+            const key = batchSelectionStorageKey();
+            try {
+                const saved = localStorage.getItem(key);
+                if (saved) {
+                    batchSelectedSlots = new Set(JSON.parse(saved));
+                    return;
+                }
+                // One-time migration: legacy key applied to Labely only.
+                const legacy = localStorage.getItem('batchSelectedSlots');
+                if (legacy && BRAND_ID === 'labely') {
+                    batchSelectedSlots = new Set(JSON.parse(legacy));
+                    saveBatchSelection();
+                    return;
+                }
             } catch (_) {
                 batchSelectedSlots = new Set();
             }
         }
 
         function saveBatchSelection() {
-            localStorage.setItem('batchSelectedSlots', JSON.stringify([...batchSelectedSlots]));
+            localStorage.setItem(batchSelectionStorageKey(), JSON.stringify([...batchSelectedSlots]));
             updateBatchSlotCount();
         }
 
@@ -556,8 +652,8 @@ async function stopDailyRun() {
             batchSelectedSlots.forEach(s => {
                 if (!slotToDevice[s]) batchSelectedSlots.delete(s);
             });
-            // Only auto-select all on first visit (no saved preference yet).
-            if (localStorage.getItem('batchSelectedSlots') !== null) return;
+            // Only auto-select all on first visit for this brand (no saved preference yet).
+            if (localStorage.getItem(batchSelectionStorageKey()) !== null) return;
             if (!batchSelectedSlots.size && reg.length) {
                 reg.forEach(s => batchSelectedSlots.add(s));
                 saveBatchSelection();
@@ -1087,6 +1183,9 @@ async function stopDailyRun() {
         function resetDebugRunButtons() {
             const runBtn = document.getElementById('btn-debug-run');
             const skipBtn = document.getElementById('btn-debug-run-skip-media');
+            const uploadBtn = document.getElementById('btn-debug-upload');
+            const clearBtn = document.getElementById('btn-debug-clear');
+            const uploadAllBtn = document.getElementById('btn-debug-upload-all');
             const killBtn = document.getElementById('btn-debug-kill');
             if (runBtn) {
                 runBtn.disabled = false;
@@ -1096,28 +1195,304 @@ async function stopDailyRun() {
                 skipBtn.disabled = false;
                 skipBtn.textContent = 'Run A→Z (skip media)';
             }
+            if (uploadBtn) {
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = 'Test upload';
+            }
+            if (clearBtn) {
+                clearBtn.disabled = false;
+                clearBtn.textContent = 'Test delete';
+            }
+            if (uploadAllBtn) {
+                uploadAllBtn.disabled = false;
+                uploadAllBtn.textContent = 'Test upload all';
+            }
             if (killBtn) killBtn.disabled = true;
         }
 
-        async function executeDebugStep(testId, skipMedia, signal) {
+        function galleryUploadTestId() {
+            return BRAND_ID === 'valcoin' ? 'valcoin-prep-upload-gallery' : 'upload-gallery';
+        }
+
+        function galleryClearTestId() {
+            return BRAND_ID === 'valcoin' ? 'valcoin-prep-clear-album' : 'clear-album';
+        }
+
+        function logGalleryClearResult(slot, res) {
+            const label = slot ? `Phone ${slot}` : 'Phone';
+            if (!res) return;
+            if (res.success) {
+                appendRunLog(`${label}: DELETE OK — ${res.message || 'Cleared photo library'}`, 'info', 'test');
+                return 'ok';
+            }
+            const err = res.error || res.message || 'Album clear failed';
+            const limitSec = Math.round((res.timeout_ms || 0) / 1000);
+            const tookSec = Math.round((res.duration_ms || 0) / 1000);
+            const timedOut = /超时|timeout/i.test(String(err));
+            const status = timedOut ? 'TIMEOUT' : 'FAILED';
+            let line = `${label}: DELETE ${status} — ${err}`;
+            if (limitSec) line += ` (${tookSec}s / ${limitSec}s limit)`;
+            appendRunLog(line, 'error', 'test');
+            return timedOut ? 'timeout' : 'failed';
+        }
+
+        function logGalleryUploadResult(slot, res, opts = {}) {
+            const brief = Boolean(opts.brief);
+            const label = slot ? `Phone ${slot}` : 'Phone';
+            if (!res) return;
+            if (!brief && res.folder) {
+                appendRunLog(
+                    `Folder: ${res.folder} — ${res.file_count || 0} file(s), ${res.total_mb ?? '?'} MB`,
+                    res.success ? 'info' : 'warn',
+                    'test',
+                );
+            }
+            if (!brief) {
+                for (const file of (res.file_details || []).slice(0, 12)) {
+                    appendRunLog(`  · ${file.name} (${file.size_mb} MB)`, 'info', 'test');
+                }
+                if ((res.file_details || []).length > 12) {
+                    appendRunLog(`  … +${res.file_details.length - 12} more`, 'info', 'test');
+                }
+                if (res.file_sha256) {
+                    appendRunLog(`  file sha256: ${res.file_sha256}`, 'info', 'test');
+                }
+                if (res.hint) appendRunLog(res.hint, 'warn', 'test');
+            }
+            if (res.success) {
+                const msg = res.message || 'Upload OK';
+                appendRunLog(`${label}: OK — ${msg}`, 'info', 'test');
+                return 'ok';
+            }
+            const err = res.error || res.message || 'Upload failed';
+            const limitSec = Math.round((res.timeout_ms || 0) / 1000);
+            const tookSec = Math.round((res.duration_ms || 0) / 1000);
+            const timedOut = /超时|timeout/i.test(String(err));
+            const level = timedOut ? 'error' : 'error';
+            const status = timedOut ? 'TIMEOUT' : 'FAILED';
+            let line = `${label}: ${status} — ${err}`;
+            if (limitSec) line += ` (${tookSec}s / ${limitSec}s limit)`;
+            appendRunLog(line, level, 'test');
+            return timedOut ? 'timeout' : 'failed';
+        }
+
+        async function executeDebugStep(testId, skipMedia, signal, targetDeviceId = deviceId) {
             const skipQs = skipMedia ? '&skip_media=1' : '';
-            return api(`/devices/${enc(deviceId)}/debug/${enc(testId)}?brand=${enc(BRAND_ID)}${skipQs}`, {
+            return api(`/devices/${enc(targetDeviceId)}/debug/${enc(testId)}?brand=${enc(BRAND_ID)}${skipQs}`, {
                 method: 'POST',
                 signal,
             });
         }
 
-        async function killDebugTest() {
-            if (!deviceId) return;
+        function setGalleryTestButtonsRunning(running, activeBtn) {
+            const uploadBtn = document.getElementById('btn-debug-upload');
+            const clearBtn = document.getElementById('btn-debug-clear');
+            const uploadAllBtn = document.getElementById('btn-debug-upload-all');
             const killBtn = document.getElementById('btn-debug-kill');
-            killBtn.disabled = true;
+            if (uploadBtn) {
+                uploadBtn.disabled = running;
+                if (!running) uploadBtn.textContent = 'Test upload';
+            }
+            if (clearBtn) {
+                clearBtn.disabled = running;
+                if (!running) clearBtn.textContent = 'Test delete';
+            }
+            if (uploadAllBtn) {
+                uploadAllBtn.disabled = running;
+                if (!running) uploadAllBtn.textContent = 'Test upload all';
+                else if (activeBtn === uploadAllBtn && activeBtn.dataset.progress) {
+                    uploadAllBtn.textContent = activeBtn.dataset.progress;
+                }
+            }
+            if (killBtn) killBtn.disabled = !running;
+        }
+
+        async function runGalleryClearDebug() {
+            if (debugTestRunning) return;
+            if (!deviceId) {
+                const hint = selectedSlot
+                    ? `Phone ${selectedSlot} is not connected — use Connect AirPlay, then test delete.`
+                    : 'Select a device slot first.';
+                showBanner(hint);
+                return;
+            }
+
+            const testId = galleryClearTestId();
+            const btn = document.getElementById('btn-debug-clear');
+            const controller = new AbortController();
+            debugTestAbort = controller;
+            debugTestRunning = true;
+            if (btn) btn.textContent = 'Deleting…';
+            setGalleryTestButtonsRunning(true, btn);
+
+            const clearTimeoutMs = 3 * 60 * 1000;
+            try {
+                appendRunLog(`Debug delete starting (${testId}) on phone ${selectedSlot}…`, 'info', 'test');
+                const watchdog = setTimeout(() => controller.abort(), clearTimeoutMs);
+                let res;
+                try {
+                    res = await executeDebugStep(testId, false, controller.signal);
+                } finally {
+                    clearTimeout(watchdog);
+                }
+                refreshActivity();
+                const outcome = logGalleryClearResult(selectedSlot, res);
+                if (outcome === 'ok') showBanner(res.message || 'Photo library cleared');
+                else showBanner(res.error || res.message || 'Album clear failed');
+            } catch (err) {
+                const msg = err.name === 'AbortError' ? 'Delete debug aborted' : (err.message || String(err));
+                showBanner(msg);
+                appendRunLog(msg, 'error', 'test');
+            } finally {
+                debugTestRunning = false;
+                debugTestAbort = null;
+                resetDebugRunButtons();
+            }
+        }
+
+        async function runGalleryUploadDebug() {
+            if (debugTestRunning) return;
+            if (!deviceId) {
+                const hint = selectedSlot
+                    ? `Phone ${selectedSlot} is not connected — use Connect AirPlay, then test upload.`
+                    : 'Select a device slot first.';
+                showBanner(hint);
+                return;
+            }
+
+            const testId = galleryUploadTestId();
+            const btn = document.getElementById('btn-debug-upload');
+            const controller = new AbortController();
+            debugTestAbort = controller;
+            debugTestRunning = true;
+            if (btn) btn.textContent = 'Uploading…';
+            setGalleryTestButtonsRunning(true, btn);
+
+            const uploadTimeoutMs = 12 * 60 * 1000;
+            try {
+                appendRunLog(`Debug upload starting (${testId})…`, 'info', 'test');
+                const watchdog = setTimeout(() => controller.abort(), uploadTimeoutMs);
+                let res;
+                try {
+                    res = await executeDebugStep(testId, false, controller.signal);
+                } finally {
+                    clearTimeout(watchdog);
+                }
+                refreshActivity();
+                const outcome = logGalleryUploadResult(selectedSlot, res, { brief: false });
+                if (outcome === 'ok') showBanner(res.message || 'Upload OK');
+                else showBanner(res.error || res.message || 'Upload failed');
+            } catch (err) {
+                const msg = err.name === 'AbortError' ? 'Upload debug aborted' : (err.message || String(err));
+                showBanner(msg);
+                appendRunLog(msg, 'error', 'test');
+            } finally {
+                debugTestRunning = false;
+                debugTestAbort = null;
+                resetDebugRunButtons();
+            }
+        }
+
+        async function runGalleryUploadAllDebug() {
+            if (debugTestRunning) return;
+            await refreshFarmDevices({ quiet: true });
+            const slots = registeredSlots().sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+            if (!slots.length) {
+                showBanner('No registered phones — connect devices in iMouseXP first.');
+                return;
+            }
+
+            const testId = galleryUploadTestId();
+            const btn = document.getElementById('btn-debug-upload-all');
+            const controller = new AbortController();
+            debugTestAbort = controller;
+            debugTestRunning = true;
+            setGalleryTestButtonsRunning(true, btn);
+
+            const uploadTimeoutMs = 12 * 60 * 1000;
+            const summary = { ok: 0, failed: 0, timeout: 0, skipped: 0, no_media: 0 };
+
+            appendRunLog(`Upload test all: ${slots.length} registered phone(s) (${testId})`, 'info', 'test');
+
+            try {
+                for (let i = 0; i < slots.length; i++) {
+                    if (controller.signal.aborted) break;
+                    const slot = slots[i];
+                    const dev = slotToDevice[slot];
+                    if (btn) {
+                        btn.dataset.progress = `Uploading ${i + 1}/${slots.length}…`;
+                        btn.textContent = btn.dataset.progress;
+                    }
+
+                    if (!dev) {
+                        summary.skipped += 1;
+                        appendRunLog(`Phone ${slot}: SKIPPED — not registered`, 'warn', 'test');
+                        continue;
+                    }
+                    if (!dev.connected) {
+                        summary.skipped += 1;
+                        appendRunLog(`Phone ${slot}: SKIPPED — offline (Connect AirPlay first)`, 'warn', 'test');
+                        continue;
+                    }
+
+                    const watchdog = setTimeout(() => controller.abort(), uploadTimeoutMs);
+                    let res;
+                    try {
+                        res = await executeDebugStep(testId, false, controller.signal, dev.device_id);
+                    } catch (err) {
+                        if (err.name === 'AbortError') break;
+                        summary.failed += 1;
+                        appendRunLog(`Phone ${slot}: FAILED — ${err.message || err}`, 'error', 'test');
+                        continue;
+                    } finally {
+                        clearTimeout(watchdog);
+                    }
+
+                    if ((res.file_count || 0) === 0 && !res.success) {
+                        summary.no_media += 1;
+                    }
+                    const outcome = logGalleryUploadResult(slot, res, { brief: true });
+                    if (outcome === 'ok') summary.ok += 1;
+                    else if (outcome === 'timeout') summary.timeout += 1;
+                    else summary.failed += 1;
+                }
+
+                refreshActivity();
+                const parts = [];
+                if (summary.ok) parts.push(`${summary.ok} OK`);
+                if (summary.timeout) parts.push(`${summary.timeout} timeout`);
+                if (summary.failed) parts.push(`${summary.failed} failed`);
+                if (summary.no_media) parts.push(`${summary.no_media} no media`);
+                if (summary.skipped) parts.push(`${summary.skipped} skipped`);
+                const line = controller.signal.aborted
+                    ? `Upload test all aborted — ${parts.join(', ') || 'no results'}`
+                    : `Upload test all done — ${parts.join(', ') || 'no phones tested'}`;
+                appendRunLog(line, controller.signal.aborted ? 'warn' : (summary.failed || summary.timeout ? 'warn' : 'info'), 'test');
+                showBanner(line);
+            } catch (err) {
+                const msg = err.message || String(err);
+                showBanner(msg);
+                appendRunLog(msg, 'error', 'test');
+            } finally {
+                debugTestRunning = false;
+                debugTestAbort = null;
+                if (btn) delete btn.dataset.progress;
+                resetDebugRunButtons();
+            }
+        }
+
+        async function killDebugTest() {
+            const killBtn = document.getElementById('btn-debug-kill');
+            if (killBtn) killBtn.disabled = true;
             if (debugTestAbort) {
                 debugTestAbort.abort();
             }
             stopSlideshowEmbedGeneration();
             try {
                 await api('/batch/stop', { method: 'POST' });
-                await api(`/devices/${enc(deviceId)}/pipeline/stop`, { method: 'POST' });
+                if (deviceId) {
+                    await api(`/devices/${enc(deviceId)}/pipeline/stop`, { method: 'POST' });
+                }
                 stopSlideshowPoll();
                 hideSlideshowEmbed();
                 slideshowJobId = null;
@@ -1157,12 +1532,18 @@ async function stopDailyRun() {
 
             const btn = document.getElementById('btn-debug-run');
             const skipBtn = document.getElementById('btn-debug-run-skip-media');
+            const uploadBtn = document.getElementById('btn-debug-upload');
+            const clearBtn = document.getElementById('btn-debug-clear');
+            const uploadAllBtn = document.getElementById('btn-debug-upload-all');
             const killBtn = document.getElementById('btn-debug-kill');
             const controller = new AbortController();
             debugTestAbort = controller;
             debugTestRunning = true;
             btn.disabled = true;
             if (skipBtn) skipBtn.disabled = true;
+            if (uploadBtn) uploadBtn.disabled = true;
+            if (clearBtn) clearBtn.disabled = true;
+            if (uploadAllBtn) uploadAllBtn.disabled = true;
             killBtn.disabled = false;
 
             const startIdx = runAll ? debugFlowStepIds.indexOf(testId) : -1;
@@ -1475,10 +1856,14 @@ async function stopDailyRun() {
             try {
                 await flushPostTextSaves();
                 await flushCaptionAiSettings();
+                const batchBody = { slots, from_post: fromPost, brand: BRAND_ID };
+                if (BRAND_ID === 'labely') {
+                    batchBody.valcoin_slots = valcoinPostSlotsForLabelyRun(slots).map((s) => parseInt(s, 10));
+                }
                 const res = await api('/batch/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ slots, from_post: fromPost, brand: BRAND_ID }),
+                    body: JSON.stringify(batchBody),
                 });
                 updateBatchUI(res.status || {});
                 refreshFarmDevices({ quiet: true });
@@ -1500,7 +1885,7 @@ async function stopDailyRun() {
                 const slots = (res.cleared_slots || []).join(', ') || 'none';
                 const videos = res.videos_removed ?? 0;
                 appendRunLog(
-                    `Session reset — cleared last run, upload state, and ${videos} gallery video(s) for all phones (slots: ${slots})`,
+                    `Session reset — cleared last run, upload state, cant-cast tags, and ${videos} gallery video(s) for all phones (slots: ${slots})`,
                     'info',
                     'batch',
                 );

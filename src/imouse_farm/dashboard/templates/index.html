@@ -129,7 +129,12 @@
                         <button type="button" class="btn-ghost text-xs" onclick="hideSlideshowEmbed()">Hide</button>
                     </div>
                 </div>
-                <iframe id="slideshow-embed-frame" title="Slideshow automation" class="w-full bg-black" style="height:72vh;border:0;" allow="local-network-access"></iframe>
+                <div class="relative" style="height:72vh;">
+                    <div id="slideshow-embed-placeholder" class="hidden absolute inset-0 z-0 flex items-center justify-center bg-muted/40 text-sm text-muted-foreground">
+                        Loading slideshow automation…
+                    </div>
+                    <iframe id="slideshow-embed-frame" title="Slideshow automation" class="absolute inset-0 z-10 w-full h-full bg-white border-0" allow="local-network-access *"></iframe>
+                </div>
             </section>
 
             <div class="grid lg:grid-cols-5 gap-5 md:gap-6 items-start">
@@ -161,7 +166,7 @@
                                                    aria-label="Warmup all phones"
                                                    onchange="onWarmupSelectAllChange(this.checked)"
                                                    onclick="event.stopPropagation()">
-                                            <span>Warmup</span>
+                                            <span>Warmup after Labely</span>
                                         </label>
                                     </th>
                                     <th class="phones-th" scope="col">Last run</th>
@@ -284,6 +289,9 @@
                                 <div class="btn-row">
                                     <button type="button" class="btn-ghost btn-primary-outline" id="btn-debug-run" onclick="runDebugTest(false, false)">Run test</button>
                                     <button type="button" class="btn-ghost" id="btn-debug-run-skip-media" onclick="runDebugTest(true, true)" title="Run all steps from the selected letter through the end; skips gallery clear/upload, generate, and TikTok publish">Run A→Z (skip media)</button>
+                                    <button type="button" class="btn-ghost" id="btn-debug-upload" onclick="runGalleryUploadDebug()" title="Upload gallery files for the selected phone (same as prep upload_gallery) — logs folder, sizes, timeout, and iMouse error">Test upload</button>
+                                    <button type="button" class="btn-ghost" id="btn-debug-clear" onclick="runGalleryClearDebug()" title="Clear the selected phone's photo library (same as prep clear_album) — logs OK, timeout, or error">Test delete</button>
+                                    <button type="button" class="btn-ghost" id="btn-debug-upload-all" onclick="runGalleryUploadAllDebug()" title="Run gallery upload on every registered phone, one at a time — logs OK, timeout, or error per slot">Test upload all</button>
                                     <button type="button" class="btn-ghost btn-kill" id="btn-debug-kill" onclick="killDebugTest()" disabled>Stop test</button>
                                     <button type="button" class="btn-ghost" onclick="captureScreen()">Screenshot</button>
                                 </div>

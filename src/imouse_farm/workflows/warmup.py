@@ -30,6 +30,7 @@ from imouse_farm.workflows.feed_scroll import (
     screen_dimensions,
     swipe_feed_up,
 )
+from imouse_farm.workflows.tiktok_plus_ready import wait_for_tiktok_plus_visible
 
 logger = get_logger(__name__)
 
@@ -58,14 +59,17 @@ async def run_tiktok_warmup(
 
     after_labely=True when Labely posts just finished: confirm the Labely @ first,
     then toggle to the ValCoin account for warmup scrolling.
+
+    ValCoin warmup retries on failure by killing and reopening TikTok on the home
+    tab — never re-runs prep or gallery upload/clear.
     """
     device_id = str(device.device_id)
-    profile = get_profile_for_device(device_id, device.user_name, brand=brand)
-    handle = str(profile.get("tiktok_handle") or "")
+    brand_key = str(brand or "labely").strip().lower()
     warmup_cfg = app_config.batch.warmup
 
     dismiss_popups = clear_popups
     if dismiss_popups is None and permission_watchers is not None:
+
         async def dismiss_popups(context: str) -> bool:
             cleared = 0
             for _ in range(5):
@@ -74,60 +78,249 @@ async def run_tiktok_warmup(
                 cleared += 1
             return cleared > 0
 
-    if not skip_setup and not (after_labely and brand == "valcoin"):
-        await _open_tiktok_for_warmup(
-            controller,
-            device_id,
-            app_config=app_config,
+    def _stopped() -> bool:
+        if is_cancelled(device_id):
+            return True
+        if stop_check and stop_check():
+            return True
+        return False
+
+    max_attempts = (
+        max(1, int(warmup_cfg.max_retry_attempts))
+        if brand_key == "valcoin"
+        else 1
+    )
+    last_error: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        if _stopped():
+            logger.info("warmup_stopped", device_id=device_id, reason="cancelled")
+            return
+
+        try:
+            if attempt == 1:
+                if not skip_setup and not (after_labely and brand_key == "valcoin"):
+                    await _open_tiktok_for_warmup(
+                        controller,
+                        device_id,
+                        app_config=app_config,
+                        log_activity=log_activity,
+                    )
+                if not skip_setup:
+                    await _ensure_account_for_warmup(
+                        controller,
+                        device,
+                        brand=brand_key,
+                        app_config=app_config,
+                        device_manager=device_manager,
+                        log_activity=log_activity,
+                        after_labely=after_labely,
+                        clear_popups=dismiss_popups,
+                        log_switch_message=True,
+                    )
+            else:
+                if log_activity:
+                    await log_activity(
+                        "info",
+                        "batch",
+                        (
+                            f"ValCoin warmup retry {attempt}/{max_attempts} "
+                            f"— closing and reopening TikTok (no gallery changes)…"
+                        ),
+                        device_id,
+                    )
+                await _reopen_tiktok_for_warmup_retry(
+                    controller,
+                    device_id,
+                    app_config=app_config,
+                    device_manager=device_manager,
+                    log_activity=log_activity,
+                    after_labely=after_labely,
+                )
+                await _ensure_account_for_warmup(
+                    controller,
+                    device,
+                    brand=brand_key,
+                    app_config=app_config,
+                    device_manager=device_manager,
+                    log_activity=log_activity,
+                    after_labely=after_labely,
+                    clear_popups=dismiss_popups,
+                    log_switch_message=False,
+                )
+
+            await _run_warmup_scroll(
+                controller,
+                device,
+                brand=brand_key,
+                app_config=app_config,
+                log_activity=log_activity,
+                duration_override=duration_override,
+                stop_check=_stopped,
+            )
+            await _teardown_after_warmup(
+                controller, device_id, app_config, log_activity
+            )
+            return
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "warmup_attempt_failed",
+                device_id=device_id,
+                slot=device.user_name,
+                brand=brand_key,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                error=str(exc),
+            )
+            if attempt >= max_attempts or _stopped():
+                raise
+
+    if last_error is not None:
+        raise last_error
+
+
+async def _ensure_account_for_warmup(
+    controller: Any,
+    device: Any,
+    *,
+    brand: str,
+    app_config: AppConfig,
+    device_manager: Any | None,
+    log_activity: Any | None,
+    after_labely: bool,
+    clear_popups: ClearPopupsFn | None,
+    log_switch_message: bool = True,
+) -> None:
+    device_id = str(device.device_id)
+    profile = get_profile_for_device(device_id, device.user_name, brand=brand)
+    handle = str(profile.get("tiktok_handle") or "")
+
+    if after_labely and brand == "valcoin":
+        labely_profile = get_profile_for_device(
+            device_id, device.user_name, brand="labely"
+        )
+        labely_handle = str(labely_profile.get("tiktok_handle") or "")
+        if log_switch_message and log_activity:
+            await log_activity(
+                "info",
+                "batch",
+                "Labely finished — switching to ValCoin @ for warmup",
+                device_id,
+            )
+        await ensure_tiktok_account(
+            controller=controller,
+            device_id=device_id,
+            tiktok_handle=labely_handle,
+            navigation=app_config.tiktok_navigation,
             log_activity=log_activity,
+            device_manager=device_manager,
+            templates_dir=app_config.analysis.templates_directory,
+            brand="labely",
+            device_user_name=device.user_name,
+            toggle_to_opposite=True,
+            tiktok_ready_timeout_seconds=180.0,
+            clear_popups=clear_popups,
+        )
+        return
+
+    await ensure_tiktok_account(
+        controller=controller,
+        device_id=device_id,
+        tiktok_handle=handle,
+        navigation=app_config.tiktok_navigation,
+        log_activity=log_activity,
+        device_manager=device_manager,
+        templates_dir=app_config.analysis.templates_directory,
+        brand=brand,
+        device_user_name=device.user_name,
+        tiktok_ready_timeout_seconds=180.0,
+        clear_popups=clear_popups,
+    )
+
+
+async def _reopen_tiktok_for_warmup_retry(
+    controller: Any,
+    device_id: str,
+    *,
+    app_config: AppConfig,
+    device_manager: Any | None = None,
+    log_activity: Any | None = None,
+    after_labely: bool = False,
+) -> None:
+    """Kill TikTok and reopen from the home screen — lands on the home feed tab."""
+    if log_activity:
+        await log_activity(
+            "info",
+            "batch",
+            "Warmup: closing TikTok…",
+            device_id,
+        )
+    await controller.kill_app(device_id)
+    await asyncio.sleep(1.0)
+    await controller.press_home(device_id)
+    await asyncio.sleep(1.5)
+
+    # After Labely posts VPN is already on — do not cycle Shadowrocket or touch gallery.
+    if not after_labely:
+        await _ensure_vpn_on(controller, device_id, app_config, log_activity)
+
+    ok = await controller.tap(device_id, TIKTOK_HOME_ICON_X, TIKTOK_HOME_ICON_Y)
+    if ok:
+        if log_activity:
+            await log_activity(
+                "info",
+                "batch",
+                (
+                    f"Warmup: reopened TikTok at ({TIKTOK_HOME_ICON_X}, {TIKTOK_HOME_ICON_Y}) "
+                    f"— waiting for home feed"
+                ),
+                device_id,
+            )
+        await asyncio.sleep(8.0)
+    elif log_activity:
+        await log_activity(
+            "warn",
+            "batch",
+            f"Warmup: TikTok reopen tap failed at ({TIKTOK_HOME_ICON_X}, {TIKTOK_HOME_ICON_Y})",
+            device_id,
         )
 
-    if not skip_setup:
-        if after_labely and brand == "valcoin":
-            labely_profile = get_profile_for_device(
-                device_id, device.user_name, brand="labely"
-            )
-            labely_handle = str(labely_profile.get("tiktok_handle") or "")
-            if log_activity:
-                await log_activity(
-                    "info",
-                    "batch",
-                    f"Labely finished — switching to ValCoin @ for warmup",
-                    device_id,
-                )
-            await ensure_tiktok_account(
-                controller=controller,
-                device_id=device_id,
-                tiktok_handle=labely_handle,
-                navigation=app_config.tiktok_navigation,
-                log_activity=log_activity,
-                device_manager=device_manager,
-                templates_dir=app_config.analysis.templates_directory,
-                brand="labely",
-                device_user_name=device.user_name,
-                toggle_to_opposite=True,
-                tiktok_ready_timeout_seconds=180.0,
-                clear_popups=dismiss_popups,
-            )
-        else:
-            await ensure_tiktok_account(
-                controller=controller,
-                device_id=device_id,
-                tiktok_handle=handle,
-                navigation=app_config.tiktok_navigation,
-                log_activity=log_activity,
-                device_manager=device_manager,
-                templates_dir=app_config.analysis.templates_directory,
-                brand=brand,
-                device_user_name=device.user_name,
-                # After tiktok_end kills apps + VPN, TikTok cold-start can take longer
-                # than the default 90s — give it 3 minutes before giving up.
-                tiktok_ready_timeout_seconds=180.0,
-                clear_popups=dismiss_popups,
-            )
+    await wait_for_tiktok_plus_visible(
+        controller,
+        device_id,
+        device_manager=device_manager,
+        templates_directory=app_config.analysis.templates_directory,
+        log_activity=log_activity,
+        timeout_seconds=180.0,
+    )
+    if log_activity:
+        await log_activity(
+            "info",
+            "batch",
+            "Warmup: TikTok home feed ready after reopen",
+            device_id,
+        )
 
+
+async def _run_warmup_scroll(
+    controller: Any,
+    device: Any,
+    *,
+    brand: str,
+    app_config: AppConfig,
+    log_activity: Any | None,
+    duration_override: float | None,
+    stop_check: Callable[[], bool],
+) -> None:
+    device_id = str(device.device_id)
+    warmup_cfg = app_config.batch.warmup
     sw, sh = screen_dimensions(device)
-    duration = float(duration_override) if duration_override is not None else float(warmup_cfg.duration_seconds)
+    duration = (
+        float(duration_override)
+        if duration_override is not None
+        else float(warmup_cfg.duration_seconds)
+    )
     delay_min = float(warmup_cfg.swipe_delay_min_seconds)
     delay_max = float(warmup_cfg.swipe_delay_max_seconds)
     delay_mean = float(warmup_cfg.swipe_delay_mean_seconds)
@@ -147,13 +340,6 @@ async def run_tiktok_warmup(
     double_tap_at = started + random.uniform(0.0, duration)
     double_tap_done = False
 
-    def _stopped() -> bool:
-        if is_cancelled(device_id):
-            return True
-        if stop_check and stop_check():
-            return True
-        return False
-
     logger.info(
         "warmup_started",
         device_id=device_id,
@@ -164,7 +350,7 @@ async def run_tiktok_warmup(
     )
 
     while time.monotonic() < deadline:
-        if _stopped():
+        if stop_check():
             logger.info("warmup_stopped", device_id=device_id, reason="cancelled")
             return
 
@@ -186,8 +372,6 @@ async def run_tiktok_warmup(
                     device_id,
                 )
 
-        # Bimodal: long_watch_prob chance of a full-length watch (delay_max),
-        # otherwise exponential weighted towards short watches (mean ~delay_mean).
         if random.random() < long_watch_prob:
             delay = delay_max
         else:
@@ -206,11 +390,11 @@ async def run_tiktok_warmup(
             sh,
             delay,
             deadline,
-            stop_check=_stopped,
+            stop_check=stop_check,
         ):
             return
 
-        if _stopped():
+        if stop_check():
             return
 
         swiped = await swipe_feed_up(controller, device_id, sw, sh)
@@ -236,8 +420,6 @@ async def run_tiktok_warmup(
             device_id,
         )
 
-    await _teardown_after_warmup(controller, device_id, app_config, log_activity)
-
 
 async def _teardown_after_warmup(
     controller: Any,
@@ -254,11 +436,9 @@ async def _teardown_after_warmup(
     await controller.press_home(device_id)
     await asyncio.sleep(1.5)
 
-    # Open Shadowrocket.
     await controller.tap(device_id, SHADOWROCKET_ICON_X, SHADOWROCKET_ICON_Y)
     await asyncio.sleep(2.0)
 
-    # Turn VPN off only if it's currently on (bluetoggle visible).
     if blue_path.is_file():
         vpn_on = await controller.find_template_on_device(
             device_id, blue_path, threshold=TEMPLATE_THRESHOLD
@@ -289,23 +469,19 @@ async def _open_tiktok_for_warmup(
         _plus_template_path,
         _plus_threshold,
     )
-    from pathlib import Path
 
     templates_dir = app_config.analysis.templates_directory
     plus_path = _plus_template_path(None, templates_dir)
     threshold = _plus_threshold(None)
 
-    # If TikTok is already open on home feed, just ensure VPN is on and return.
     if plus_path:
         hit = await controller.find_template_on_device(device_id, plus_path, threshold)
         if hit:
             await _ensure_vpn_on(controller, device_id, app_config, log_activity)
             return
 
-    # Turn VPN on via Shadowrocket before opening TikTok.
     await _ensure_vpn_on(controller, device_id, app_config, log_activity)
 
-    # Go home then tap TikTok icon.
     await controller.home(device_id)
     await asyncio.sleep(1.5)
 
@@ -318,8 +494,6 @@ async def _open_tiktok_for_warmup(
                 f"Warmup: opened TikTok at ({TIKTOK_HOME_ICON_X}, {TIKTOK_HOME_ICON_Y})",
                 device_id,
             )
-        # Extra settle time — after tiktok_end kills the app and VPN, TikTok needs
-        # several seconds to cold-start before the account-ready check begins.
         await asyncio.sleep(8.0)
     elif log_activity:
         await log_activity(
@@ -342,7 +516,6 @@ async def _ensure_vpn_on(
     templates_dir = app_config.analysis.templates_directory
     grey_path = Path(templates_dir) / "greytoggle.jpg"
 
-    # Open Shadowrocket.
     await controller.press_home(device_id)
     await asyncio.sleep(0.5)
     await controller.tap(device_id, SHADOWROCKET_ICON_X, SHADOWROCKET_ICON_Y)

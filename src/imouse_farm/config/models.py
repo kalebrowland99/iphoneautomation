@@ -247,6 +247,7 @@ class WarmupConfig(BaseModel):
     swipe_delay_mean_seconds: float = 4.0
     swipe_delay_long_watch_probability: float = 0.20
     double_tap_interval_seconds: float = 0.35
+    max_retry_attempts: int = 3
 
 
 class BatchConfig(BaseModel):

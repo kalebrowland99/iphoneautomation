@@ -35,6 +35,8 @@ class SlideshowJob:
     automation_url: str = ""
     error: str = ""
     parent_job_id: str = ""
+    # Labely jobs: slots also ticked on the ValCoin brand batch picker (full post after Labely).
+    valcoin_slots: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +55,7 @@ class SlideshowJob:
             "automation_url": self.automation_url,
             "error": self.error,
             "parent_job_id": self.parent_job_id,
+            "valcoin_slots": list(self.valcoin_slots),
         }
 
     @classmethod
@@ -79,6 +82,11 @@ class SlideshowJob:
             automation_url=str(data.get("automation_url") or ""),
             error=str(data.get("error") or ""),
             parent_job_id=str(data.get("parent_job_id") or ""),
+            valcoin_slots=[
+                str(s).strip()
+                for s in (data.get("valcoin_slots") or [])
+                if str(s).strip()
+            ],
         )
 
 
@@ -123,6 +131,7 @@ class SlideshowJobStore:
         run_batch: bool = True,
         videos_per_slot: int = 0,
         parent_job_id: str = "",
+        valcoin_slots: list[str] | None = None,
     ) -> SlideshowJob:
         job = SlideshowJob(
             id=uuid.uuid4().hex[:12],
@@ -131,6 +140,11 @@ class SlideshowJobStore:
             run_batch=bool(run_batch),
             videos_per_slot=max(0, int(videos_per_slot)),
             parent_job_id=str(parent_job_id or "").strip(),
+            valcoin_slots=[
+                str(s).strip()
+                for s in (valcoin_slots or [])
+                if str(s).strip()
+            ],
         )
         async with self._lock:
             self._jobs[job.id] = job

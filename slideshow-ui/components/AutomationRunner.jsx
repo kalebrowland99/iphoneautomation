@@ -12,7 +12,7 @@ import { estimateBraveSearchesForFarm } from "@/lib/braveSearchEstimate";
 import { AppNav, PreviewFrame } from "@/components/ui/acme-hero";
 import { defaultConfig, emptySlot } from "@/app/page";
 import { getTotalSlides, normalizeValcoinOutputFormat, LABELY_SCAN_TOUR_SLOTS } from "@/lib/slideLayout";
-import { markFarmJobFailed, setFarmJobStatus } from "@/lib/farmBridge";
+import { markFarmJobFailed, setFarmJobStatus, setFarmNotifyContext } from "@/lib/farmBridge";
 import { clearAutomationLog, appendAutomationLog } from "@/lib/automationLog";
 import { savedShowMatchesApp } from "@/lib/showAppId";
 
@@ -73,6 +73,10 @@ export default function AutomationRunner() {
     [farmUrl, jobId, secret, slots, brand, valcoinVideosPerPhone, slideshowsPerSlot, farmPhoneCount],
   );
 
+  useEffect(() => {
+    setFarmNotifyContext({ farmUrl, secret });
+  }, [farmUrl, secret]);
+
   const totalSlides = useMemo(() => getTotalSlides(config), [config]);
   const isLabely = brand === "labely";
   const farmUniqueProducts = useMemo(() => {
@@ -117,8 +121,9 @@ export default function AutomationRunner() {
           brand,
           phoneCount: String(farmPhoneCount),
           videosPerPhone: String(slideshowsPerSlot),
+          ...(jobId ? { jobId } : {}),
         });
-        const res = await fetch(`/api/farm/defaults?${defaultsQs.toString()}`);
+        const res = await fetch(`/api/farm/defaults?${defaultsQs.toString()}`, { cache: "no-store" });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         if (cancelled) return;

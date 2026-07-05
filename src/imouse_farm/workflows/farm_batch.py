@@ -73,6 +73,7 @@ class FarmBatchRunner:
         self._batch_done_events: dict[str, asyncio.Event] = {}
         self._current_brand: str = "labely"
         self._labely_pipeline_ok: set[str] = set()
+        self._valcoin_post_slots: frozenset[str] = frozenset()
 
     def on_event(self, callback: EventCallback) -> None:
         self._event_callbacks.append(callback)
@@ -124,6 +125,7 @@ class FarmBatchRunner:
         *,
         from_post: int | None = None,
         brand: str = "labely",
+        valcoin_slots: frozenset[str] | None = None,
     ) -> bool:
         if self.is_running():
             return False
@@ -137,6 +139,7 @@ class FarmBatchRunner:
 
         self._stop_requested = False
         self._labely_pipeline_ok.clear()
+        self._valcoin_post_slots = valcoin_slots or frozenset()
         if self._permission_watchers:
             for device in devices:
                 await self._permission_watchers.ensure_watching(device.device_id)
@@ -298,6 +301,7 @@ class FarmBatchRunner:
                         brand == "labely"
                         and effective_from_post is None
                         and self._config.chain_valcoin_after_labely
+                        and str(device.user_name) in self._valcoin_post_slots
                         and not valcoin_profile.get("warmup_enabled")
                     )
                     if profile.get("warmup_enabled"):
@@ -572,7 +576,12 @@ class FarmBatchRunner:
         device_id = data.get("device_id")
         if not device_id or device_id not in self._batch_done_events:
             return
-        if event not in ("pipeline_completed", "pipeline_failed", "pipeline_stopped"):
+        if event not in (
+            "pipeline_completed",
+            "pipeline_failed",
+            "pipeline_stopped",
+            "pipeline_paused",
+        ):
             return
 
         slot = None
@@ -586,8 +595,17 @@ class FarmBatchRunner:
             if self._current_brand == "labely":
                 self._labely_pipeline_ok.add(str(device_id))
         else:
-            entry["reason"] = data.get("message", event)
+            entry["reason"] = data.get("message") or (
+                "paused" if event == "pipeline_paused" else event
+            )
             self._status["failed"].append(entry)
+            if event == "pipeline_paused":
+                await self._db.log_activity(
+                    "warn",
+                    "batch",
+                    f"Pipeline paused for slot {slot or device_id} — skipping to next phone",
+                    device_id,
+                )
 
         # Keep AirPlay up when the user kills a run; only decast after a normal finish.
         # Also skip auto-disconnect if ValCoin warmup is pending — the batch loop
@@ -605,3 +623,6 @@ class FarmBatchRunner:
         done = self._batch_done_events.pop(device_id, None)
         if done:
             done.set()
+
+        if event == "pipeline_paused":
+            await self._pipeline.stop(device_id)

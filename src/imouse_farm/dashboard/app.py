@@ -123,6 +123,7 @@ class BatchStartBody(BaseModel):
     slots: list[int] | None = None  # farm slot numbers; default = all registered phones
     from_post: int | None = None
     brand: str | None = None
+    valcoin_slots: list[int] | None = None
 
 
 class CaptionAISettingsBody(BaseModel):
@@ -440,7 +441,14 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         if not devices:
             raise HTTPException(400, "No farm phones found for batch run")
         started = await app_instance.farm_batch.start(
-            devices, from_post=from_post, brand=brand
+            devices, from_post=from_post, brand=brand,
+            valcoin_slots=frozenset(
+                str(s).strip()
+                for s in (body.valcoin_slots or [])
+                if str(s).strip()
+            )
+            if body and body.valcoin_slots is not None
+            else frozenset(),
         )
         if not started:
             raise HTTPException(400, "Failed to start batch run")
@@ -454,7 +462,7 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
 
     @app.post("/api/batch/reset-session")
     async def reset_batch_session() -> dict[str, Any]:
-        """Clear prep, last-run, and gallery videos for all slots."""
+        """Clear prep, last-run, cant-cast tags, and gallery videos for all slots."""
         from imouse_farm.integrations.slideshow_ingest import clear_all_slot_media
 
         farm_slots = int(getattr(app_instance.config.dashboard, "farm_slots", 20) or 20)

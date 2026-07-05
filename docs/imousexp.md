@@ -45,7 +45,7 @@ New iMouse features should be added to `DeviceController` first, then exposed vi
 - **`pic_find_text`**: on-device OCR for tapping UI labels (preferred over PC-side Tesseract for live taps).
 - **`key_sendkey`** (`/key/sendkey`): `key=` for text; `fn_key=` for hotkeys. iMouseXP console buttons map to `fn_key` strings — **App** = `AppSwitch`, **Home** = `WIN+h` (this project also accepts `home`).
 - **Responses**: check `response.status == 200` and `response.data.code == 0` via `is_success()`.
-- **`kill_app`**: `fn_key=AppSwitch`, then swipe up **5 times** on center card (~406×720).
+- **`kill_app`**: `fn_key=AppSwitch`, then swipe up **5 times** from center card `(301, 703)` → `(301, 100)` (~406×720).
 - **AirPlay**: drops on server restart; reconnect manually or via `device_airplay_connect`.
 
 ## Change checklist

@@ -553,7 +553,7 @@ class DeviceController:
                 swipes_ok = 0
                 for i in range(5):
                     swipe_resp = self._api.mouse_swipe(
-                        ids, "up", sx=203, sy=500, ex=203, ey=100
+                        ids, "up", sx=301, sy=703, ex=301, ey=100
                     )
                     if self._ok(swipe_resp):
                         swipes_ok += 1

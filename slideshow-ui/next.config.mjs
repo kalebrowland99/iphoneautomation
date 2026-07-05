@@ -10,7 +10,9 @@ const nextConfig = {
     ],
   },
 
-  // Allow farm dashboard (localhost:8080) to embed /automation in an iframe.
+  // MP4 ingest is proxied by app/farm-api/[[...path]]/route.js (rewrites break multipart POST).
+
+  // Allow the farm dashboard to embed /automation in an iframe (any local/LAN origin in dev).
   async headers() {
     return [
       {
@@ -18,8 +20,16 @@ const nextConfig = {
         headers: [
           {
             key: "Content-Security-Policy",
-            value:
-              "frame-ancestors 'self' http://localhost:8080 http://127.0.0.1:8080",
+            value: "frame-ancestors *",
+          },
+        ],
+      },
+      {
+        source: "/automation/:path*",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: "frame-ancestors *",
           },
         ],
       },

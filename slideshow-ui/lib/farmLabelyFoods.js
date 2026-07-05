@@ -11,22 +11,22 @@ export const LABELY_FARM_SCAN_SLOTS = 3;
 export const LABELY_FARM_BATCH_COUNT = LABELY_FARM_VIDEO_COUNT;
 export const LABELY_ITEMS_PER_BATCH = LABELY_FARM_SCAN_SLOTS;
 
-function mulberry32(seed) {
-  let t = seed >>> 0;
-  return () => {
-    t += 0x6d2b79f5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
+function newRunSeed() {
+  return `${Date.now()}-${Math.random()}`;
 }
 
-function dailyShuffle(items, salt = "") {
-  const day = new Date().toISOString().slice(0, 10);
-  let seed = 0;
-  for (const ch of `${day}:${salt}`) seed = (Math.imul(seed, 31) + ch.charCodeAt(0)) >>> 0;
-  const rand = mulberry32(seed || 1);
+/** Deterministic shuffle from a string seed (unique job id → unique lineup). */
+function seededShuffle(items, seed) {
   const arr = [...items];
+  let state = 0;
+  const s = String(seed || "labely-farm");
+  for (let i = 0; i < s.length; i++) {
+    state = (state * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  const rand = () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
@@ -35,11 +35,14 @@ function dailyShuffle(items, salt = "") {
 }
 
 /**
- * One genre per video slot on every phone (video 1 / 2 / 3). Rotates daily.
+ * One genre per video slot on every phone (video 1 / 2 / 3). New shuffle each run.
  * Example: video 1 = chips, video 2 = cereal, video 3 = soda.
  */
-export function pickLabelyFarmVideoGenres() {
-  const shuffled = dailyShuffle(UNHEALTHY_AMERICAN_FOOD_CATEGORIES, "labely-farm-video-genres");
+export function pickLabelyFarmVideoGenres(seed = "") {
+  const shuffled = seededShuffle(
+    UNHEALTHY_AMERICAN_FOOD_CATEGORIES,
+    `${seed || newRunSeed()}:genres`,
+  );
   const picked = shuffled.slice(0, LABELY_FARM_VIDEOS_PER_PHONE);
   if (picked.length >= LABELY_FARM_VIDEOS_PER_PHONE) return picked;
   return UNHEALTHY_AMERICAN_FOOD_CATEGORIES.slice(0, LABELY_FARM_VIDEOS_PER_PHONE);
@@ -52,23 +55,25 @@ export function pickLabelyFarmFoodTypes() {
 
 /**
  * Three brand names from one genre for a single video.
- * Offset by phone so different phones can get different triplets in the same genre.
+ * Random within the genre pool, seeded per run + phone + video slot.
  */
-export function productsForFarmVideo(genreCategory, phoneIndex) {
+export function productsForFarmVideo(genreCategory, phoneIndex, videoOnPhone = 1, seed = "") {
   const pool = Array.isArray(genreCategory?.items) ? genreCategory.items.filter(Boolean) : [];
   const genreLabel = String(genreCategory?.name || "Packaged food").trim();
   if (!pool.length) {
     return Array.from({ length: LABELY_FARM_SCAN_SLOTS }, (_, i) => `${genreLabel} item ${i + 1}`);
   }
-  const start = (Math.max(0, phoneIndex) * LABELY_FARM_SCAN_SLOTS) % pool.length;
+  const shuffleSeed = `${seed || newRunSeed()}:p${phoneIndex}:v${videoOnPhone}:${genreLabel}`;
+  const shuffled = seededShuffle(pool, shuffleSeed);
   const items = [];
   const seen = new Set();
-  for (let i = 0; i < pool.length && items.length < LABELY_FARM_SCAN_SLOTS; i++) {
-    const name = String(pool[(start + i) % pool.length]).trim();
-    const key = name.toLowerCase();
-    if (!name || seen.has(key)) continue;
+  for (const name of shuffled) {
+    const trimmed = String(name || "").trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) continue;
     seen.add(key);
-    items.push(name);
+    items.push(trimmed);
+    if (items.length >= LABELY_FARM_SCAN_SLOTS) break;
   }
   while (items.length < LABELY_FARM_SCAN_SLOTS) {
     items.push(`${genreLabel} item ${items.length + 1}`);
@@ -78,13 +83,15 @@ export function productsForFarmVideo(genreCategory, phoneIndex) {
 
 /**
  * Build the full farm video plan: each video = one genre, three brands in that genre.
+ * Pass options.seed (farm job id) so each Run button press gets a fresh lineup.
  * Brave photos resolve once per unique product name and reuse across phones.
  */
 export function buildLabelyFarmVideoPlan(options = {}) {
   const phoneCount = Math.max(1, Number(options.phoneCount) || LABELY_FARM_PHONE_COUNT);
   const videosPerPhone = Math.max(1, Number(options.videosPerPhone) || LABELY_FARM_VIDEOS_PER_PHONE);
   const totalVideos = phoneCount * videosPerPhone;
-  const videoGenres = pickLabelyFarmVideoGenres();
+  const seed = String(options.seed || newRunSeed());
+  const videoGenres = pickLabelyFarmVideoGenres(seed);
 
   const batches = [];
   for (let v = 0; v < totalVideos; v++) {
@@ -92,7 +99,7 @@ export function buildLabelyFarmVideoPlan(options = {}) {
     const videoOnPhone = (v % videosPerPhone) + 1;
     const genre = videoGenres[videoOnPhone - 1] ?? videoGenres[0];
     const genreName = genre?.name ?? "Packaged food";
-    const items = productsForFarmVideo(genre, phoneIndex);
+    const items = productsForFarmVideo(genre, phoneIndex, videoOnPhone, seed);
     batches.push({
       id: `phone-${phoneIndex + 1}-video-${videoOnPhone}`,
       name: `Phone ${phoneIndex + 1} · video ${videoOnPhone} · ${genreName}`,

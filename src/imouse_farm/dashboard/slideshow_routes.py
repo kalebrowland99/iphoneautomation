@@ -25,6 +25,12 @@ class SlideshowGenerateBody(BaseModel):
     brand: str = "labely"
     slots: list[int] | None = None
     run_batch: bool = True
+    # Labely runs: farm slots also selected on the ValCoin brand batch picker.
+    valcoin_slots: list[int] | None = None
+
+
+class SlideshowAutomationFailedBody(BaseModel):
+    error: str = "Automation failed"
 
 
 def slideshow_farm_secret(config: AppConfig) -> str:
@@ -93,81 +99,90 @@ def register_slideshow_routes(
         if not config.slideshow.enabled:
             raise HTTPException(503, "Slideshow integration is disabled")
 
-        app = get_app()
-        slot_label = normalize_slot(slot)
-        extensions = list(config.gallery.media_extensions)
-        should_clear = str(clear or "").strip().lower() in ("1", "true", "yes")
+        try:
+            app = get_app()
+            slot_label = normalize_slot(slot)
+            extensions = list(config.gallery.media_extensions)
+            should_clear = str(clear or "").strip().lower() in ("1", "true", "yes")
 
-        job_key = str(job_id or "").strip()
-        ingested = await app.slideshow_jobs.get(job_key) if job_key else None
-        job_brand = str(ingested.brand if ingested else "labely").strip().lower()
-        slot_files = (ingested.ingested.get(slot_label, []) if ingested else []) or []
-        if should_clear or (config.slideshow.clear_slot_before_ingest and not slot_files):
-            clear_slot_media(
+            job_key = str(job_id or "").strip()
+            ingested = await app.slideshow_jobs.get(job_key) if job_key else None
+            job_brand = str(ingested.brand if ingested else "labely").strip().lower()
+            slot_files = (ingested.ingested.get(slot_label, []) if ingested else []) or []
+            if should_clear or (config.slideshow.clear_slot_before_ingest and not slot_files):
+                clear_slot_media(
+                    config.gallery.base_directory,
+                    slot_label,
+                    extensions,
+                    brand=job_brand,
+                )
+
+            max_videos = max(1, int(ingested.videos_per_slot if ingested and ingested.videos_per_slot else config.slideshow.slideshows_per_slot))
+            expected_slides = 4 if job_brand == "labely" else max(1, int(config.slideshow.slides_per_slideshow))
+            on_disk = list_slot_media(
                 config.gallery.base_directory,
                 slot_label,
                 extensions,
                 brand=job_brand,
             )
+            if len(on_disk) >= max_videos:
+                raise HTTPException(
+                    409,
+                    f"Slot {slot_label} already has {max_videos} video(s) — extra upload skipped",
+                )
 
-        max_videos = max(1, int(ingested.videos_per_slot if ingested and ingested.videos_per_slot else config.slideshow.slideshows_per_slot))
-        expected_slides = 4 if job_brand == "labely" else max(1, int(config.slideshow.slides_per_slideshow))
-        on_disk = list_slot_media(
-            config.gallery.base_directory,
-            slot_label,
-            extensions,
-            brand=job_brand,
-        )
-        if len(on_disk) >= max_videos:
-            raise HTTPException(
-                409,
-                f"Slot {slot_label} already has {max_videos} video(s) — extra upload skipped",
-            )
+            data = await file.read()
+            if not data:
+                raise HTTPException(400, "Empty upload")
+            filename = str(file.filename or "slideshow.mp4").strip() or "slideshow.mp4"
+            try:
+                dest = save_bytes_to_slot(
+                    data,
+                    base_directory=config.gallery.base_directory,
+                    slot=slot_label,
+                    filename=filename,
+                    expected_slides=expected_slides,
+                    brand=job_brand,
+                )
+            except SlideshowVideoRejected as exc:
+                if job_key:
+                    await app.slideshow_jobs.record_reject(job_key, slot_label, str(exc))
+                reason_code = "blank_video"
+                lowered = str(exc).lower()
+                if "blank slide" in lowered:
+                    reason_code = "blank_slide"
+                raise HTTPException(
+                    422,
+                    {
+                        "success": False,
+                        "retry": bool(exc.retry),
+                        "reason": reason_code,
+                        "slot": slot_label,
+                        "message": str(exc),
+                    },
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
 
-        data = await file.read()
-        if not data:
-            raise HTTPException(400, "Empty upload")
-        filename = str(file.filename or "slideshow.mp4").strip() or "slideshow.mp4"
-        try:
-            dest = save_bytes_to_slot(
-                data,
-                base_directory=config.gallery.base_directory,
-                slot=slot_label,
-                filename=filename,
-                expected_slides=expected_slides,
-                brand=job_brand,
-            )
-        except SlideshowVideoRejected as exc:
             if job_key:
-                await app.slideshow_jobs.record_reject(job_key, slot_label, str(exc))
-            reason_code = "blank_video"
-            lowered = str(exc).lower()
-            if "blank slide" in lowered:
-                reason_code = "blank_slide"
-            raise HTTPException(
-                422,
-                {
-                    "success": False,
-                    "retry": bool(exc.retry),
-                    "reason": reason_code,
-                    "slot": slot_label,
-                    "message": str(exc),
-                },
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
+                await app.slideshow_jobs.record_ingest(job_key, slot_label, dest.name)
 
-        job_key = str(job_id or "").strip()
-        if job_key:
-            await app.slideshow_jobs.record_ingest(job_key, slot_label, dest.name)
-
-        return {
-            "success": True,
-            "slot": slot_label,
-            "path": str(dest),
-            "filename": dest.name,
-            "bytes": len(data),
-        }
+            return {
+                "success": True,
+                "slot": slot_label,
+                "path": str(dest),
+                "filename": dest.name,
+                "bytes": len(data),
+            }
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "slideshow_ingest_failed",
+                slot=str(slot),
+                job_id=str(job_id or ""),
+            )
+            raise HTTPException(500, f"Ingest failed: {exc}") from exc
 
     @router.post("/api/slideshow/jobs/{job_id}/automation-done")
     async def slideshow_automation_done(job_id: str, request: Request) -> dict[str, Any]:
@@ -179,6 +194,18 @@ def register_slideshow_routes(
             raise HTTPException(400, str(exc)) from exc
         return {"success": True, "job": job}
 
+    @router.post("/api/slideshow/jobs/{job_id}/automation-failed")
+    async def slideshow_automation_failed(
+        job_id: str,
+        request: Request,
+        body: SlideshowAutomationFailedBody | None = None,
+    ) -> dict[str, Any]:
+        check_slideshow_secret(request, config)
+        app = get_app()
+        message = str((body.error if body else None) or "Automation failed").strip()
+        job = await app.slideshow_orchestrator.on_automation_failed(job_id, message)
+        return {"success": True, "job": job}
+
     @router.post("/api/slideshow/generate-and-run")
     async def slideshow_generate_and_run(
         body: SlideshowGenerateBody | None = None,
@@ -188,10 +215,16 @@ def register_slideshow_routes(
         slots = body.slots if body else None
         run_batch = body.run_batch if body else True
         try:
+            valcoin_slots = (
+                [str(s) for s in body.valcoin_slots]
+                if body and body.valcoin_slots is not None
+                else None
+            )
             result = await app.slideshow_orchestrator.start_job(
                 brand=brand,
                 slots=[str(s) for s in slots] if slots else None,
                 run_batch=bool(run_batch),
+                valcoin_slots=valcoin_slots,
             )
         except RuntimeError as exc:
             raise HTTPException(400, str(exc)) from exc

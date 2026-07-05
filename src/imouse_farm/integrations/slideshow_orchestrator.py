@@ -7,6 +7,7 @@ import contextlib
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -97,6 +98,8 @@ class SlideshowOrchestrator:
             params["slidesPerSlideshow"] = str(vps)
         else:
             params["slideshowsPerSlot"] = str(vps)
+        # Cache-bust so each per-phone encode loads a fresh document (releases WebCodecs/GPU).
+        params["_"] = str(int(time.time() * 1000))
         base = str(self._config.app_base_url or "").rstrip("/")
         return f"{base}/automation?{urlencode(params)}"
 
@@ -143,6 +146,7 @@ class SlideshowOrchestrator:
         slots: list[str] | None = None,
         run_batch: bool = True,
         videos_per_slot: int | None = None,
+        valcoin_slots: list[str] | None = None,
     ) -> dict[str, Any]:
         if not self._config.enabled:
             raise RuntimeError("Slideshow integration is disabled in config.yaml")
@@ -165,6 +169,7 @@ class SlideshowOrchestrator:
             slots=slot_list,
             run_batch=run_batch,
             videos_per_slot=int(videos_per_slot or 0),
+            valcoin_slots=valcoin_slots,
         )
 
         if run_batch:
@@ -227,6 +232,35 @@ class SlideshowOrchestrator:
             parent = await self._jobs.get(parent_id)
             if parent and str(parent.status).lower() == "running":
                 self._ensure_job_task(parent_id)
+        return updated
+
+    async def on_automation_failed(self, job_id: str, error: str) -> dict[str, Any]:
+        """Called when browser encode/upload fails so the per-slot pipeline can continue."""
+        job = await self._jobs.get(job_id)
+        if not job:
+            raise RuntimeError(f"Unknown job {job_id}")
+
+        status = str(job.status).lower()
+        if status in ("completed", "failed"):
+            return job.to_dict()
+
+        message = str(error or "Automation failed").strip()[:500]
+        await self._jobs.update(
+            job_id,
+            status="failed",
+            phase="automation",
+            error=message,
+            message=message,
+            automation_url="",
+        )
+        updated = (await self._jobs.get(job_id)).to_dict()
+        parent_id = str(updated.get("parent_job_id") or "").strip()
+        if parent_id:
+            await self._jobs.update(
+                parent_id,
+                automation_url="",
+                message=f"Phone encode failed — {message}",
+            )
         return updated
 
     async def cancel_running_jobs(self) -> None:
@@ -310,6 +344,21 @@ class SlideshowOrchestrator:
             return bool(profile.get("warmup_enabled", False))
         except Exception:  # noqa: BLE001
             return False
+
+    def _valcoin_post_slots(self, job: Any) -> frozenset[str]:
+        """Slots ticked on the ValCoin brand batch picker (full post after Labely)."""
+        if str(job.brand).lower() != "labely":
+            return frozenset()
+        if not self._app_config.batch.chain_valcoin_after_labely:
+            return frozenset()
+        return frozenset(
+            str(s).strip()
+            for s in (getattr(job, "valcoin_slots", None) or [])
+            if str(s).strip()
+        )
+
+    def _slot_chains_valcoin_post(self, job: Any, slot: str) -> bool:
+        return str(slot).strip() in self._valcoin_post_slots(job)
 
     def _slot_has_valid_videos(self, slot: str, brand: str, *, job: Any | None = None) -> bool:
         """True when gallery already holds enough valid MP4s for this slot."""
@@ -681,6 +730,7 @@ class SlideshowOrchestrator:
             job.brand == "labely"
             and self._app_config.batch.chain_valcoin_after_labely
         )
+        valcoin_post_slots = self._valcoin_post_slots(job)
         completed = 0
         total = len(selected)
 
@@ -712,10 +762,13 @@ class SlideshowOrchestrator:
 
                 ok = await self._execute_slideshow_generation(sub_job.id, parent_job_id=job_id)
 
-                # Clear the iframe so the WebCodecs encoder is fully released before the
-                # next slot loads. Give the browser ~4 s to GC the previous encoding session.
-                await self._jobs.update(job_id, automation_url="")
-                await asyncio.sleep(4.0)
+                # Tear down the embed so WebCodecs / GPU memory is released before the next phone.
+                await self._jobs.update(
+                    job_id,
+                    automation_url="",
+                    message=f"Phone {idx}/{total}: encode done for {slot}, preparing next phone…",
+                )
+                await asyncio.sleep(3.0)
 
             if not ok:
                 logger.warning("per_slot_video_failed", slot=slot)
@@ -724,7 +777,9 @@ class SlideshowOrchestrator:
 
             # Step 2 — captions need gallery MP4s from step 1.
             run_valcoin_encode = (
-                chain_valcoin and not self._is_warmup_slot(slot, "valcoin")
+                chain_valcoin
+                and self._slot_chains_valcoin_post(job, slot)
+                and not self._is_warmup_slot(slot, "valcoin")
             )
             valcoin_encode_task: asyncio.Task[None] | None = None
             if run_valcoin_encode:
@@ -772,7 +827,11 @@ class SlideshowOrchestrator:
                 phase="batch",
                 message=f"Phone {idx}/{total}: posting for {slot}…",
             )
-            started = await self._farm_batch.start([device], brand=job.brand)
+            started = await self._farm_batch.start(
+                [device],
+                brand=job.brand,
+                valcoin_slots=valcoin_post_slots,
+            )
             if started:
                 if not await self._farm_batch.wait_done():
                     await self._jobs.update(

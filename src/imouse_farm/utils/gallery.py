@@ -4,8 +4,37 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 from imouse_farm.post.brand_keys import normalize_brand
+
+
+def slots_with_media(
+    base_directory: str,
+    extensions: list[str],
+    *,
+    brand: str = "labely",
+) -> list[dict[str, Any]]:
+    """Return slot folders that contain at least one media file for ``brand``."""
+    base = Path(base_directory).resolve()
+    if not base.is_dir():
+        return []
+    brand_key = normalize_brand(brand)
+    found: list[dict[str, Any]] = []
+    for child in sorted(base.iterdir(), key=lambda p: natural_sort_key(p.name)):
+        if not child.is_dir():
+            continue
+        folder = phone_gallery_folder(str(base), child.name, brand=brand_key)
+        files = list_media_files(folder, extensions)
+        if files:
+            found.append(
+                {
+                    "slot": child.name,
+                    "folder": str(folder),
+                    "file_count": len(files),
+                }
+            )
+    return found
 
 
 def phone_gallery_folder(

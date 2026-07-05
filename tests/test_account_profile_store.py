@@ -109,6 +109,7 @@ def test_reset_last_run_state_clears_sticker_fields() -> None:
 def test_reset_all_session_states_clears_prep_and_last_run() -> None:
     store.mark_run_failed("slot:2", message="boom", brand="valcoin")
     store.mark_prep_completed("slot:2", brand="valcoin")
+    store.set_cant_cast_imouse("slot:2")
 
     cleared = store.reset_all_session_states(farm_slots=3)
 
@@ -117,3 +118,4 @@ def test_reset_all_session_states_clears_prep_and_last_run() -> None:
     assert profile["last_run_status"] == "idle"
     assert profile["last_run_at"] is None
     assert profile["prep_completed_at"] is None
+    assert store.is_cant_cast_imouse("slot:2") is False

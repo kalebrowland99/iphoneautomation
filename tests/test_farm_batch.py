@@ -100,6 +100,46 @@ async def test_pipeline_stopped_does_not_disconnect_airplay() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pipeline_paused_unblocks_batch_and_stops_pipeline() -> None:
+    dm = MagicMock()
+    dm.disconnect_airplay = AsyncMock(return_value=True)
+    dm.get_device = MagicMock(
+        return_value=SimpleNamespace(device_id="phone-1", user_name="1")
+    )
+    pipeline = MagicMock()
+    pipeline.stop = AsyncMock(return_value=True)
+    db = MagicMock()
+    db.log_activity = AsyncMock()
+    runner = FarmBatchRunner(
+        BatchConfig(disconnect_on_complete=True),
+        _APP,
+        dm,
+        pipeline,
+        db,
+        auto_generate_captions=False,
+    )
+    done = asyncio.Event()
+    runner._batch_done_events = {"phone-1": done}
+    runner._status = {"completed": [], "failed": []}
+
+    await runner._on_pipeline_event("pipeline_paused", {"device_id": "phone-1"})
+
+    assert done.is_set()
+    assert runner._batch_done_events == {}
+    assert runner._status["failed"] == [
+        {
+            "slot": "1",
+            "device_id": "phone-1",
+            "event": "pipeline_paused",
+            "reason": "paused",
+        }
+    ]
+    dm.disconnect_airplay.assert_not_awaited()
+    pipeline.stop.assert_awaited_once_with("phone-1")
+    db.log_activity.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_pipeline_completed_disconnects_when_configured() -> None:
     dm = MagicMock()
     dm.disconnect_airplay = AsyncMock(return_value=True)

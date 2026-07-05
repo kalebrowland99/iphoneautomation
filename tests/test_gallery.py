@@ -6,7 +6,21 @@ from imouse_farm.utils.gallery import (
     list_media_files,
     list_media_stems_for_posts,
     phone_gallery_folder,
+    slots_with_media,
 )
+
+
+def test_slots_with_media(tmp_path: Path) -> None:
+    base = tmp_path / "gallery"
+    slot6 = base / "6" / "labely"
+    slot6.mkdir(parents=True)
+    slot99 = base / "99" / "labely"
+    slot99.mkdir(parents=True)
+    (slot99 / "output.mp4").write_bytes(b"x")
+    found = slots_with_media(str(base), [".mp4"], brand="labely")
+    assert len(found) == 1
+    assert found[0]["slot"] == "99"
+    assert found[0]["file_count"] == 1
 
 
 def test_phone_gallery_folder_default_brand_target(tmp_path: Path) -> None:
