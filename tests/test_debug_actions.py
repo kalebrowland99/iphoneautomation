@@ -124,10 +124,9 @@ def test_debug_tests_have_required_fields() -> None:
 def test_list_account_switch_debug_tests() -> None:
     tests = list_debug_tests("account_switch")
     ids = [t["id"] for t in tests]
-    assert ids[:6] == [
+    assert ids[:5] == [
         "account-tap-profile-tab",
-        "account-switcher-tap-primary",
-        "account-switcher-tap-alt",
+        "account-switcher-vision-tap",
         "account-switcher-verify-handle",
         "account-pick-handle",
         "account-tap-home-tab",
@@ -137,8 +136,9 @@ def test_list_account_switch_debug_tests() -> None:
         "account-ensure-current",
         "account-ensure-full",
     ]
-    assert "account-switcher-tap-primary" in ids
-    assert "account-switcher-tap-alt" in ids
+    assert "account-switcher-vision-tap" in ids
+    assert "account-switcher-tap-primary" not in ids
+    assert "account-switcher-tap-alt" not in ids
     assert "account-switcher-verify-handle" in ids
     assert "account-dismiss-security-checkup" in ids
     assert "account-dismiss-add-phone" in ids

@@ -85,6 +85,7 @@ class FarmBatchRunner:
         self._active_batch_index = 0
         self._imouse_failure_count = 0
         self._first_imouse_failure_batch_index: int | None = None
+        self._last_imouse_failure_batch_index: int | None = None
         self._kernel_recovery_count = 0
         self._pending_kernel_recovery_batch_index: int | None = None
 
@@ -226,6 +227,7 @@ class FarmBatchRunner:
         self._active_batch_index = 0
         self._imouse_failure_count = 0
         self._first_imouse_failure_batch_index = None
+        self._last_imouse_failure_batch_index = None
         self._kernel_recovery_count = 0
         self._pending_kernel_recovery_batch_index = None
         selected_ids = {d.device_id for batch in batches for d in batch}
@@ -401,6 +403,7 @@ class FarmBatchRunner:
                             "device_id": device.device_id,
                             "event": "warmup_only",
                         })
+                        self._clear_imouse_failure_streak()
                         await self._finish_device_session(device.device_id)
                         continue
 
@@ -620,11 +623,19 @@ class FarmBatchRunner:
         return False
 
     def _note_imouse_failure(self, batch_index: int, reason: str) -> None:
+        """Count only consecutive phone failures toward kernel recovery."""
         if not is_imouse_failure(reason):
             return
-        if self._first_imouse_failure_batch_index is None:
+        last = self._last_imouse_failure_batch_index
+        if last is not None and batch_index == last:
+            # Same phone already counted for this streak (e.g. cast then pipeline).
+            return
+        if last is not None and batch_index == last + 1:
+            self._imouse_failure_count += 1
+        else:
+            self._imouse_failure_count = 1
             self._first_imouse_failure_batch_index = batch_index
-        self._imouse_failure_count += 1
+        self._last_imouse_failure_batch_index = batch_index
         cfg = self._config.kernel_recovery
         if (
             cfg.enabled
@@ -632,6 +643,13 @@ class FarmBatchRunner:
             and self._kernel_recovery_count < cfg.max_recovery_attempts
         ):
             self._pending_kernel_recovery_batch_index = self._first_imouse_failure_batch_index
+
+    def _clear_imouse_failure_streak(self) -> None:
+        """A successful phone breaks the consecutive-failure streak."""
+        self._imouse_failure_count = 0
+        self._first_imouse_failure_batch_index = None
+        self._last_imouse_failure_batch_index = None
+        self._pending_kernel_recovery_batch_index = None
 
     def _prune_failed_for_retry(self, retry_slots: set[str]) -> None:
         if not retry_slots:
@@ -666,6 +684,7 @@ class FarmBatchRunner:
         self._pending_kernel_recovery_batch_index = None
         self._imouse_failure_count = 0
         self._first_imouse_failure_batch_index = None
+        self._last_imouse_failure_batch_index = None
 
         retry_batches = batches[resume_index - 1 :]
         retry_slots = {str(d.user_name) for batch in retry_batches for d in batch}
@@ -682,8 +701,9 @@ class FarmBatchRunner:
             "warn",
             "batch",
             (
-                f"iMouseXP failed on {cfg.failure_threshold}+ phone(s) — restarting kernel, "
-                f"recasting, and resuming from phone {resume_index}/{phone_total}"
+                f"iMouseXP failed on {cfg.failure_threshold}+ consecutive phone(s) — "
+                f"restarting kernel and resuming from phone {resume_index}/{phone_total} "
+                f"(one cast at a time)"
             ),
         )
         self._status["status"] = "connecting"
@@ -704,11 +724,9 @@ class FarmBatchRunner:
         await asyncio.sleep(float(cfg.kernel_restart_wait_seconds))
         await self._dm.controller.reconnect()
         await self._dm.refresh_devices()
-
-        for batch in retry_batches:
-            for device in batch:
-                await self._dm.reconnect_airplay(device.device_id)
-                await asyncio.sleep(self._connect_delay)
+        # Do not cast all remaining phones here — the batch loop reconnects
+        # AirPlay one phone at a time via _ensure_cast when that slot runs.
+        await self._disconnect_unselected_casts(selected_ids)
 
         self._labely_pipeline_ok.intersection_update(
             {d.device_id for batch in batches[: resume_index - 1] for d in batch}
@@ -792,6 +810,7 @@ class FarmBatchRunner:
         entry = {"slot": slot, "device_id": device_id, "event": event}
         if event == "pipeline_completed":
             self._status["completed"].append(entry)
+            self._clear_imouse_failure_streak()
             if self._current_brand == "labely":
                 self._labely_pipeline_ok.add(str(device_id))
         else:

@@ -417,11 +417,47 @@ class DeviceManager:
         )
         await asyncio.sleep(boot_wait)
 
+        # After reboot, re-sync iMouse hardware then mouse before AirPlay connect.
+        # USB restart + mouse reset often unsticks cast-after-reboot failures.
+        await self._db.log_activity(
+            "info",
+            "device",
+            "Resetting iMouse USB hardware before recast",
+            device_id,
+        )
+        if not await self._controller.restart_usb(device_id):
+            await self._db.log_activity(
+                "warn",
+                "device",
+                "USB hardware restart failed — continuing with mouse reset + cast",
+                device_id,
+            )
+        else:
+            await asyncio.sleep(5.0)
+
+        await self._db.log_activity(
+            "info",
+            "device",
+            "Resetting mouse before hardware AirPlay cast",
+            device_id,
+        )
+        await self._controller.reset_cursor(device_id)
+        await asyncio.sleep(0.25)
+        await self._controller.reset_cursor(device_id)
+        await asyncio.sleep(0.5)
+
         for attempt in range(1, attempts + 1):
             await self.refresh_devices()
+            await self._db.log_activity(
+                "info",
+                "device",
+                f"Hardware AirPlay cast after phone reset (attempt {attempt}/{attempts})",
+                device_id,
+            )
             if await self.reconnect_airplay(device_id):
                 device = self._devices.get(device_id)
                 if device and device.is_online:
+                    await self._controller.reset_cursor(device_id)
                     await self._db.log_activity(
                         "info",
                         "device",
@@ -429,7 +465,14 @@ class DeviceManager:
                         device_id,
                     )
                     return
+            await self._db.log_activity(
+                "warn",
+                "device",
+                f"Cast reconnect after phone reset failed (attempt {attempt}/{attempts})",
+                device_id,
+            )
             if attempt < attempts:
+                await self._controller.reset_cursor(device_id)
                 await asyncio.sleep(retry_s)
 
         raise RuntimeError(

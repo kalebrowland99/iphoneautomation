@@ -22,11 +22,20 @@ _IMOUSE_FAILURE_SUBSTRINGS = (
     "kernel",
 )
 
+# VPN URL shortcuts time out on a stuck phone — recover with phone reset, not kernel restart.
+_VPN_SHORTCUT_MARKERS = (
+    "shortcut_exec_url",
+    "shadowrocket://",
+    "vpn shortcut",
+)
+
 
 def is_imouse_failure(reason: str) -> bool:
     """Return True when a batch failure likely stems from iMouseXP, not content/config."""
     text = str(reason or "").strip().lower()
     if not text:
+        return False
+    if any(token in text for token in _VPN_SHORTCUT_MARKERS):
         return False
     if text in _IMOUSE_FAILURE_EXACT:
         return True

@@ -10,6 +10,7 @@ from imouse_farm.config.models import TabCoord, TikTokNavigationConfig
 from imouse_farm.post.account_profile_store import opposite_brand
 from imouse_farm.workflows.account_switch import (
     _open_account_switcher,
+    _parse_account_switcher_opener_coords,
     _screen_shows_handle,
     ensure_tiktok_account,
 )
@@ -116,7 +117,9 @@ async def test_already_on_account_taps_home_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_current_runs_full_switch_only_after_scan_miss() -> None:
+async def test_ensure_current_runs_full_switch_only_after_scan_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     controller = MagicMock()
     controller.tap = AsyncMock(return_value=True)
     plus_checks = {"n": 0}
@@ -137,22 +140,36 @@ async def test_ensure_current_runs_full_switch_only_after_scan_miss() -> None:
     controller.find_text_on_device = find_text
     controller.ocr_on_device = AsyncMock(return_value="")
 
+    async def fake_open(*_args, **_kwargs) -> bool:
+        await controller.tap("dev-1", 310, 240)
+        return True
+
+    monkeypatch.setattr(
+        "imouse_farm.workflows.account_switch._open_account_switcher",
+        fake_open,
+    )
+
     nav = _navigation()
+    cfg = MagicMock()
+    cfg.openai.enabled = True
     result = await ensure_tiktok_account(
         controller=controller,
         device_id="dev-1",
         tiktok_handle="@myuser",
         navigation=nav,
         brand="labely",
+        app_config=cfg,
     )
 
     assert result is True
     controller.tap.assert_any_await("dev-1", nav.profile_tab_x, nav.profile_tab_y)
-    controller.tap.assert_any_await("dev-1", nav.account_switcher_opener_x, nav.account_switcher_opener_y)
+    controller.tap.assert_any_await("dev-1", 310, 240)
 
 
 @pytest.mark.asyncio
-async def test_clear_popups_runs_on_home_profile_and_switcher() -> None:
+async def test_clear_popups_runs_on_home_profile_and_switcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     controller = MagicMock()
     controller.tap = AsyncMock(return_value=True)
     plus_checks = {"n": 0}
@@ -179,6 +196,10 @@ async def test_clear_popups_runs_on_home_profile_and_switcher() -> None:
 
     controller.find_text_on_device = find_text
     controller.ocr_on_device = AsyncMock(return_value="")
+    monkeypatch.setattr(
+        "imouse_farm.workflows.account_switch._open_account_switcher",
+        AsyncMock(return_value=True),
+    )
 
     result = await ensure_tiktok_account(
         controller=controller,
@@ -187,6 +208,7 @@ async def test_clear_popups_runs_on_home_profile_and_switcher() -> None:
         navigation=_navigation(),
         brand="labely",
         clear_popups=clear_popups,
+        app_config=MagicMock(openai=MagicMock(enabled=True)),
     )
 
     assert result is True
@@ -327,14 +349,21 @@ async def test_switches_to_dashboard_handle_when_on_other_account(
         "imouse_farm.workflows.account_switch.get_profile_for_device",
         fake_get_profile,
     )
+    monkeypatch.setattr(
+        "imouse_farm.workflows.account_switch._vision_locate_account_switcher_opener",
+        AsyncMock(return_value=(293, 249, "display name")),
+    )
 
     nav = _navigation()
+    cfg = MagicMock()
+    cfg.openai.enabled = True
     result = await ensure_tiktok_account(
         controller=controller,
         device_id="dev-1",
         tiktok_handle="@myuser",
         navigation=nav,
         brand="labely",
+        app_config=cfg,
     )
     assert result is True
     controller.tap.assert_any_await("dev-1", 293, 249)
@@ -384,8 +413,14 @@ async def test_full_switch_toggles_to_opposite_when_on_dashboard_account(
         "imouse_farm.workflows.account_switch.get_profile_for_device",
         fake_get_profile,
     )
+    monkeypatch.setattr(
+        "imouse_farm.workflows.account_switch._vision_locate_account_switcher_opener",
+        AsyncMock(return_value=(293, 249, "display name")),
+    )
 
     nav = _navigation()
+    cfg = MagicMock()
+    cfg.openai.enabled = True
     result = await ensure_tiktok_account(
         controller=controller,
         device_id="dev-1",
@@ -393,6 +428,7 @@ async def test_full_switch_toggles_to_opposite_when_on_dashboard_account(
         navigation=nav,
         brand="labely",
         toggle_to_opposite=True,
+        app_config=cfg,
     )
     assert result is True
     controller.tap.assert_any_await("dev-1", 293, 249)
@@ -414,71 +450,66 @@ async def test_screen_shows_handle_ignores_bare_name_in_bio() -> None:
     assert shown is False
 
 
+def test_parse_account_switcher_opener_coords_variants() -> None:
+    assert _parse_account_switcher_opener_coords("X: 312\nY: 238")[:2] == (312, 238)
+    assert _parse_account_switcher_opener_coords("x: 101\ny: 147")[:2] == (101, 147)
+    assert _parse_account_switcher_opener_coords("X: 90 Y: 120")[:2] == (90, 120)
+    assert _parse_account_switcher_opener_coords(
+        '{"x": 293, "y": 249}'
+    )[:2] == (293, 249)
+
+
 @pytest.mark.asyncio
-async def test_slot_16_uses_alternate_switcher_opener_only(
+async def test_vision_opener_taps_display_name_coordinates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from imouse_farm.config.models import AppConfig, TikTokDeviceUiConfig, TikTokDeviceUiSlotConfig, TabCoord
+    from imouse_farm.config.models import AppConfig
 
-    cfg = AppConfig(
-        tiktok_device_ui=TikTokDeviceUiConfig(
-            slots={
-                "16": TikTokDeviceUiSlotConfig(
-                    ui_label="Different UI",
-                    account_switcher_opener=TabCoord(x=101, y=147),
-                    use_alternate_account_switcher=True,
-                )
-            }
-        )
-    )
     controller = MagicMock()
     controller.tap = AsyncMock(return_value=True)
-
-    async def find_text(*_args, **_kwargs):
-        return [{"x": 120, "y": 180, "confidence": 0.9}]
-
-    controller.find_text_on_device = find_text
     controller.ocr_on_device = AsyncMock(return_value="")
+    controller.find_text_on_device = AsyncMock(
+        return_value=[{"x": 120, "y": 400, "confidence": 0.9}]
+    )
 
-    nav = _navigation()
+    monkeypatch.setattr(
+        "imouse_farm.workflows.account_switch._vision_locate_account_switcher_opener",
+        AsyncMock(return_value=(312, 238, "display name above @handle")),
+    )
+
+    cfg = AppConfig()
+    cfg.openai.enabled = True
     opened = await _open_account_switcher(
         controller,
         "dev-1",
-        nav,
+        _navigation(),
         ["@otheruser"],
         app_config=cfg,
-        device_user_name="16",
     )
 
     assert opened is True
-    controller.tap.assert_awaited_once_with("dev-1", 101, 147)
+    controller.tap.assert_awaited_once_with("dev-1", 312, 238)
 
 
 @pytest.mark.asyncio
-async def test_opener_tries_primary_coordinate_when_alt_misses(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_vision_opener_fails_when_openai_disabled() -> None:
+    from imouse_farm.config.models import AppConfig
+
     controller = MagicMock()
     controller.tap = AsyncMock(return_value=True)
-    checks = {"n": 0}
+    cfg = AppConfig()
+    cfg.openai.enabled = False
 
-    async def fake_switcher_shows(*_args, **_kwargs) -> bool:
-        checks["n"] += 1
-        return checks["n"] >= 2
-
-    monkeypatch.setattr(
-        "imouse_farm.workflows.account_switch._switcher_shows_account",
-        fake_switcher_shows,
-    )
-
-    nav = _navigation()
     opened = await _open_account_switcher(
-        controller, "dev-1", nav, ["@valcoinuser", "valcoinuser"]
+        controller,
+        "dev-1",
+        _navigation(),
+        ["@otheruser"],
+        app_config=cfg,
     )
 
-    assert opened is True
-    assert controller.tap.await_args_list[0].args[1:] == (293, 249)
-    assert controller.tap.await_args_list[1].args[1:] == (301, 288)
+    assert opened is False
+    controller.tap.assert_not_awaited()
 
 
 def test_opposite_brand() -> None:
@@ -507,6 +538,10 @@ async def test_no_vision_when_wrong_account_on_profile(
         "imouse_farm.workflows.account_switch._vision_dismiss_profile_error",
         vision,
     )
+    monkeypatch.setattr(
+        "imouse_farm.workflows.account_switch._vision_locate_account_switcher_opener",
+        AsyncMock(return_value=(293, 249, "display name")),
+    )
 
     async def find_text(_device_id, queries, **kwargs):
         if kwargs.get("rect") is not None:
@@ -516,13 +551,15 @@ async def test_no_vision_when_wrong_account_on_profile(
     controller.find_text_on_device = find_text
     controller.ocr_on_device = AsyncMock(return_value="")
 
+    cfg = MagicMock()
+    cfg.openai.enabled = True
     result = await ensure_tiktok_account(
         controller=controller,
         device_id="dev-1",
         tiktok_handle="@myuser",
         navigation=_navigation(),
         brand="labely",
-        app_config=MagicMock(),
+        app_config=cfg,
     )
 
     assert result is True

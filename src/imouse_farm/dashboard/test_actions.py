@@ -152,8 +152,7 @@ _END_DEBUG_LIST_PRIORITY = (
 _ACCOUNT_SWITCH_DEBUG_LIST_PRIORITY = (
     # Step-by-step switch (A→Z from step 1)
     "account-tap-profile-tab",
-    "account-switcher-tap-primary",
-    "account-switcher-tap-alt",
+    "account-switcher-vision-tap",
     "account-switcher-verify-handle",
     "account-pick-handle",
     "account-tap-home-tab",
@@ -851,30 +850,25 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "account-open-switcher": {
-        "label": "Account: Open switcher (production — primary → alt)",
+        "label": "Account: Open switcher (profile → GPT-4o name tap)",
         "kind": "account_switch_step",
         "group": "account_switch",
         "step": "open_switcher",
         "hint": (
-            "Taps profile tab, then primary (293,249) and alt (301,288) openers. "
-            "Phone 16 uses alternate UI (101,147) only."
+            "Taps profile tab, then uses GPT-4o vision to tap the display name "
+            "above the @handle (opens the account list)."
         ),
         "offline_hint": OFFLINE_HINT,
     },
-    "account-switcher-tap-primary": {
-        "label": "Account: Switcher opener — primary tap (293, 249)",
+    "account-switcher-vision-tap": {
+        "label": "Account: Switcher opener — GPT-4o vision tap",
         "kind": "account_switch_step",
         "group": "account_switch",
-        "step": "tap_opener_primary",
-        "hint": "Profile tab must be open. First opener in production — taps (293, 249); reports if @ list visible.",
-        "offline_hint": OFFLINE_HINT,
-    },
-    "account-switcher-tap-alt": {
-        "label": "Account: Switcher opener — alt tap (301, 288)",
-        "kind": "account_switch_step",
-        "group": "account_switch",
-        "step": "tap_opener_alt",
-        "hint": "Profile tab must be open. Second opener if primary missed — taps (301, 288); reports if @ list visible.",
+        "step": "tap_opener_vision",
+        "hint": (
+            "Profile tab must be open (switcher closed). GPT-4o finds the display name "
+            "ABOVE the @handle and taps it to reveal accounts."
+        ),
         "offline_hint": OFFLINE_HINT,
     },
     "account-switcher-verify-handle": {
@@ -2610,14 +2604,11 @@ async def account_switch_step_debug(
         handle_match_queries,
         opposite_brand,
     )
-    from imouse_farm.workflows.tiktok_device_ui import (
-        alternate_account_switcher_opener,
-        uses_alternate_account_switcher_ui,
-    )
     from imouse_farm.workflows.account_switch import (
         _switcher_shows_account,
         _tap_account_switcher_opener,
         _tap_handle_in_list,
+        _vision_locate_account_switcher_opener,
         ensure_tiktok_account,
     )
 
@@ -2667,48 +2658,46 @@ async def account_switch_step_debug(
         )
         return {"success": True, "message": message}
 
-    if step == "tap_opener_primary":
-        if uses_alternate_account_switcher_ui(app.config, device.user_name):
-            opener = alternate_account_switcher_opener(app.config, device.user_name)
-            x, y = int(opener.x), int(opener.y) if opener else (0, 0)
-            label = f"alternate UI opener ({x}, {y})"
-        else:
-            x, y = nav.account_switcher_opener_x, nav.account_switcher_opener_y
-            label = f"primary opener ({x}, {y})"
-        ok = await _tap_nav_xy(x, y, step_suffix="opener_primary")
-        await asyncio.sleep(1.0)
-        await app.screenshot_service.capture(device_id)
-        if not ok:
-            return {"success": False, "message": f"Failed to tap {label}"}
-        message, visible = await _switcher_visibility_message(f"Tapped {label}")
-        await app.db.log_activity(
-            "info", "test", message, device_id, {"test_id": test_id, "visible": visible}
-        )
-        return {"success": True, "message": message, "switcher_visible": visible}
+    if step == "tap_opener_vision":
+        try:
+            x, y, reason = await _vision_locate_account_switcher_opener(
+                ctrl,
+                device_id,
+                app_config=app.config,
+            )
+        except Exception as exc:
+            msg = f"GPT-4o vision opener failed: {type(exc).__name__}: {exc}"
+            await app.db.log_activity(
+                "warn", "test", msg, device_id, {"test_id": test_id}
+            )
+            return {"success": False, "message": msg}
 
-    if step == "tap_opener_alt":
-        if uses_alternate_account_switcher_ui(app.config, device.user_name):
-            return {
-                "success": True,
-                "message": (
-                    f"Phone {device.user_name} uses alternate UI — "
-                    "alt opener (301/293) not used; run primary step instead"
-                ),
-                "skipped": True,
-            }
-        x, y = nav.account_switcher_opener_alt_x, nav.account_switcher_opener_alt_y
-        ok = await _tap_nav_xy(x, y, step_suffix="opener_alt")
+        ok = await _tap_nav_xy(x, y, step_suffix="opener_vision")
         await asyncio.sleep(1.0)
         await app.screenshot_service.capture(device_id)
         if not ok:
-            return {"success": False, "message": f"Failed to tap alt opener ({x}, {y})"}
+            return {
+                "success": False,
+                "message": f"Failed to tap vision opener ({x}, {y}) — {reason}",
+            }
         message, visible = await _switcher_visibility_message(
-            f"Tapped alt opener ({x}, {y})"
+            f"Vision tapped display name at ({x}, {y}) — {reason}"
         )
         await app.db.log_activity(
-            "info", "test", message, device_id, {"test_id": test_id, "visible": visible}
+            "info",
+            "test",
+            message,
+            device_id,
+            {"test_id": test_id, "x": x, "y": y, "visible": visible},
         )
-        return {"success": True, "message": message, "switcher_visible": visible}
+        return {
+            "success": True,
+            "message": message,
+            "x": x,
+            "y": y,
+            "reason": reason,
+            "switcher_visible": visible,
+        }
 
     if step == "verify_switcher":
         if not switch_queries:
@@ -2842,27 +2831,24 @@ async def account_switch_step_debug(
             switch_queries,
             app_config=app.config,
             device_user_name=device.user_name,
+            log_activity=app.db.log_activity,
         )
         await app.screenshot_service.capture(device_id)
         if not opened:
             return {
                 "success": False,
-                "message": (
-                    "Failed to open account switcher — tried primary "
-                    f"({nav.account_switcher_opener_x}, {nav.account_switcher_opener_y}) "
-                    f"then alt ({nav.account_switcher_opener_alt_x}, {nav.account_switcher_opener_alt_y})"
-                ),
+                "message": "Failed to open account switcher via GPT-4o vision name tap",
             }
         await app.db.log_activity(
             "info",
             "test",
-            "Opened account switcher (production sequence)",
+            "Opened account switcher (GPT-4o vision)",
             device_id,
             {"test_id": test_id},
         )
         return {
             "success": True,
-            "message": "Tapped profile then production switcher opener sequence",
+            "message": "Tapped profile then GPT-4o vision display-name opener",
         }
 
     if step == "pick_handle":

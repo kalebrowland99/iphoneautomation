@@ -197,6 +197,19 @@ class DeviceController:
         logger.info("action_device_restart", device_id=device_id)
         return await self._run_sync(_restart)
 
+    async def restart_usb(self, device_id: str) -> bool:
+        """Restart the iMouse USB hardware link for a device (device_usb_restart)."""
+
+        def _restart_usb() -> bool:
+            try:
+                return self._ok(self._api.device_usb_restart(self._ids(device_id)))
+            except Exception as exc:
+                logger.warning("device_usb_restart_failed", device_id=device_id, error=str(exc))
+                return False
+
+        logger.info("action_device_usb_restart", device_id=device_id)
+        return await self._run_sync(_restart_usb)
+
     async def restart_imouse_kernel(self) -> bool:
         """Restart the iMouseXP kernel service (config_imserver_restart)."""
 

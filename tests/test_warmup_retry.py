@@ -48,6 +48,124 @@ async def test_valcoin_warmup_retries_after_account_switch_failure(monkeypatch) 
 
 
 @pytest.mark.asyncio
+async def test_warmup_scroll_taps_home_every_few_swipes(monkeypatch) -> None:
+    cfg = load_config("config/config.yaml")
+    cfg.batch.warmup.duration_seconds = 30
+    cfg.batch.warmup.swipe_delay_min_seconds = 0
+    cfg.batch.warmup.swipe_delay_max_seconds = 0.01
+    cfg.batch.warmup.swipe_delay_mean_seconds = 0.01
+    cfg.batch.warmup.swipe_delay_long_watch_probability = 0
+    device = SimpleNamespace(
+        device_id="dev-1", user_name="5", screen_width=406, screen_height=720
+    )
+    controller = AsyncMock()
+    controller.tap = AsyncMock(return_value=True)
+    controller.ocr_on_device = AsyncMock(return_value="")
+
+    swipe_n = {"n": 0}
+
+    async def fake_swipe(*_args, **_kwargs):
+        swipe_n["n"] += 1
+        return {"sx": 200, "sy": 500, "ex": 200, "ey": 200}
+
+    monkeypatch.setattr(warmup_mod, "swipe_feed_up", fake_swipe)
+    monkeypatch.setattr(warmup_mod, "increment_warmup_days", lambda *_a, **_k: 1)
+    monkeypatch.setattr(warmup_mod.random, "randint", lambda a, b: 3)
+    monkeypatch.setattr(warmup_mod.random, "uniform", lambda a, b: 9999)
+    monkeypatch.setattr(warmup_mod.random, "random", lambda: 1.0)
+    monkeypatch.setattr(warmup_mod.random, "expovariate", lambda _x: 0.01)
+
+    await warmup_mod._run_warmup_scroll(
+        controller,
+        device,
+        brand="valcoin",
+        app_config=cfg,
+        log_activity=None,
+        duration_override=0.25,
+        stop_check=lambda: False,
+    )
+
+    home_x = cfg.tiktok_navigation.home_tab_x
+    home_y = cfg.tiktok_navigation.home_tab_y
+    home_taps = [
+        c for c in controller.tap.await_args_list if c.args[1:] == (home_x, home_y)
+    ]
+    assert swipe_n["n"] >= 3
+    assert len(home_taps) >= 1
+
+
+@pytest.mark.asyncio
+async def test_warmup_vpn_on_resets_phone_then_retries(monkeypatch) -> None:
+    cfg = load_config("config/config.yaml")
+    controller = AsyncMock()
+    device_manager = AsyncMock()
+    device_manager.reset_phone_and_recast = AsyncMock()
+    calls = {"n": 0}
+
+    async def fake_ensure(*_a, **_k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError(
+                "shortcut_exec_url failed for 'shadowrocket://connect' — 调用超时"
+            )
+
+    monkeypatch.setattr(warmup_mod, "ensure_vpn_on", fake_ensure)
+
+    await warmup_mod._ensure_vpn_on(
+        controller,
+        "dev-1",
+        cfg,
+        None,
+        device_manager=device_manager,
+    )
+
+    device_manager.reset_phone_and_recast.assert_awaited_once_with("dev-1")
+    assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_warmup_teardown_vpn_off_failure_does_not_raise(monkeypatch) -> None:
+    cfg = load_config("config/config.yaml")
+    controller = AsyncMock()
+
+    async def fail_off(*_a, **_k):
+        raise RuntimeError(
+            "shortcut_exec_url failed for 'shadowrocket://disconnect' — 调用超时"
+        )
+
+    monkeypatch.setattr(warmup_mod, "ensure_vpn_off", fail_off)
+    await warmup_mod._teardown_after_warmup(controller, "dev-1", cfg, None)
+
+
+@pytest.mark.asyncio
+async def test_open_tiktok_for_warmup_always_taps_icon_after_vpn(monkeypatch) -> None:
+    cfg = load_config("config/config.yaml")
+    controller = AsyncMock()
+    controller.press_home = AsyncMock(return_value=True)
+    controller.tap = AsyncMock(return_value=True)
+    # Real DeviceController has press_home, not home — guard against regressions.
+    del controller.home
+    device_manager = AsyncMock()
+
+    monkeypatch.setattr(warmup_mod, "_ensure_vpn_on", AsyncMock())
+    wait_plus = AsyncMock(return_value=0.9)
+    monkeypatch.setattr(warmup_mod, "wait_for_tiktok_plus_visible", wait_plus)
+
+    await warmup_mod._open_tiktok_for_warmup(
+        controller,
+        "dev-1",
+        app_config=cfg,
+        log_activity=None,
+        device_manager=device_manager,
+    )
+
+    warmup_mod._ensure_vpn_on.assert_awaited_once()
+    controller.press_home.assert_awaited_once_with("dev-1")
+    controller.tap.assert_awaited_once_with("dev-1", 507, 1011)
+    wait_plus.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_valcoin_warmup_raises_after_max_retries(monkeypatch) -> None:
     cfg = load_config("config/config.yaml")
     cfg.batch.warmup.max_retry_attempts = 2

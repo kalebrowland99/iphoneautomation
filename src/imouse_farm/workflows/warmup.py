@@ -102,6 +102,7 @@ async def run_tiktok_warmup(
                         device_id,
                         app_config=app_config,
                         log_activity=log_activity,
+                        device_manager=device_manager,
                     )
                 if not skip_setup:
                     await _ensure_account_for_warmup(
@@ -170,6 +171,13 @@ async def run_tiktok_warmup(
                 max_attempts=max_attempts,
                 error=str(exc),
             )
+            if log_activity:
+                await log_activity(
+                    "warn",
+                    "batch",
+                    f"Warmup attempt {attempt}/{max_attempts} failed: {exc}",
+                    device_id,
+                )
             if attempt >= max_attempts or _stopped():
                 raise
 
@@ -262,7 +270,13 @@ async def _reopen_tiktok_for_warmup_retry(
 
     # After Labely posts VPN is already on — do not cycle Shadowrocket or touch gallery.
     if not after_labely:
-        await _ensure_vpn_on(controller, device_id, app_config, log_activity)
+        await _ensure_vpn_on(
+            controller,
+            device_id,
+            app_config,
+            log_activity,
+            device_manager=device_manager,
+        )
 
     ok = await controller.tap(device_id, TIKTOK_HOME_ICON_X, TIKTOK_HOME_ICON_Y)
     if ok:
@@ -335,10 +349,16 @@ async def _run_warmup_scroll(
             device_id,
         )
 
+    nav = app_config.tiktok_navigation
+    home_x = int(nav.home_tab_x)
+    home_y = int(nav.home_tab_y)
+
     started = time.monotonic()
     deadline = started + duration
     double_tap_at = started + random.uniform(0.0, duration)
     double_tap_done = False
+    swipes_since_home = 0
+    home_every_swipes = random.randint(3, 4)
 
     logger.info(
         "warmup_started",
@@ -347,6 +367,7 @@ async def _run_warmup_scroll(
         brand=brand,
         duration_seconds=duration,
         double_tap_at_seconds=round(double_tap_at - started, 1),
+        home_every_swipes=home_every_swipes,
     )
 
     while time.monotonic() < deadline:
@@ -399,6 +420,7 @@ async def _run_warmup_scroll(
 
         swiped = await swipe_feed_up(controller, device_id, sw, sh)
         if swiped:
+            swipes_since_home += 1
             logger.info("warmup_swipe", device_id=device_id, **swiped)
             if log_activity:
                 elapsed_after = time.monotonic() - started
@@ -409,6 +431,27 @@ async def _run_warmup_scroll(
                     f"Warmup swiped to next video — {elapsed_after:.0f}s elapsed, {remaining_after:.0f}s left",
                     device_id,
                 )
+
+            if swipes_since_home >= home_every_swipes:
+                ok = await controller.tap(device_id, home_x, home_y)
+                logger.info(
+                    "warmup_home_tab",
+                    device_id=device_id,
+                    x=home_x,
+                    y=home_y,
+                    ok=ok,
+                    after_swipes=swipes_since_home,
+                )
+                if log_activity:
+                    await log_activity(
+                        "info",
+                        "batch",
+                        f"Warmup tapped home tab ({home_x}, {home_y}) after {swipes_since_home} swipes",
+                        device_id,
+                    )
+                swipes_since_home = 0
+                home_every_swipes = random.randint(3, 4)
+                await asyncio.sleep(1.0)
 
     day = increment_warmup_days(device_id, device.user_name, brand=brand)
     logger.info("warmup_completed", device_id=device_id, slot=device.user_name, warmup_day=day)
@@ -427,10 +470,28 @@ async def _teardown_after_warmup(
     app_config: AppConfig,
     log_activity: Any | None = None,
 ) -> None:
-    """Turn VPN off via URL shortcut after warmup scroll."""
-    await ensure_vpn_off(
-        controller, app_config, device_id, log_activity=log_activity
-    )
+    """Turn VPN off via URL shortcut after warmup scroll.
+
+    VPN-off failures are logged but do not fail the warmup — scroll already completed.
+    """
+    try:
+        await ensure_vpn_off(
+            controller, app_config, device_id, log_activity=log_activity
+        )
+    except Exception as exc:
+        logger.warning(
+            "warmup_vpn_off_failed",
+            device_id=device_id,
+            error=str(exc),
+        )
+        if log_activity:
+            await log_activity(
+                "warn",
+                "batch",
+                f"Warmup: VPN off failed after scroll ({exc}) — continuing",
+                device_id,
+            )
+        return
     if log_activity:
         await log_activity("info", "batch", "Warmup: VPN off (shortcut)", device_id)
     logger.info("warmup_teardown_done", device_id=device_id)
@@ -442,26 +503,22 @@ async def _open_tiktok_for_warmup(
     *,
     app_config: AppConfig,
     log_activity: Any | None = None,
+    device_manager: Any | None = None,
 ) -> None:
-    """Turn VPN on, go home, open TikTok — minimal prep for warmup."""
-    from imouse_farm.workflows.tiktok_plus_ready import (
-        _plus_template_path,
-        _plus_threshold,
+    """Turn VPN on, open TikTok from the home screen, then wait for the + button.
+
+    Always taps the TikTok icon after VPN — do not skip open based on a pre-VPN
+    + match (phone reset during VPN recovery lands on Springboard).
+    """
+    await _ensure_vpn_on(
+        controller,
+        device_id,
+        app_config,
+        log_activity,
+        device_manager=device_manager,
     )
 
-    templates_dir = app_config.analysis.templates_directory
-    plus_path = _plus_template_path(None, templates_dir)
-    threshold = _plus_threshold(None)
-
-    if plus_path:
-        hit = await controller.find_template_on_device(device_id, plus_path, threshold)
-        if hit:
-            await _ensure_vpn_on(controller, device_id, app_config, log_activity)
-            return
-
-    await _ensure_vpn_on(controller, device_id, app_config, log_activity)
-
-    await controller.home(device_id)
+    await controller.press_home(device_id)
     await asyncio.sleep(1.5)
 
     ok = await controller.tap(device_id, TIKTOK_HOME_ICON_X, TIKTOK_HOME_ICON_Y)
@@ -482,15 +539,53 @@ async def _open_tiktok_for_warmup(
             device_id,
         )
 
+    await wait_for_tiktok_plus_visible(
+        controller,
+        device_id,
+        device_manager=device_manager,
+        templates_directory=app_config.analysis.templates_directory,
+        app_config=app_config,
+        log_activity=log_activity,
+        timeout_seconds=180.0,
+    )
+    if log_activity:
+        await log_activity(
+            "info",
+            "batch",
+            "Warmup: TikTok home feed ready (+ visible)",
+            device_id,
+        )
+
 
 async def _ensure_vpn_on(
     controller: Any,
     device_id: str,
     app_config: AppConfig,
     log_activity: Any | None = None,
+    *,
+    device_manager: Any | None = None,
 ) -> None:
-    """Open Shadowrocket and turn VPN on if it's currently off."""
-    await ensure_vpn_on(controller, app_config, device_id, log_activity=log_activity)
+    """Turn VPN on; on shortcut failure, reboot phone + recast once, then retry."""
+    try:
+        await ensure_vpn_on(controller, app_config, device_id, log_activity=log_activity)
+        return
+    except Exception as exc:
+        if device_manager is None:
+            raise
+        logger.warning(
+            "warmup_vpn_on_failed_resetting_phone",
+            device_id=device_id,
+            error=str(exc),
+        )
+        if log_activity:
+            await log_activity(
+                "warn",
+                "batch",
+                f"VPN on failed ({exc}) — restarting phone and recasting, then retrying VPN",
+                device_id,
+            )
+        await device_manager.reset_phone_and_recast(device_id)
+        await ensure_vpn_on(controller, app_config, device_id, log_activity=log_activity)
 
 
 async def _wait_with_live_watch(
