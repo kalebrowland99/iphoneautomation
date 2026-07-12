@@ -35,6 +35,8 @@ class ActionType(str, Enum):
     UNLOCK = "unlock"
     LAUNCH_APP = "launch_app"
     OPEN_URL = "open_url"
+    VPN_ON = "vpn_on"
+    VPN_OFF = "vpn_off"
     CLOSE_APP = "close_app"
     KILL_APP = "kill_app"
     ALBUM_CLEAR = "album_clear"
@@ -163,16 +165,10 @@ class TikTokNavigationConfig(BaseModel):
     profile_tab: TabCoord = Field(default_factory=lambda: TabCoord(x=559, y=1037))
     home_tab: TabCoord = Field(default_factory=lambda: TabCoord(x=60, y=1041))
     account_switcher_opener: TabCoord = Field(
-        default_factory=lambda: TabCoord(x=301, y=288)
-    )
-    account_switcher_opener_alt: TabCoord = Field(
         default_factory=lambda: TabCoord(x=293, y=249)
     )
-    account_switcher_opener_fallback: TabCoord = Field(
-        default_factory=lambda: TabCoord(x=136, y=156)
-    )
-    account_likes_dismiss_ok: TabCoord = Field(
-        default_factory=lambda: TabCoord(x=308, y=766)
+    account_switcher_opener_alt: TabCoord = Field(
+        default_factory=lambda: TabCoord(x=301, y=288)
     )
     account_name_search_rect_pct: list[float] = Field(
         default_factory=lambda: [0.0, 0.0, 1.0, 0.35]
@@ -219,6 +215,20 @@ class TikTokNavigationConfig(BaseModel):
         return int(self.account_switcher_opener_alt.y)
 
 
+class TikTokDeviceUiSlotConfig(BaseModel):
+    """Per-phone TikTok UI differences (farm slot = device user_name)."""
+
+    ui_label: str = "Different UI"
+    account_switcher_opener: TabCoord = Field(
+        default_factory=lambda: TabCoord(x=101, y=147)
+    )
+    use_alternate_account_switcher: bool = True
+
+
+class TikTokDeviceUiConfig(BaseModel):
+    slots: dict[str, TikTokDeviceUiSlotConfig] = Field(default_factory=dict)
+
+
 class SlideshowConfig(BaseModel):
     """Local slideshow-ui → gallery ingest → farm batch pipeline."""
 
@@ -250,6 +260,33 @@ class WarmupConfig(BaseModel):
     max_retry_attempts: int = 3
 
 
+class SessionRecordingConfig(BaseModel):
+    """Debug MP4 recordings of each phone's batch session."""
+
+    enabled: bool = True
+    fps: float = 2.0
+
+
+class KernelRecoveryConfig(BaseModel):
+    """Restart iMouseXP kernel and recast after repeated infrastructure failures."""
+
+    enabled: bool = True
+    failure_threshold: int = 2
+    max_recovery_attempts: int = 2
+    kernel_restart_wait_seconds: float = 20.0
+
+
+class VpnConfig(BaseModel):
+    """Shadowrocket VPN via iMouse shortcut_exec_url (opens URL on the phone)."""
+
+    shortcut_url_on: str = "shadowrocket://connect"
+    shortcut_url_off: str = "shadowrocket://disconnect"
+    shortcut_url_toggle: str = "shadowrocket://toggle"
+    shortcut_url_open: str = "shadowrocket://"
+    shortcut_settle_seconds: float = 4.0
+    shortcut_url_timeout_ms: int = 30000
+
+
 class BatchConfig(BaseModel):
     batch_size: int = 1
     cast_connect_max_attempts: int = 8
@@ -260,6 +297,8 @@ class BatchConfig(BaseModel):
     chain_valcoin_after_labely: bool = True
     skip_prep_when_valid: bool = True
     warmup: WarmupConfig = Field(default_factory=WarmupConfig)
+    session_recording: SessionRecordingConfig = Field(default_factory=SessionRecordingConfig)
+    kernel_recovery: KernelRecoveryConfig = Field(default_factory=KernelRecoveryConfig)
 
 
 class LoggingConfig(BaseModel):
@@ -292,6 +331,8 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     workflows_directory: str = "config/workflows"
     tiktok_navigation: TikTokNavigationConfig = Field(default_factory=TikTokNavigationConfig)
+    tiktok_device_ui: TikTokDeviceUiConfig = Field(default_factory=TikTokDeviceUiConfig)
+    vpn: VpnConfig = Field(default_factory=VpnConfig)
 
 
 class WorkflowStepConfig(BaseModel):

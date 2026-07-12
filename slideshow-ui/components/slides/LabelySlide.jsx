@@ -3,6 +3,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BAD_LABELY_SCORE, BAD_LABELY_VERDICT, MAX_BAD_LABELY_SCORE, MIN_BAD_LABELY_SCORE, clampLabelyScore } from "@/lib/labelyRating";
+import { resolveLabelyOutroText, shouldShowLabelyOutro } from "@/lib/labelyOutroText";
 
 const IPHONE_SCALE = 1080 / 390;
 
@@ -557,6 +558,48 @@ export default function LabelySlide({ slot, S, config, itemIndex = 0 }) {
         </div>
       </div>
 
+      {shouldShowLabelyOutro(config, itemIndex) ? (
+        <LabelyOutroOverlay text={resolveLabelyOutroText(config, itemIndex)} px={px} />
+      ) : null}
+
+    </div>
+  );
+}
+
+function LabelyOutroOverlay({ text, px }) {
+  const line = String(text || "").trim();
+  if (!line) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        pointerEvents: "none",
+        zIndex: 80,
+        padding: px(28),
+      }}
+    >
+      <div
+        style={{
+          background: "#FFFFFF",
+          borderRadius: px(12),
+          padding: `${px(12)}px ${px(16)}px`,
+          width: "fit-content",
+          maxWidth: "72%",
+          textAlign: "center",
+          boxShadow: "0 6px 20px rgba(0,0,0,0.12)",
+          fontSize: px(17),
+          fontWeight: 700,
+          color: "#1A1A1A",
+          lineHeight: 1.25,
+          textTransform: "lowercase",
+        }}
+      >
+        {line}
+      </div>
     </div>
   );
 }

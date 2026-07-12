@@ -51,6 +51,7 @@ from imouse_farm.post.account_profile_store import (
     get_profile,
     get_profile_for_device,
     is_cant_cast_imouse,
+    is_phone_dead,
     list_profiles,
     mark_run_failed,
     mark_run_started,
@@ -307,6 +308,11 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             data["debug_skip_post"] = get_debug_skip_post(device.device_id)
             data["pipeline"] = app_instance.workflow_pipeline.get_status(device.device_id)
             data["account_profile"] = profile
+            from imouse_farm.workflows.tiktok_device_ui import slot_ui_label
+
+            ui_label = slot_ui_label(app_instance.config, device.user_name)
+            if ui_label:
+                data["ui_label"] = ui_label
             result.append(data)
         return result
 
@@ -438,6 +444,11 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         if body and body.slots:
             wanted = {str(s) for s in body.slots}
             devices = [d for d in devices if str(d.user_name) in wanted]
+        devices = [
+            d
+            for d in devices
+            if not is_phone_dead(_device_storage_key(d.device_id, d.user_name))
+        ]
         if not devices:
             raise HTTPException(400, "No farm phones found for batch run")
         started = await app_instance.farm_batch.start(
@@ -672,12 +683,13 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         text_key = _post_text_key(device, brand_key)
         try:
             if brand_key == "labely":
+                foods = await extract_food_names_from_stems(media_stems, config=openai_cfg)
                 onscreen_lines = await generate_labely_onscreen_texts(
                     media_stems,
                     template_key=template_key,
                     config=openai_cfg,
+                    food_names=foods,
                 )
-                foods = await extract_food_names_from_stems(media_stems, config=openai_cfg)
                 applied = 0
                 for post_num, line in enumerate(onscreen_lines, start=1):
                     if not line.strip():
@@ -754,6 +766,31 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             device_id,
             {"posts": len(result.get("posts", []))},
         )
+        return result
+
+    @app.post("/api/devices/{device_id:path}/caption-ai/preview")
+    async def preview_device_captions(
+        device_id: str, body: CaptionAIGenerateBody | None = None
+    ) -> dict[str, Any]:
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        brand_key = _normalize_brand(body.brand if body else None)
+        try:
+            result = await generate_captions_for_device(
+                app_instance.config,
+                device,
+                prompt=body.prompt if body else None,
+                hashtags=body.hashtags if body else None,
+                onscreen_template=body.onscreen_template if body else None,
+                brand=brand_key,
+                persist=False,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            logger.error("caption_ai_preview_failed", device_id=device_id, error=str(exc))
+            raise HTTPException(502, f"OpenAI request failed: {exc}") from exc
         return result
 
     async def generate_all_captions(body: CaptionAIGenerateBody | None) -> dict[str, Any]:

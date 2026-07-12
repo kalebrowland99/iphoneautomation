@@ -45,9 +45,18 @@ def _food_tokens_from_stem(stem: str) -> list[str]:
     else:
         return []
 
-    skip = {"slideshow", "food", "coins", "mp4"}
+    skip = {"slideshow", "food", "coins", "mp4", "phone", "video"}
     out = [p for p in body if p and p.lower() not in skip and not re.fullmatch(r"\d+", p)]
+    out = _strip_phone_video_prefix(out)
     return out
+
+
+def _strip_phone_video_prefix(tokens: list[str]) -> list[str]:
+    """Drop leading phone-N-video-M segments from export filenames."""
+    if len(tokens) >= 4 and tokens[0].lower() == "phone" and tokens[1].isdigit():
+        if tokens[2].lower() == "video" and tokens[3].isdigit():
+            return tokens[4:]
+    return tokens
 
 
 def food_to_hashtag_slug(food_name: str) -> str:
@@ -147,6 +156,51 @@ def sanitize_caption_statements(text: str) -> str:
     return cleaned.strip()
 
 
+_CLICHE_PHRASE_PATTERNS: tuple[str, ...] = (
+    r"off the charts",
+    r"game[- ]changer",
+    r"let that sink in",
+    r"it'?s giving",
+    r"\bsneakily\b",
+    r"hidden dangers?",
+    r"in today'?s world",
+    r"wake[- ]up call",
+    r"did you know",
+    r"here'?s the thing",
+    r"the truth is",
+    r"blow your mind",
+    r"absolutely wild",
+    r"kinda crazy",
+)
+
+
+def _limit_like_word(text: str, max_uses: int = 1) -> str:
+    parts = re.split(r"(\blike\b)", text, flags=re.IGNORECASE)
+    seen = 0
+    out: list[str] = []
+    for part in parts:
+        if re.fullmatch(r"like", part, re.IGNORECASE):
+            seen += 1
+            if seen <= max_uses:
+                out.append(part)
+            continue
+        out.append(part)
+    return "".join(out)
+
+
+def sanitize_labely_caption_voice(text: str, *, max_like: int = 1) -> str:
+    """Remove ai clichés and cap filler ``like`` in labely captions."""
+    cleaned = sanitize_caption_statements(text)
+    for pattern in _CLICHE_PHRASE_PATTERNS:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    cleaned = _limit_like_word(cleaned, max_uses=max_like)
+    cleaned = re.sub(r"\s+,", ",", cleaned)
+    cleaned = re.sub(r",\s*,+", ",", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"\.\s*\.+", ".", cleaned)
+    return cleaned.strip()
+
+
 def append_hashtags(caption: str, hashtags: str) -> str:
     """Append user hashtags to a final caption if not already present."""
     tags = normalize_hashtags(hashtags, shuffle=True)
@@ -188,13 +242,18 @@ async def generate_post_captions(
 
     client = AsyncOpenAI(api_key=api_key)
     system = (
-        "You write TikTok post descriptions for health conscious food content. "
+        "You write TikTok post descriptions that read like short sales copy for Labely, "
+        "a barcode-scanning app that reveals hidden ingredients in grocery products. "
+        "Use pain-point psychology: problem tied to the food, agitate why it matters, "
+        "then position Labely as the solution. "
+        "Sound human and specific — never use AI clichés (e.g. off the charts, game changer). "
+        'Use the word "like" at most once per caption. '
         "Respond with valid JSON only: {\"posts\": [{\"food\": \"...\", \"final\": \"...\"}, ...]} "
         "with exactly 3 objects. "
-        'Each "final" must be at most 4 short lines, all lowercase. No commas. '
+        'Each "final" can be longer (about 5–10 sentences). Use correct punctuation (commas and periods). '
         "Write confident statements only. Never ask questions. No question marks. "
         "Do NOT include hashtags in \"final\" — they are appended separately. "
-        "Follow the user caption style instructions exactly (voice, Labely mention placement, tone)."
+        "Follow the user caption style instructions exactly (voice, Labely as solution, tone)."
     )
     user = (
         f"Caption style instructions:\n{user_prompt.strip()}\n\n"
@@ -232,7 +291,8 @@ async def generate_post_captions(
             stem=stem,
         )
         tag_line = resolve_hashtag_template(hashtags, food)
-        final = append_hashtags(str(item.get("final", "")).strip(), tag_line)
+        body = sanitize_labely_caption_voice(str(item.get("final", "")).strip())
+        final = append_hashtags(body, tag_line)
         result.append({"food": food, "final": final})
     logger.info("ai_captions_generated", posts=len(result), model=config.model)
     return result
@@ -416,6 +476,7 @@ async def extract_food_names_from_stems(
         "(e.g. 'Cup Noodles', 'Chips', 'Frozen Pizza', 'Mac And Cheese'). "
         "Filenames may look like:\n"
         "- 02-cup-noodles-3 (phone slot 02, food cup-noodles, video 3)\n"
+        "- 02-phone-1-video-2-sugary-cereal-2 (slot 02, ignore phone/video indices, food sugary-cereal)\n"
         "- slideshow-02-doritos-nacho-cheese-3\n"
         "- 1-2-chips-a1b2c3 (batch export — food is between batch index and random hex)\n"
         "- 1-chicken_tikka_masala (legacy — food after first hyphen)\n"
@@ -455,94 +516,32 @@ async def extract_food_names_from_stems(
     return foods
 
 
-def _onscreen_template_instructions(template_key: str) -> str:
-    if template_key == "america_sick":
-        return (
-            'Template "america_sick": exactly two lines separated by \\n. '
-            'Line 1: "This Is Why AMERICA IS SICK". '
-            'Line 2: "{Food Category} Edition" where Food Category is Title Case food parsed '
-            "from that post's filename (e.g. \"Chips Edition\", \"Cup Noodles Edition\")."
-        )
-    if template_key == "toxic_walmart":
-        return (
-            'Template "toxic_walmart": exactly two lines separated by \\n. '
-            'Line 1: "The MOST Toxic {food} you should avoid" using the food from the filename. '
-            'Line 2: "Walmart Edition".'
-        )
-    if template_key == "valcoin_receipt":
-        return (
-            'Template "valcoin_receipt": exactly two lines separated by \\n. '
-            'Line 1: "The REAL Cost of {food}". Line 2: "ValCoin Edition".'
-        )
-    pattern = (
-        "Template {key}: follow the on-screen layout for {food} from the filename."
-    )
-    return pattern.format(key=template_key, food="{food}")
-
-
 async def generate_labely_onscreen_texts(
     stems: list[str],
     *,
     template_key: str,
     config: OpenAICaptionConfig,
+    food_names: list[str] | None = None,
 ) -> list[str]:
     """Return 3 on-screen overlay strings from gallery filenames (post order)."""
-    api_key = _resolve_api_key(config)
-    if not api_key:
-        raise ValueError("OpenAI API key not configured (set openai.api_key or OPENAI_API_KEY)")
-
-    from openai import AsyncOpenAI
+    from imouse_farm.captions.onscreen_templates import build_varied_onscreen_texts
     from imouse_farm.post.post_caption_store import stems_in_post_order
 
     post_stems = stems_in_post_order(stems)
-    template_help = _onscreen_template_instructions(template_key)
+    if food_names:
+        foods = [
+            sanitize_food_name(food_names[i] if i < len(food_names) else "", post_stems[i])
+            for i in range(3)
+        ]
+    else:
+        foods = [sanitize_food_name("", stem) for stem in post_stems]
+    result = build_varied_onscreen_texts(template_key, foods)
 
-    client = AsyncOpenAI(api_key=api_key)
-    system = (
-        "You write short on-screen text burned onto TikTok health-food slideshow videos. "
-        "Respond with valid JSON only: {\"onscreen\": [\"...\", \"...\", \"...\"]} "
-        "with exactly 3 strings in workflow post order (post 1, post 2, post 3). "
-        "Each string is 1-2 lines (use \\n between lines). "
-        "Read the food product or category from that post's video filename only. "
-        "Never use the word slideshow, slot numbers, batch numbers, or video indices in the text. "
-        f"{template_help}"
-    )
-    user = (
-        "Write on-screen overlay text for each post from its filename:\n"
-        f"- Post 1 filename: {post_stems[0] or '(missing)'}\n"
-        f"- Post 2 filename: {post_stems[1] or '(missing)'}\n"
-        f"- Post 3 filename: {post_stems[2] or '(missing)'}\n"
-    )
-
-    response = await client.chat.completions.create(
-        model=config.model,
-        temperature=0.3,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system},
-            {
-                "role": "user",
-                "content": user + '\nReturn JSON: {"onscreen": ["...", "...", "..."]}',
-            },
-        ],
-    )
-    raw = (response.choices[0].message.content or "").strip()
-    lines = _parse_onscreen_json(raw)
-    while len(lines) < 3:
-        lines.append("")
-    result: list[str] = []
-    for i in range(3):
-        line = lines[i].strip()
-        if not line or "slideshow" in line.lower():
-            fallback_food = sanitize_food_name("", post_stems[i])
-            from imouse_farm.captions.onscreen_templates import build_onscreen_text
-
-            line = build_onscreen_text(template_key, fallback_food)
-        result.append(line)
     logger.info(
         "ai_labely_onscreen_generated",
         template=template_key,
         stems=post_stems,
+        hooks=result,
         model=config.model,
     )
     return result[:3]

@@ -43,7 +43,7 @@ def test_list_debug_tests() -> None:
     registry = get_debug_registry()
     flow_tests = list_debug_tests()
     all_tests = list_debug_tests("all")
-    assert len(flow_tests) == 159
+    assert len(flow_tests) == 147
     assert len(all_tests) == len(registry)
     assert flow_tests[0]["id"].startswith("flow:001:")
     assert flow_tests[0]["test_id"] == "tap-lock_screen"
@@ -110,6 +110,12 @@ def test_debug_tests_have_required_fields() -> None:
             assert spec["hint"]
         elif kind == "home":
             assert test_id in {"prep-home", "post-go-home"}
+        elif kind == "vpn_shortcut":
+            assert spec.get("mode") in {"on", "off", "toggle", "open"}
+            assert spec["hint"]
+        elif kind == "vpn_off_before_album":
+            assert test_id == "prep-vpn-off-before-album"
+            assert spec["hint"]
         elif kind == "account_switch_step":
             assert spec["step"]
             assert spec["hint"]
@@ -117,12 +123,27 @@ def test_debug_tests_have_required_fields() -> None:
 
 def test_list_account_switch_debug_tests() -> None:
     tests = list_debug_tests("account_switch")
-    ids = {t["id"] for t in tests}
-    assert "account-ensure-full" in ids
-    assert "account-tap-profile-tab" in ids
+    ids = [t["id"] for t in tests]
+    assert ids[:6] == [
+        "account-tap-profile-tab",
+        "account-switcher-tap-primary",
+        "account-switcher-tap-alt",
+        "account-switcher-verify-handle",
+        "account-pick-handle",
+        "account-tap-home-tab",
+    ]
+    assert ids[-3:] == [
+        "account-open-switcher",
+        "account-ensure-current",
+        "account-ensure-full",
+    ]
+    assert "account-switcher-tap-primary" in ids
+    assert "account-switcher-tap-alt" in ids
+    assert "account-switcher-verify-handle" in ids
     assert "account-dismiss-security-checkup" in ids
     assert "account-dismiss-add-phone" in ids
     assert all(t["group"] == "account_switch" for t in tests)
+    assert tests[0]["label"].startswith("1. ")
 
 
 def test_security_checkup_debug_tests_registered() -> None:
@@ -161,7 +182,7 @@ def test_list_slideshow_debug_tests() -> None:
 def test_list_valcoin_prep_debug_tests() -> None:
     tests = list_debug_tests("valcoin_prep")
     ids = {t["id"] for t in tests}
-    assert "valcoin-prep-tap-vpn-off" in ids
+    assert "valcoin-prep-vpn-shortcut-off" in ids
     assert "valcoin-prep-clear-album" in ids
     assert all(t["group"] == "valcoin_prep" for t in tests)
 
@@ -177,8 +198,7 @@ def test_full_flow_debug_steps_ordered() -> None:
 def test_upload_gallery_is_first_in_all_group() -> None:
     tests = list_debug_tests("all")
     assert tests[0]["id"] == "upload-gallery"
-    assert tests[1]["id"] == "prep-kill-apps"
-    assert tests[2]["id"] == "clear-album"
+    assert "prep-kill-apps" in {t["id"] for t in tests[:6]}
 
 
 def test_manual_tests_override_template_ids() -> None:

@@ -219,6 +219,15 @@ def test_is_deny_permission_label_trailing_period() -> None:
     assert is_deny_permission_label("Ask App Not to Track")
 
 
+def test_is_open_external_app_allow_label() -> None:
+    from imouse_farm.actions.permission_prompts import is_open_external_app_allow_label
+
+    assert is_open_external_app_allow_label("Allow")
+    assert is_open_external_app_allow_label("Open")
+    assert not is_open_external_app_allow_label("Don't Allow")
+    assert not is_open_external_app_allow_label("Dont Allow")
+
+
 def test_photo_delete_sheet_skips_permission_watcher_logic() -> None:
     from imouse_farm.actions.permission_prompts import is_photo_delete_sheet_text
 

@@ -15,6 +15,7 @@ from typing import Any
 
 from imouse_farm.config.models import AppConfig
 from imouse_farm.utils.logging import get_logger
+from imouse_farm.workflows.vision_step_context import build_vision_error_msg
 
 logger = get_logger(__name__)
 
@@ -108,6 +109,8 @@ async def ask_vision_for_recovery(
     workflow_name: str,
     error_msg: str,
     app_config: AppConfig,
+    recent_errors: list[str] | None = None,
+    extra_context: str = "",
 ) -> dict[str, Any]:
     """
     Screenshot the device and ask: is there a blocking popup?
@@ -121,7 +124,13 @@ async def ask_vision_for_recovery(
     client = _make_openai_client(app_config)
     model = _model(app_config)
 
-    user_text = f'Step "{step_name}" in "{workflow_name}" failed: {error_msg}'
+    user_text = build_vision_error_msg(
+        workflow_name=workflow_name,
+        step_name=step_name,
+        error_msg=error_msg,
+        recent_errors=recent_errors,
+        extra_context=extra_context,
+    )
     response = await client.chat.completions.create(
         model=model,
         max_tokens=80,
@@ -261,6 +270,49 @@ async def ask_vision_for_tap(
     reason = str(parsed.get("reason", ""))
     logger.info("vision_tap_response", device_id=device_id, x=x, y=y, reason=reason)
     return x, y, reason
+
+
+async def try_dismiss_blocking_popup(
+    controller: Any,
+    device_id: str,
+    *,
+    app_config: AppConfig,
+    step_name: str = "wait_for_plus",
+    workflow_name: str = "tiktok",
+    error_msg: str = "+ button not found — checking for blocking overlay",
+    recent_errors: list[str] | None = None,
+    extra_context: str = "",
+    log_activity: Any | None = None,
+) -> bool:
+    """Use OpenAI Vision to find and tap a blocking popup/overlay. Returns True if dismissed."""
+    if not app_config.openai.enabled:
+        return False
+    try:
+        result = await ask_vision_for_recovery(
+            controller,
+            device_id,
+            step_name=step_name,
+            workflow_name=workflow_name,
+            error_msg=error_msg,
+            app_config=app_config,
+            recent_errors=recent_errors,
+            extra_context=extra_context,
+        )
+        if result.get("popup"):
+            return await execute_recovery_action(
+                controller,
+                device_id,
+                result,
+                log_activity=log_activity,
+            )
+    except Exception as exc:
+        logger.warning(
+            "vision_dismiss_popup_failed",
+            device_id=device_id,
+            step=step_name,
+            error=str(exc),
+        )
+    return False
 
 
 async def execute_recovery_action(

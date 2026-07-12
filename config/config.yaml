@@ -111,6 +111,26 @@ slideshow:
   blank_video_max_retries: 2
   debug_slideshows_per_slot: 1  # debug Slideshow tab → 1 MP4 per test run
 
+# Shadowrocket VPN — opened on the phone via iMouse shortcut_exec_url (Safari / URL handler).
+# Override with your own Shortcuts URL if you use a custom iPhone shortcut instead.
+vpn:
+  shortcut_url_on: "shadowrocket://connect"
+  shortcut_url_off: "shadowrocket://disconnect"
+  shortcut_url_toggle: "shadowrocket://toggle"
+  shortcut_url_open: "shadowrocket://"
+  shortcut_settle_seconds: 4
+  shortcut_url_timeout_ms: 30000
+
+# Per-phone TikTok UI overrides (farm slot number = iMouse user_name).
+tiktok_device_ui:
+  slots:
+    "16":
+      ui_label: "Different UI"
+      use_alternate_account_switcher: true
+      account_switcher_opener:
+        x: 101
+        y: 147
+
 batch:
   batch_size: 1
   cast_connect_max_attempts: 8
@@ -119,7 +139,15 @@ batch:
   disconnect_on_complete: true
   between_phones_pause_seconds: 0
   chain_valcoin_after_labely: true
-  skip_prep_when_valid: true  # skip album clear/upload when prep completed within 24h (invalidated on new ingest)
+  skip_prep_when_valid: true
+  session_recording:
+    enabled: true
+    fps: 2  # screenshots per second into gallery/<slot>/<YYYY-MM-DD>/session_HHMMSS.mp4
+  kernel_recovery:
+    enabled: true
+    failure_threshold: 2  # after N iMouseXP failures, restart kernel and resume at first failed phone
+    max_recovery_attempts: 2
+    kernel_restart_wait_seconds: 20
   warmup:
     duration_seconds: 1200
     swipe_delay_min_seconds: 0

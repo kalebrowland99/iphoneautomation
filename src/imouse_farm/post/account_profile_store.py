@@ -59,6 +59,7 @@ def _default_profile(brand: str = "labely") -> dict[str, Any]:
         "last_error": "",
         "prep_completed_at": None,
         "cant_cast_imouse": False,
+        "phone_dead": False,
     }
 
 
@@ -121,6 +122,8 @@ def _normalize_profile(data: dict[str, Any], brand: str) -> dict[str, Any]:
         "last_run_at": data.get("last_run_at"),
         "last_error": str(data.get("last_error", "") or ""),
         "prep_completed_at": prep_at or None,
+        "cant_cast_imouse": bool(data.get("cant_cast_imouse", False)),
+        "phone_dead": bool(data.get("phone_dead", False)),
     })
     return base
 
@@ -388,6 +391,25 @@ def is_cant_cast_imouse(base_key: str) -> bool:
     for brand in VALID_BRANDS:
         key = brand_profile_key(base_key, brand)
         if _store.get(key, {}).get("cant_cast_imouse"):
+            return True
+    return False
+
+
+def set_phone_dead(base_key: str, *, dead: bool = True) -> None:
+    """Mark a farm slot as dead (hardware gone) — persists on all brand profiles."""
+    for brand in VALID_BRANDS:
+        key = brand_profile_key(base_key, brand)
+        profile = get_profile(key, brand=brand)
+        profile["phone_dead"] = bool(dead)
+        _store[key] = profile
+    _save_store()
+
+
+def is_phone_dead(base_key: str) -> bool:
+    """Return True if ANY brand profile for this slot has phone_dead=True."""
+    for brand in VALID_BRANDS:
+        key = brand_profile_key(base_key, brand)
+        if _store.get(key, {}).get("phone_dead"):
             return True
     return False
 

@@ -197,6 +197,19 @@ class DeviceController:
         logger.info("action_device_restart", device_id=device_id)
         return await self._run_sync(_restart)
 
+    async def restart_imouse_kernel(self) -> bool:
+        """Restart the iMouseXP kernel service (config_imserver_restart)."""
+
+        def _restart_kernel() -> bool:
+            try:
+                return self._ok(self._api.imserver_restart())
+            except Exception as exc:
+                logger.warning("imouse_kernel_restart_failed", error=str(exc))
+                return False
+
+        logger.info("imouse_kernel_restart_requested")
+        return await self._run_sync(_restart_kernel)
+
     async def connect_all_airplay(self) -> bool:
         def _connect_all() -> bool:
             try:
@@ -516,12 +529,48 @@ class DeviceController:
             lambda: self._ok(self._api.key_sendkey(self._ids(device_id), fn_key="unlock"))
         )
 
-    async def launch_app(self, device_id: str, app_name: str) -> bool:
-        logger.info("action_launch_app", device_id=device_id, app=app_name)
-        url = app_name if "://" in app_name else f"{app_name}://"
-        return await self._run_sync(
-            lambda: self._ok(self._api.shortcut_exec_url(self._ids(device_id), url=url))
+    async def launch_app(
+        self,
+        device_id: str,
+        app_name: str,
+        *,
+        outtime_ms: int | None = None,
+    ) -> bool:
+        ok, _err = await self.launch_app_with_error(
+            device_id, app_name, outtime_ms=outtime_ms
         )
+        return ok
+
+    async def launch_app_with_error(
+        self,
+        device_id: str,
+        app_name: str,
+        *,
+        outtime_ms: int | None = None,
+    ) -> tuple[bool, str]:
+        """Open a URL scheme on the phone via shortcut_exec_url; return (ok, sdk_error)."""
+        target = app_name if "://" in app_name else f"{app_name}://"
+        timeout = int(outtime_ms if outtime_ms is not None else 15000)
+
+        def _launch() -> tuple[bool, str]:
+            response = self._api.shortcut_exec_url(
+                self._ids(device_id), url=target, outtime=timeout
+            )
+            ok = self._ok(response)
+            err = "" if ok else self._error_message(response)
+            return ok, err
+
+        logger.info("action_launch_app", device_id=device_id, app=target, outtime_ms=timeout)
+        ok, err = await self._run_sync(_launch)
+        if not ok:
+            logger.warning(
+                "launch_app_failed",
+                device_id=device_id,
+                url=target,
+                error=err,
+                outtime_ms=timeout,
+            )
+        return ok, err
 
     async def close_app(self, device_id: str) -> bool:
         logger.info("action_close_app", device_id=device_id)

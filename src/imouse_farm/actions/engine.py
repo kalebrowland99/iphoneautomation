@@ -12,7 +12,10 @@ from imouse_farm.actions.pre_touch_reset import (
     pre_touch_mouse_reset,
     request_needs_pre_touch_reset,
 )
-from imouse_farm.actions.vpn_shadowrocket import ensure_vpn_off_before_album
+from imouse_farm.actions.vpn_shadowrocket import (
+    ensure_vpn_off_before_album,
+    ensure_vpn_on,
+)
 from imouse_farm.actions.queue import ActionQueue, QueuedAction
 from pathlib import Path
 
@@ -759,6 +762,14 @@ class ActionEngine:
                 return await ctrl.launch_app(device_id, app)
             case ActionType.OPEN_URL:
                 return await ctrl.launch_app(device_id, str(params.get("url", "")))
+            case ActionType.VPN_ON:
+                await ensure_vpn_on(ctrl, self._config, device_id)
+                return True
+            case ActionType.VPN_OFF:
+                await ensure_vpn_off_before_album(
+                    ctrl, self._config, self._device_manager, device_id
+                )
+                return True
             case ActionType.CLOSE_APP:
                 return await ctrl.close_app(device_id)
             case ActionType.KILL_APP:
@@ -788,10 +799,7 @@ class ActionEngine:
                     clear_kw["max_rounds"] = int(params["max_rounds"])
                 return await ctrl.album_clear(device_id, **clear_kw)
             case ActionType.ALBUM_UPLOAD:
-                if not params.get("skip_vpn_off"):
-                    await ensure_vpn_off_before_album(
-                        ctrl, self._config, self._device_manager, device_id
-                    )
+                # VPN off runs once on album_clear before delete+upload prep; do not repeat here.
                 self._block_album_when_vpn_on(device_id, "Album upload")
                 from imouse_farm.utils.gallery import list_media_files
 

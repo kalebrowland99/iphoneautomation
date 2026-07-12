@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import VideoPreview from "@/components/VideoPreview";
 import LabelyScanSequencePreview from "@/components/LabelyScanSequencePreview";
+import LabelyOutroPreview from "@/components/LabelyOutroPreview";
 import ConfigPanel from "@/components/ConfigPanel";
 import GlobalJobBar from "@/components/GlobalJobBar";
 import GalleryRail from "@/components/GalleryRail";
@@ -630,6 +631,12 @@ export default function Home() {
                         currentSlide={currentSlide}
                         setCurrentSlide={setCurrentSlide}
                         totalSlides={totalSlides}
+                      />
+                      <LabelyOutroPreview
+                        config={config}
+                        setConfig={setConfig}
+                        currentSlide={currentSlide}
+                        setCurrentSlide={setCurrentSlide}
                       />
                       <VideoPreview
                         config={config}

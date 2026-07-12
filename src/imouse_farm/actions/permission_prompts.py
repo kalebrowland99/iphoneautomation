@@ -356,6 +356,63 @@ def is_deny_permission_label(text: str) -> bool:
     return label in ("ask app not to track", "don't allow", "dont allow")
 
 
+OPEN_EXTERNAL_APP_ALLOW_TEXTS = ("Allow", "Open")
+
+
+def is_open_external_app_allow_label(text: str) -> bool:
+    """True for Allow/Open on 'Allow X to open Shadowrocket?' sheets — not Don't Allow."""
+    if is_deny_permission_label(text):
+        return False
+    compact = ocr_compact(str(text or ""))
+    return compact in ("allow", "open")
+
+
+async def tap_open_external_app_allow_if_visible(
+    controller: Any,
+    device_id: str,
+    *,
+    log_activity: Any | None = None,
+) -> bool:
+    """Tap Allow when iOS asks to open Shadowrocket from a shortcut/URL."""
+    from imouse_farm.utils.logging import get_logger
+
+    log = get_logger(__name__)
+    for text in OPEN_EXTERNAL_APP_ALLOW_TEXTS:
+        matches = await controller.find_text_on_device(
+            device_id,
+            [text],
+            threshold=0.55,
+            contain=True,
+        )
+        candidates = [
+            m
+            for m in matches
+            if is_open_external_app_allow_label(str(m.get("text", "")))
+        ]
+        if not candidates:
+            continue
+        best = max(candidates, key=lambda m: float(m.get("confidence", 0)))
+        x, y = int(best["x"]), int(best["y"])
+        if not await controller.tap(device_id, x, y):
+            continue
+        log.info(
+            "open_external_app_allow_tapped",
+            device_id=device_id,
+            text=best.get("text"),
+            x=x,
+            y=y,
+        )
+        if log_activity:
+            await log_activity(
+                "info",
+                "device",
+                f"Tapped Allow ({best.get('text')}) for Shadowrocket shortcut at ({x}, {y})",
+                device_id,
+            )
+        return True
+    return False
+
+
 def is_photo_delete_sheet_text(ocr_text: str) -> bool:
     """True when OCR looks like the iOS Photos delete confirmation sheet."""
     text = ocr_text.lower()

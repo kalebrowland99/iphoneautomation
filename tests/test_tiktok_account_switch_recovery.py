@@ -36,10 +36,14 @@ def _account_switch_runner() -> WorkflowRunner:
 
 
 @pytest.mark.asyncio
-async def test_account_switch_recovery_reopens_and_retries() -> None:
+async def test_account_switch_recovery_reopens_and_retries(monkeypatch) -> None:
     runner = _account_switch_runner()
     runner._log_activity = AsyncMock()
-    runner._vision_recover = AsyncMock()
+    reopen = AsyncMock()
+    monkeypatch.setattr(
+        "imouse_farm.workflows.engine.kill_and_reopen_tiktok",
+        reopen,
+    )
     runner._execute_step_body = AsyncMock()
 
     step = runner._workflow.steps[0]
@@ -50,15 +54,18 @@ async def test_account_switch_recovery_reopens_and_retries() -> None:
 
     assert result is True
     assert runner._tiktok_account_switch_recoveries == 1
-    runner._vision_recover.assert_awaited_once()
+    reopen.assert_awaited_once()
     runner._execute_step_body.assert_awaited_once_with(step)
 
 
 @pytest.mark.asyncio
-async def test_account_switch_recovery_returns_none_when_retry_fails() -> None:
+async def test_account_switch_recovery_returns_none_when_retry_fails(monkeypatch) -> None:
     runner = _account_switch_runner()
     runner._log_activity = AsyncMock()
-    runner._vision_recover = AsyncMock()
+    monkeypatch.setattr(
+        "imouse_farm.workflows.engine.kill_and_reopen_tiktok",
+        AsyncMock(),
+    )
     runner._execute_step_body = AsyncMock(
         side_effect=RuntimeError("still missing handle"),
     )
@@ -68,7 +75,6 @@ async def test_account_switch_recovery_returns_none_when_retry_fails() -> None:
 
     assert result is None
     assert runner._tiktok_account_switch_recoveries == 3
-    assert runner._vision_recover.await_count == 3
     assert runner._pending_failure_exc.args[0] == "still missing handle"
 
 

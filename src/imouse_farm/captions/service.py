@@ -48,6 +48,7 @@ async def generate_captions_for_device(
     hashtags: str | None = None,
     onscreen_template: str | None = None,
     brand: str = "labely",
+    persist: bool = True,
 ) -> dict[str, Any]:
     """Generate unique final captions per post; optional onscreen template per device."""
     openai_cfg = config.openai
@@ -98,22 +99,35 @@ async def generate_captions_for_device(
             media_stems,
             template_key=template_key,
             config=openai_cfg,
+            food_names=food_names,
         )
-        for post_num, line in enumerate(onscreen_lines, start=1):
-            if line.strip():
-                set_onscreen_text(text_key, post_num, line, brand=brand_key)
+        if persist:
+            for post_num, line in enumerate(onscreen_lines, start=1):
+                if line.strip():
+                    set_onscreen_text(text_key, post_num, line, brand=brand_key)
+
+    def _onscreen_for_post(post_num: int, cap_index: int) -> str:
+        if brand_key == "valcoin":
+            idx = cap_index - 1
+            return onscreen_lines[idx] if idx < len(onscreen_lines) else ""
+        if onscreen_lines and post_num - 1 < len(onscreen_lines):
+            return str(onscreen_lines[post_num - 1] or "")
+        if persist:
+            return get_onscreen_text(text_key, post_num, brand=brand_key)
+        return ""
 
     posts: list[dict[str, Any]] = []
     for i, cap in enumerate(generated, start=1):
         post_num = POST_COUNT + 1 - i
-        set_final_caption(text_key, post_num, cap["final"], brand=brand_key)
-        if brand_key == "valcoin":
-            onscreen = onscreen_lines[i - 1] if i - 1 < len(onscreen_lines) else ""
-            set_onscreen_text(text_key, post_num, onscreen, brand=brand_key)
+        onscreen = _onscreen_for_post(post_num, i)
+        if persist:
+            set_final_caption(text_key, post_num, cap["final"], brand=brand_key)
+            if brand_key == "valcoin" and onscreen.strip():
+                set_onscreen_text(text_key, post_num, onscreen, brand=brand_key)
         stem = post_media_stem(media_stems, post_num)
         posts.append({
             "post": post_num,
-            "onscreen": get_onscreen_text(text_key, post_num, brand=brand_key),
+            "onscreen": onscreen if not persist else get_onscreen_text(text_key, post_num, brand=brand_key),
             "final": cap["final"],
             "media_file": stem,
             "food_name": (
@@ -129,8 +143,9 @@ async def generate_captions_for_device(
         "label": device.display_label,
         "text_key": text_key,
         "brand": brand_key,
-        "posts": posts,
+        "posts": sorted(posts, key=lambda row: int(row["post"])),
         "media_files": media_stems,
+        "preview": not persist,
     }
 
 

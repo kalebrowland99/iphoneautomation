@@ -1,8 +1,7 @@
 name: tiktok_prep
 description: >
-  Sequential prep (Labely account 1): unlock → force-quit apps → clear/upload gallery
-  with VPN off (phones start off — no Shadowrocket step). Then turn VPN on via
-  Shadowrocket (376, 1013) + toggle (511, 172), open TikTok.
+  Sequential prep (Labely account 1): unlock → force-quit apps → VPN off once → clear/upload gallery.
+  Then turn VPN on via Shadowrocket URL shortcut, open TikTok.
 
 loop: false
 
@@ -71,13 +70,12 @@ steps:
     name: settle_home
     duration_seconds: 0.5
 
-  # ── 3. Clear photo library (iMouse album API — Photos app not required) ─
+  # ── 3. Clear photo library (VPN disconnect once, then iMouse album API) ─
   - type: execute_action
     name: clear_album
     on_failure: pause
     action:
       type: album_clear
-      skip_vpn_off: true
       timeout_ms: 60000
       sheet_appear_timeout_seconds: 18
       round_active_timeout_seconds: 60
@@ -94,7 +92,6 @@ steps:
     on_failure: pause
     action:
       type: album_upload
-      skip_vpn_off: true
       folder: ${gallery_folder}
     skip_post_action: true
 
@@ -116,48 +113,13 @@ steps:
     name: upload_settle
     duration_seconds: 5
 
-  # ── 5. VPN on → home → TikTok ───────────────────────────────────────
+  # ── 5. VPN on → TikTok ──────────────────────────────────────────────
   - type: execute_action
-    name: go_home_before_vpn
-    action:
-      type: home
-    skip_post_action: true
-
-  - type: execute_action
-    name: open_shadowrocket
+    name: vpn_on_shortcut
     on_failure: pause
     action:
-      type: tap
-      x: 376
-      y: 1013
+      type: vpn_on
     skip_post_action: true
-
-  - type: wait
-    name: shadowrocket_open
-    duration_seconds: 1
-
-  - type: execute_action
-    name: tap_vpn_toggle_coord
-    on_failure: pause
-    action:
-      type: tap
-      x: 511
-      y: 172
-    skip_post_action: true
-
-  - type: wait
-    name: after_vpn_toggle_coord
-    duration_seconds: 2
-
-  - type: execute_action
-    name: go_home_after_vpn
-    action:
-      type: home
-    skip_post_action: true
-
-  - type: wait
-    name: after_vpn_home
-    duration_seconds: 0.5
 
   - type: execute_action
     name: open_tiktok

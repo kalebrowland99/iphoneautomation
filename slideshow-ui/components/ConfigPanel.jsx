@@ -27,10 +27,11 @@ import {
 import { iphoneRetailPhotoImperfectionPrompt } from "@/lib/iphoneRetailPhotoImperfectionPrompt";
 import { fetchRandomNumistaCoin } from "@/lib/numistaImageClient";
 import { BAD_LABELY_VERDICT, normalizeBadLabelyScore } from "@/lib/labelyRating";
+import { pickLabelyOutroText, lastLabelySlideIndex } from "@/lib/labelyOutroText";
 import { dispatchBraveUsageUpdated } from "@/components/BraveSearchUsageBar";
 import BraveSearchUsageBar from "@/components/BraveSearchUsageBar";
 import { estimateBraveSearchesForFarm } from "@/lib/braveSearchEstimate";
-import { LABELY_FARM_VIDEOS_PER_PHONE } from "@/lib/farmLabelyFoods";
+import { buildLabelyFarmVideoPlan, LABELY_FARM_VIDEOS_PER_PHONE } from "@/lib/farmLabelyFoods";
 import {
   clearGlobalJob,
   clearJobHeartbeat,
@@ -2169,6 +2170,10 @@ ${SHARED_RULES_OUTRO}`;
         : null;
     const localSlots = Array.from({ length: Math.max(6, slotCount) }, (_, i) => freshSlot(i));
     const showJitterSeed = (Math.random() * 0xffff) | 0;
+    const labelyOutroText = isLabely ? pickLabelyOutroText(`${showJitterSeed}:${showIndex}`) : "";
+    if (isLabely && labelyOutroText) {
+      flushSync(() => setConfig((prev) => ({ ...prev, labelyOutroText })));
+    }
     const usedFoodDbUrls = labelyBraveReusePhotos
       ? new Set(localSlots.map((s) => s?.labelyDbImageUrl).filter(Boolean))
       : new Set([
@@ -2309,7 +2314,7 @@ ${SHARED_RULES_OUTRO}`;
         appId: config.appId,
         jitterSeed: showJitterSeed,
         ...(isLabelyScanTourFormat(config) ? { labelyScanSlotCount: slotCount } : {}),
-        ...(config.labelyOutroText ? { labelyOutroText: config.labelyOutroText } : {}),
+        ...(isLabely && labelyOutroText ? { labelyOutroText } : {}),
         ...(options.batchMeta || {}),
       };
       onSlideshowSaved?.(savedShow);
@@ -2364,7 +2369,6 @@ ${SHARED_RULES_OUTRO}`;
         outputFormat: config.outputFormat,
         appId: config.appId,
         jitterSeed: showJitterSeed,
-        ...(config.labelyOutroText ? { labelyOutroText: config.labelyOutroText } : {}),
         ...(options.batchMeta || {}),
       };
       onSlideshowSaved?.(savedShow);
@@ -2450,11 +2454,116 @@ ${SHARED_RULES_OUTRO}`;
       outputFormat: config.outputFormat,
       appId: config.appId,
       jitterSeed: showJitterSeed,
-      ...(config.labelyOutroText ? { labelyOutroText: config.labelyOutroText } : {}),
+      ...(isLabely && labelyOutroText ? { labelyOutroText } : {}),
       ...(options.batchMeta || {}),
     };
     onSlideshowSaved?.(savedShow);
     return savedShow;
+  };
+
+  const buildTestSlideshowOptions = () => {
+    const scanSlots = scanTourSlotCount(config);
+    if (isFarmAutomation && isLabely) {
+      const plans = buildLabelyFarmVideoPlan({
+        phoneCount: 1,
+        videosPerPhone: 1,
+        seed: `test-${Date.now()}`,
+      });
+      const plan = plans[0];
+      if (!plan) return {};
+      const items = String(plan.itemsRaw || "")
+        .split("\n")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .slice(0, scanSlots);
+      return {
+        brandItemsOverride: items,
+        scanSlotCountOverride: items.length,
+        batchMeta: {
+          batchNumber: plan.batchNumber ?? 1,
+          batchSlideshowIndex: 1,
+          batchFoodName: plan.foodGenre || plan.name || items[0] || "food",
+          phoneIndex: plan.phoneIndex ?? 0,
+          videoOnPhone: plan.videoOnPhone ?? 1,
+          foodGenre: plan.foodGenre,
+          foodTypes: plan.foodTypes,
+        },
+      };
+    }
+    if (isLabelyFoodDbBatchMode) {
+      const row = labelyFoodDbBatchRows.find((b) =>
+        String(b?.itemsRaw || "")
+          .split("\n")
+          .some((line) => line.trim()),
+      );
+      if (!row) return {};
+      const items = String(row.itemsRaw || "")
+        .split("\n")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .slice(0, scanSlots);
+      return {
+        brandItemsOverride: items,
+        foodDbMatchesOverride: row.foodDbMatches,
+        scanSlotCountOverride: items.length,
+        batchMeta: {
+          batchNumber: 1,
+          batchSlideshowIndex: 1,
+          batchFoodName: row.foodGenre || row.name || items[0] || "food",
+        },
+      };
+    }
+    return {};
+  };
+
+  const handleGenerateTestSlideshow = async () => {
+    if (generatingSlot !== null) return;
+    if (!isLabely && !isValcoin && brandItems.length === 0 && !batchImageDataUrls.some(Boolean)) {
+      alert("Add brand items or queue batch uploads first.");
+      return;
+    }
+    setGeneratingSlot("test");
+    setAiErrors({});
+    cancelGenRef.current = false;
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    setGenAllProgress({
+      phase: "Generating test slideshow (1 video, no farm upload)…",
+      done: 0,
+      total: 1,
+      current: 0,
+    });
+    try {
+      if (isLabely) await beginLabelyBraveGenerateRun();
+      const saved = await generateOneSlideshow(0, 1, buildTestSlideshowOptions());
+      if (!saved) {
+        setGenAllProgress({ phase: "Test slideshow failed — nothing saved.", done: 0 });
+        setTimeout(() => setGenAllProgress(null), 5000);
+        return;
+      }
+      if (isLabely) {
+        flushSync(() => setCurrentSlide(lastLabelySlideIndex(config)));
+      } else {
+        flushSync(() => setCurrentSlide(0));
+      }
+      setGenAllProgress({
+        phase: "✓ Test slideshow saved — check preview (last slide has Labely outro).",
+        done: 1,
+        total: 1,
+        current: 0,
+      });
+      setTimeout(() => setGenAllProgress(null), 5000);
+    } catch (err) {
+      console.error("Generate test slideshow failed:", err);
+      setGenAllProgress({
+        phase: `Test failed: ${err?.message || String(err)}`,
+        done: 0,
+      });
+      setTimeout(() => setGenAllProgress(null), 6000);
+    } finally {
+      setGeneratingSlot(null);
+      abortRef.current = null;
+    }
   };
 
   const handleGenerateBatch = async () => {
@@ -4274,16 +4383,29 @@ ${SHARED_RULES_OUTRO}`;
           >
             {generatingSlot === "all" ? "Generating…" : `Generate ${effectiveNumSlideshows} slideshow${effectiveNumSlideshows > 1 ? "s" : ""}`}
           </button>
-          {!isLabely && !isValcoin ? (
+          <button
+            type="button"
+            onClick={handleGenerateTestSlideshow}
+            disabled={
+              generatingSlot !== null
+              || (!isLabely && !isValcoin && brandItems.length === 0 && !batchImageDataUrls.some(Boolean))
+            }
+            className="btn-ghost w-full mt-2 disabled:opacity-40"
+          >
+            {generatingSlot === "test" ? "Generating test…" : "Generate test slideshow"}
+          </button>
           <p className="mt-1.5 text-center text-[10px] text-muted-foreground/60">
-            {(() => {
-              const isMom = (config.outputFormat ?? "standard") === "imessageMom";
-              const imgs = isMom ? 1 : 6;
-              const cost = imageModel === "gpt-image-1" ? 0.015 * imgs : 0.07 * imgs;
-              return `Est. $${(effectiveNumSlideshows * cost).toFixed(2)} · each saved to the gallery on the right`;
-            })()}
+            {isLabely
+              ? "Test builds 1 video only — saved to gallery, not uploaded to farm."
+              : !isValcoin
+                ? (() => {
+                    const isMom = (config.outputFormat ?? "standard") === "imessageMom";
+                    const imgs = isMom ? 1 : 6;
+                    const cost = imageModel === "gpt-image-1" ? 0.015 * imgs : 0.07 * imgs;
+                    return `Est. $${(effectiveNumSlideshows * cost).toFixed(2)} · each saved to the gallery on the right`;
+                  })()
+                : "Quick single slideshow for preview and export checks."}
           </p>
-          ) : null}
         </div>
 
         {/* Progress tracker */}

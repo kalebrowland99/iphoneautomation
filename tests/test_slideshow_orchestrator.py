@@ -51,6 +51,22 @@ def test_slot_chains_valcoin_post_only_when_explicitly_selected() -> None:
     assert orch._slot_chains_valcoin_post(job_skipped, "2") is False
 
 
+def test_is_warmup_slot_reads_profile(monkeypatch) -> None:
+    orch = _orchestrator()
+
+    def fake_profile(_device_id: str, slot: str, *, brand: str) -> dict:
+        return {"warmup_enabled": slot == "7" and brand == "valcoin"}
+
+    monkeypatch.setattr(
+        "imouse_farm.integrations.slideshow_orchestrator.get_profile_for_device",
+        fake_profile,
+    )
+
+    assert orch._is_warmup_slot("7", "valcoin") is True
+    assert orch._is_warmup_slot("8", "valcoin") is False
+    assert orch._is_warmup_slot("7", "labely") is False
+
+
 @pytest.mark.asyncio
 async def test_generate_captions_for_slot_runs_after_gallery_exists(monkeypatch) -> None:
     from unittest.mock import AsyncMock, MagicMock

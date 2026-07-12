@@ -37,6 +37,17 @@ def test_set_profile_persists_handle_and_brand(tmp_path: Path) -> None:
     assert loaded["brand"] == "valcoin"
 
 
+def test_phone_dead_persists_on_load(tmp_path: Path) -> None:
+    store.set_phone_dead("slot:11", dead=True)
+    store._load_store()
+    assert store.is_phone_dead("slot:11") is True
+    labely = store.get_brand_profile("slot:11", "labely")
+    valcoin = store.get_brand_profile("slot:11", "valcoin")
+    assert labely["phone_dead"] is True
+    assert valcoin["phone_dead"] is True
+    assert labely["cant_cast_imouse"] is False
+
+
 def test_set_profile_persists_warmup_enabled() -> None:
     store.set_profile("slot:2", tiktok_handle="@acct", brand="labely", warmup_enabled=True)
     profile = store.get_brand_profile("slot:2", "labely")

@@ -11,9 +11,12 @@ def test_default_prompt_reads_filename_and_mentions_labely() -> None:
     prompt = DEFAULT_AI_PROMPT
     assert "filename" in prompt.lower()
     assert "labely" in prompt.lower()
-    assert "lowercase" in prompt.lower()
-    assert "gen z" in prompt.lower()
-    assert "do not use hyphens" in prompt.lower()
+    assert "sales copy" in prompt.lower()
+    assert "pain" in prompt.lower()
+    assert "punctuation" in prompt.lower()
+    assert "solution" in prompt.lower()
+    assert "clich" in prompt.lower()
+    assert "like" in prompt.lower()
 
 
 def test_valcoin_prompt_ignores_filenames_and_promotes_valcoin() -> None:

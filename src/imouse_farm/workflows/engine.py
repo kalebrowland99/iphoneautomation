@@ -51,9 +51,12 @@ from imouse_farm.vision.fallbacks import (
 )
 from imouse_farm.vision.template_scan import pick_detection_hit
 from imouse_farm.workflows.vision_recovery import (
-    ask_vision_for_recovery,
-    execute_recovery_action,
     kill_and_reopen_tiktok,
+    try_dismiss_blocking_popup,
+)
+from imouse_farm.workflows.vision_step_context import (
+    MAX_RECENT_ERRORS,
+    MAX_VISION_DISMISS_PER_WAIT,
 )
 
 logger = get_logger(__name__)
@@ -141,6 +144,7 @@ class WorkflowRunner:
         self._iteration_completed_by_recovery = False
         self._captions_auto_generated_posts: set[int] = set()
         self._pending_white_background_after_restart = False
+        self._recent_workflow_errors: list[str] = []
 
     @property
     def start_post_index(self) -> int:
@@ -154,6 +158,12 @@ class WorkflowRunner:
     def workflow_name(self) -> str:
         return self._workflow.name
 
+    def _record_workflow_error(self, step: WorkflowStepConfig, exc: Exception) -> None:
+        entry = f"{step.name}: {exc}"
+        self._recent_workflow_errors.append(entry)
+        if len(self._recent_workflow_errors) > MAX_RECENT_ERRORS:
+            self._recent_workflow_errors = self._recent_workflow_errors[-MAX_RECENT_ERRORS:]
+
     async def start(self) -> None:
         if self._running:
             return
@@ -161,6 +171,7 @@ class WorkflowRunner:
         self._running = True
         self._step_failed = False
         self._failure_message = ""
+        self._recent_workflow_errors = []
         self._run_id = await self._db.start_workflow_run(self._workflow.name, self._device_id)
         await self._device_manager.set_workflow(self._device_id, self._workflow.name)
         await self._device_manager.resume_workflow(self._device_id)
@@ -215,6 +226,7 @@ class WorkflowRunner:
                 self._tiktok_account_switch_recoveries = 0
                 self._iteration_completed_by_recovery = False
                 self._captions_auto_generated_posts = set()
+                self._recent_workflow_errors = []
                 await self._log_activity(
                     "info",
                     "workflow",
@@ -668,6 +680,7 @@ class WorkflowRunner:
                 await self._verify_screen_check(step)
         except Exception as exc:
             logger.error("step_failed", step=step.name, device_id=self._device_id, error=str(exc))
+            self._record_workflow_error(step, exc)
             await self._log_activity(
                 "error",
                 "workflow",
@@ -683,8 +696,7 @@ class WorkflowRunner:
                 failure_exc = getattr(self, "_pending_failure_exc", None) or exc
                 await self._handle_failure(step, failure_exc)
                 return
-            # Ask OpenAI Vision what to do to recover, then apply normal failure policy.
-            await self._vision_recover(step, exc)
+
             await self._handle_failure(step, exc)
 
     async def _execute_step_body(self, step: WorkflowStepConfig) -> None:
@@ -922,7 +934,12 @@ class WorkflowRunner:
                 step=step.name,
             )
 
-            await self._vision_recover(step, last_exc)
+            await kill_and_reopen_tiktok(
+                self._actions._controller,  # noqa: SLF001
+                self._device_id,
+                self._config,
+                log_activity=self._log_activity,
+            )
             await asyncio.sleep(self._config.timing.action_retry_delay_seconds)
 
             self._step_failed = False
@@ -1006,10 +1023,12 @@ class WorkflowRunner:
             self._device_id,
             device_manager=self._device_manager,
             vision=self._vision,
+            app_config=self._config,
             templates_directory=self._config.analysis.templates_directory,
             log_activity=lambda level, category, message, *args, **details: self._log_activity(
                 level, category, message, *args, step=parent_step, **details
             ),
+            recent_errors=self._recent_workflow_errors,
         )
 
     async def _reset_phone_recast_and_open_tiktok(self, *, parent_step: str) -> None:
@@ -1021,6 +1040,16 @@ class WorkflowRunner:
             step=parent_step,
         )
         await self._device_manager.reset_phone_and_recast(self._device_id)
+        from imouse_farm.actions.vpn_shadowrocket import ensure_vpn_on
+
+        await ensure_vpn_on(
+            self._device_manager.controller,
+            self._config,
+            self._device_id,
+            log_activity=lambda level, category, message, *args, **details: self._log_activity(
+                level, category, message, *args, step=parent_step, **details
+            ),
+        )
         await self._open_tiktok_from_home(parent_step=f"{parent_step}_phone_reset")
         self._pending_white_background_after_restart = True
         await self._log_activity(
@@ -1653,8 +1682,10 @@ class WorkflowRunner:
             device_manager=self._device_manager,
             templates_dir=self._config.analysis.templates_directory,
             vision=self._vision,
+            app_config=self._config,
             brand=self._brand,
             clear_popups=_clear_popups,
+            recent_errors=self._recent_workflow_errors,
         )
 
     async def _step_verify(self, step: WorkflowStepConfig) -> None:
@@ -1789,6 +1820,7 @@ class WorkflowRunner:
         attempts_since_restart = 0
         restart_count = 0
         phone_reset_used = False
+        vision_dismiss_count = 0
         tiktok_restart_enabled = restart_after > 0 and is_tiktok_workflow(self._workflow.name)
 
         await self._log_activity(
@@ -1844,6 +1876,35 @@ class WorkflowRunner:
                 )
                 return
 
+            if (
+                target == "plus"
+                and self._config.openai.enabled
+                and attempt >= 2
+                and attempt % 2 == 0
+                and vision_dismiss_count < MAX_VISION_DISMISS_PER_WAIT
+            ):
+                vision_dismiss_count += 1
+                dismissed = await try_dismiss_blocking_popup(
+                    self._actions._controller,  # noqa: SLF001
+                    self._device_id,
+                    app_config=self._config,
+                    step_name=step.name or "wait_for_plus",
+                    workflow_name=self._workflow.name or "tiktok_post",
+                    error_msg=f"'{target}' not detected on attempt {attempt}",
+                    recent_errors=self._recent_workflow_errors,
+                    log_activity=self._log_activity,
+                )
+                if dismissed:
+                    await self._log_activity(
+                        "info",
+                        "workflow",
+                        f"Vision dismissed overlay while waiting for {target} (attempt {attempt})",
+                        step=step.name,
+                        detection=target,
+                    )
+                    await asyncio.sleep(1.0)
+                    continue
+
             if tiktok_restart_enabled:
                 attempts_since_restart += 1
                 if attempts_since_restart >= restart_after and restart_count < max_restarts:
@@ -1894,77 +1955,8 @@ class WorkflowRunner:
 
         raise RuntimeError(f"Stopped while waiting for '{target}'")
 
-    def _vision_recovery_should_reopen_tiktok(self, step: WorkflowStepConfig) -> bool:
-        """Prep/end home/kill/album failures should not kill-reopen TikTok."""
-        workflow = self._workflow.name or ""
-        if workflow in ("tiktok_prep", "tiktok_valcoin_prep"):
-            return (step.name or "") in ("open_tiktok", "wait_for_tiktok_icon")
-        if workflow == "tiktok_end":
-            return False
-        return True
-
-    async def _vision_recover(self, step: WorkflowStepConfig, exc: Exception) -> None:
-        """On step failure: check for a blocking popup via OpenAI Vision.
-
-        - If a popup is found → tap to dismiss it.
-        - If no popup → kill TikTok and reopen it so the workflow can retry.
-        Best-effort: logs and continues to normal on_failure handler on any error.
-        """
-        from imouse_farm.workflows.vision_recovery import kill_and_reopen_tiktok
-
-        try:
-            controller = self._actions._controller  # noqa: SLF001
-            result = await ask_vision_for_recovery(
-                controller,
-                self._device_id,
-                step_name=step.name,
-                workflow_name=self._workflow.name,
-                error_msg=str(exc),
-                app_config=self._config,
-            )
-            if result.get("popup"):
-                # Dismiss the blocking popup.
-                await execute_recovery_action(
-                    controller,
-                    self._device_id,
-                    result,
-                    log_activity=self._log_activity,
-                )
-            else:
-                if self._vision_recovery_should_reopen_tiktok(step):
-                    await kill_and_reopen_tiktok(
-                        controller,
-                        self._device_id,
-                        self._config,
-                        log_activity=self._log_activity,
-                    )
-                else:
-                    await self._log_activity(
-                        "info",
-                        "workflow",
-                        "Vision recovery: no popup — skipping TikTok reopen for this step",
-                        step=step.name,
-                    )
-        except Exception as recovery_exc:
-            logger.warning(
-                "vision_recovery_skipped",
-                device_id=self._device_id,
-                step=step.name,
-                error=str(recovery_exc),
-            )
-            await self._log_activity(
-                "warn",
-                "workflow",
-                f"Vision recovery skipped: {type(recovery_exc).__name__}: {recovery_exc}",
-            )
-
     async def _verify_screen_check(self, step: WorkflowStepConfig) -> None:
-        """After a step succeeds, verify screen_check element is present.
-
-        If the expected element is not found, ask OpenAI Vision to recover.
-        The step is not re-run — we just attempt to fix the screen state and
-        continue. Detections can be a template stem or a short OCR keyword.
-        """
+        """After a step succeeds, verify screen_check element is present."""
         check = step.screen_check
         if not check:
             return
@@ -1976,13 +1968,11 @@ class WorkflowRunner:
             templates_dir = self._config.analysis.templates_directory
             template_path = Path(templates_dir) / f"{check}.jpg"
             if template_path.is_file():
-                # Template match — one screenshot + local OpenCV (~0.5–1.5s).
                 hit = await controller.find_template_on_device(
                     self._device_id, template_path, threshold=0.5
                 )
                 found = bool(hit)
             else:
-                # OCR keyword — SDK handles screenshot+OCR internally (~1–2s).
                 ocr = await controller.ocr_on_device(self._device_id)
                 found = bool(ocr and check.lower() in ocr.lower())
         except Exception as exc:
@@ -2005,11 +1995,7 @@ class WorkflowRunner:
             await self._log_activity(
                 "info",
                 "workflow",
-                f"Screen check FAILED — expected '{check}' after {step.name}, asking vision recovery",
-            )
-            await self._vision_recover(
-                step,
-                RuntimeError(f"screen_check: '{check}' not found after step '{step.name}'"),
+                f"Screen check FAILED — expected '{check}' after {step.name}",
             )
 
     async def _handle_failure(self, step: WorkflowStepConfig, exc: Exception) -> None:

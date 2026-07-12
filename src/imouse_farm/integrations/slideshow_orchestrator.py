@@ -736,9 +736,17 @@ class SlideshowOrchestrator:
 
         for idx, device in enumerate(selected, 1):
             slot = str(device.user_name)
+            is_warmup = self._is_warmup_slot(slot, job.brand)
 
-            # Step 1 — encode video for this slot only (skip if gallery already ready).
-            if self._slot_has_valid_videos(slot, job.brand, job=job):
+            # Step 1 — encode video for this slot only (skip warmup or when gallery ready).
+            if is_warmup:
+                await self._jobs.update(
+                    job_id,
+                    phase="batch",
+                    message=f"Phone {idx}/{total}: warmup for {slot}, skipping video…",
+                )
+                ok = True
+            elif self._slot_has_valid_videos(slot, job.brand, job=job):
                 await self._jobs.update(
                     job_id,
                     phase="automation",
@@ -775,51 +783,52 @@ class SlideshowOrchestrator:
                 await self._jobs.update(job_id, message=f"Phone {idx}/{total}: video failed for {slot}, skipping…")
                 continue
 
-            # Step 2 — captions need gallery MP4s from step 1.
-            run_valcoin_encode = (
-                chain_valcoin
-                and self._slot_chains_valcoin_post(job, slot)
-                and not self._is_warmup_slot(slot, "valcoin")
-            )
-            valcoin_encode_task: asyncio.Task[None] | None = None
-            if run_valcoin_encode:
-                await self._jobs.update(
-                    job_id,
-                    message=f"Phone {idx}/{total}: generating ValCoin video for {slot}…",
+            # Step 2 — captions need gallery MP4s from step 1 (warmup-only slots skip).
+            if not is_warmup:
+                run_valcoin_encode = (
+                    chain_valcoin
+                    and self._slot_chains_valcoin_post(job, slot)
+                    and not self._is_warmup_slot(slot, "valcoin")
                 )
-                valcoin_encode_task = asyncio.create_task(
-                    self._generate_brand_slideshows(
-                        "valcoin", [slot], parent_job_id=job_id
+                valcoin_encode_task: asyncio.Task[None] | None = None
+                if run_valcoin_encode:
+                    await self._jobs.update(
+                        job_id,
+                        message=f"Phone {idx}/{total}: generating ValCoin video for {slot}…",
                     )
-                )
+                    valcoin_encode_task = asyncio.create_task(
+                        self._generate_brand_slideshows(
+                            "valcoin", [slot], parent_job_id=job_id
+                        )
+                    )
 
-            if not await self._generate_captions_for_slot(
-                job_id,
-                device,
-                brand=job.brand,
-                slot_index=idx,
-                slot_total=total,
-            ):
-                if valcoin_encode_task is not None:
-                    valcoin_encode_task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await valcoin_encode_task
-                continue
-
-            if valcoin_encode_task is not None:
-                try:
-                    await valcoin_encode_task
-                except RuntimeError as exc:
-                    logger.warning("valcoin_slideshow_failed", slot=slot, error=str(exc))
-                    continue
                 if not await self._generate_captions_for_slot(
                     job_id,
                     device,
-                    brand="valcoin",
+                    brand=job.brand,
                     slot_index=idx,
                     slot_total=total,
                 ):
+                    if valcoin_encode_task is not None:
+                        valcoin_encode_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await valcoin_encode_task
                     continue
+
+                if valcoin_encode_task is not None:
+                    try:
+                        await valcoin_encode_task
+                    except RuntimeError as exc:
+                        logger.warning("valcoin_slideshow_failed", slot=slot, error=str(exc))
+                        continue
+                    if not await self._generate_captions_for_slot(
+                        job_id,
+                        device,
+                        brand="valcoin",
+                        slot_index=idx,
+                        slot_total=total,
+                    ):
+                        continue
 
             # Step 3 — run batch for this slot.
             await self._jobs.update(

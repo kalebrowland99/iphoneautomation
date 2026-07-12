@@ -53,12 +53,10 @@ def _labely_prep_steps() -> list[FlowStep]:
         ("Labely prep: home before kill", "prep-home"),
         ("Labely prep: kill apps", "prep-kill-apps"),
         ("Labely prep: home after kill", "prep-home"),
+        ("Labely prep: VPN OFF before album (production)", "prep-vpn-off-before-album"),
         ("Labely prep: clear gallery", "clear-album"),
         ("Labely prep: upload Labely videos", "upload-gallery"),
-        ("Labely prep: home before VPN", "prep-home"),
-        ("Labely prep: open Shadowrocket", "prep-tap-shadowrocket"),
-        ("Labely prep: turn VPN on", "prep-tap-vpn-on"),
-        ("Labely prep: home after VPN", "prep-home"),
+        ("Labely prep: turn VPN on (shortcut)", "prep-vpn-shortcut-on"),
         ("Labely prep: open TikTok", "tap-tiktok"),
     ]
 
@@ -66,16 +64,13 @@ def _labely_prep_steps() -> list[FlowStep]:
 def _valcoin_prep_steps() -> list[FlowStep]:
     """config/workflows/tiktok_valcoin_prep.yaml execute_action steps."""
     return [
-        ("ValCoin prep: home before VPN off", "prep-home"),
-        ("ValCoin prep: open Shadowrocket", "valcoin-prep-tap-shadowrocket"),
-        ("ValCoin prep: turn VPN off", "valcoin-prep-tap-vpn-off"),
-        ("ValCoin prep: home after VPN off", "prep-home"),
+        # Reset TikTok after Labely posts (especially when skip-media skips post-go-home).
+        ("ValCoin prep: kill apps", "end-kill-apps"),
+        ("ValCoin prep: home", "prep-home"),
+        ("ValCoin prep: VPN OFF before album (production)", "prep-vpn-off-before-album"),
         ("ValCoin prep: clear gallery", "valcoin-prep-clear-album"),
         ("ValCoin prep: upload ValCoin videos", "valcoin-prep-upload-gallery"),
-        ("ValCoin prep: home before VPN on", "prep-home"),
-        ("ValCoin prep: open Shadowrocket", "prep-tap-shadowrocket"),
-        ("ValCoin prep: turn VPN on", "prep-tap-vpn-on"),
-        ("ValCoin prep: home after VPN", "prep-home"),
+        ("ValCoin prep: turn VPN on (shortcut)", "prep-vpn-shortcut-on"),
         ("ValCoin prep: open TikTok", "tap-tiktok"),
     ]
 
@@ -86,24 +81,19 @@ def _end_steps() -> list[FlowStep]:
         ("End: home before kill", "prep-home"),
         ("End: kill apps", "end-kill-apps"),
         ("End: home after kill", "prep-home"),
-        ("End: open Shadowrocket", "end-tap-shadowrocket"),
-        ("End: turn VPN off", "end-tap-vpntoggle"),
-        ("End: home", "prep-home"),
+        ("End: turn VPN off (shortcut)", "prep-vpn-shortcut-off"),
     ]
 
 
 def _warmup_steps() -> list[FlowStep]:
     """ValCoin warmup from cold start: VPN on → open TikTok → switch account → scroll → exit → VPN off."""
     return [
-        ("Warmup: open Shadowrocket", "prep-tap-shadowrocket"),
-        ("Warmup: turn VPN on", "prep-tap-vpn-on"),
-        ("Warmup: home", "prep-home"),
+        ("Warmup: turn VPN on (shortcut)", "prep-vpn-shortcut-on"),
         ("Warmup: open TikTok", "tap-tiktok"),
         ("Warmup: switch to ValCoin @", "account-ensure-full"),
         ("Warmup: run 2min scroll", "warmup-run"),
         ("Warmup: home after scroll", "prep-home"),
-        ("Warmup: open Shadowrocket", "end-tap-shadowrocket"),
-        ("Warmup: turn VPN off", "end-tap-vpntoggle"),
+        ("Warmup: turn VPN off (shortcut)", "prep-vpn-shortcut-off"),
         ("Warmup: home", "prep-home"),
     ]
 
@@ -121,8 +111,7 @@ def _warmup_steps_post_labely() -> list[FlowStep]:
         ("Warmup: switch to ValCoin @", "account-ensure-full"),
         ("Warmup: run 2min scroll", "warmup-run"),
         ("Warmup: home after scroll", "prep-home"),
-        ("Warmup: open Shadowrocket", "end-tap-shadowrocket"),
-        ("Warmup: turn VPN off", "end-tap-vpntoggle"),
+        ("Warmup: turn VPN off (shortcut)", "prep-vpn-shortcut-off"),
         ("Warmup: home", "prep-home"),
     ]
 

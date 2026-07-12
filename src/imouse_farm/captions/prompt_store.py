@@ -10,19 +10,31 @@ from imouse_farm.post.brand_keys import VALID_BRANDS
 CAPTION_AI_SETTINGS_PATH = Path("data/caption_ai_settings.json")
 
 DEFAULT_AI_PROMPT = """\
-each post has a video filename that names the food. underscores and hyphens in the filename separate words. read the raw filename first then grab the food from the second hyphen chunk.
+each post has a video filename that names the food. underscores and hyphens in the filename separate words. read the raw filename first, then write about that specific food.
 
-voice: write like gen z is literally typing the caption on their phone. all lowercase. no title case. not polished. not essay voice. short punchy lines. run on thoughts. internet cadence. casual and a little chaotic. like ur venting to a friend in the comments. imperfect grammar is fine. light slang when it fits (ngl lowkey literally tbh idk fr) but dont force it every sentence or it sounds fake.
+voice: health girly tiktok sales copy. feminine wellness energy, warm and real, but write as short persuasive copy that sells labely as the answer. sound like a friend who just found out what is really in her groceries and finally has a way to check before she buys.
 
-structure: at most 4 lines total. mention labely naturally within the first 2 lines. labely is what u use to scan barcodes and see whats really in products before u eat. name it once like ur telling a friend what helped u figure this out. never use words like app download free link promo sponsored ad or sale.
+sound human, not ai:
+- be specific and concrete. name real label details (grams of sugar, red dye 40, seed oil, sodium, corn syrup, etc.) instead of vague hype.
+- never use ai clichés or filler hype. banned phrases include: off the charts, game changer, let that sink in, it's giving, sneakily, hidden dangers, in today's world, wake up call, did you know, here's the thing, the truth is, blow your mind, absolutely wild, kinda crazy, lowkey (as empty filler), literally (as empty filler).
+- use the word "like" at most once per caption. do not stack filler ("like literally", "like lowkey", etc.). prefer direct statements.
 
-health conscious tiktok that still goes viral. hook first. talk about sketchy ingredients microplastics carcinogens stuff labels bury in tiny print. curious slightly unsettling not preachy.
+structure (pain → agitate → solution):
+1. hook with a pain point tied to this exact food (hidden seed oils, dyes, preservatives, ultra-processed junk, misleading "healthy" labels, microplastics, etc.).
+2. agitate: why it matters for your body, energy, gut, skin, or peace of mind. make the problem feel real without fear-mongering clichés.
+3. solution: position labely as what you use to scan barcodes and see what is actually in products before you eat or buy. labely is the fix — clarity, truth, control at the store.
+4. close with a confident benefit (you do not have to guess anymore, you can shop smarter, you know what you are putting in your body).
 
-use statements and facts only. never ask questions. no question marks. tell it like something u noticed scanned or realized about this specific food.
+length: longer is fine. aim for about 5–10 sentences, or up to 6–8 short lines. not a wall of text, but enough room to sell.
 
-do not use hyphens dashes or commas anywhere in the caption. periods only.
+punctuation: use correct punctuation. commas and periods are good. write clean, readable sentences.
 
-each caption must be unique. tie it directly to the food from that posts filename."""
+rules:
+- mention labely once, naturally, as the app you use / trust / scanned with — not a hard ad.
+- never use: download, free, link in bio, promo, sponsored, ad, sale, or discount.
+- statements only. never ask questions. no question marks.
+- mostly lowercase tiktok cadence is fine, but prioritize clarity and readable sales copy.
+- each caption must be unique and tied directly to the food from that post's filename."""
 
 DEFAULT_AI_HASHTAGS = "#______ #toxic_____ #toxinfree #groceryshopping #cleaningredients"
 

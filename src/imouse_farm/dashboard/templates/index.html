@@ -279,6 +279,7 @@
                                     <div class="segmented-control">
                                         <label class="segment"><input type="radio" name="debug-flow-select" value="flow" checked onchange="switchDebugFlow(this.value)"><span>Full (Labely + ValCoin)</span></label>
                                         <label class="segment"><input type="radio" name="debug-flow-select" value="warmup_flow" onchange="switchDebugFlow(this.value)"><span>Labely + Warmup</span></label>
+                                        <label class="segment"><input type="radio" name="debug-flow-select" value="account_switch" onchange="switchDebugFlow(this.value)"><span>Account</span></label>
                                         <label class="segment"><input type="radio" name="debug-flow-select" value="all" onchange="switchDebugFlow(this.value)"><span>All tests</span></label>
                                     </div>
                                 </div>
@@ -294,6 +295,7 @@
                                     <button type="button" class="btn-ghost" id="btn-debug-upload-all" onclick="runGalleryUploadAllDebug()" title="Run gallery upload on every registered phone, one at a time — logs OK, timeout, or error per slot">Test upload all</button>
                                     <button type="button" class="btn-ghost btn-kill" id="btn-debug-kill" onclick="killDebugTest()" disabled>Stop test</button>
                                     <button type="button" class="btn-ghost" onclick="captureScreen()">Screenshot</button>
+                                    <button type="button" class="btn-ghost" id="btn-debug-caption-preview" onclick="previewAiCaptions()" title="Generate fresh AI onscreen text and captions for the selected phone without saving">Preview AI captions</button>
                                 </div>
                         </div>
                     </details>
@@ -305,6 +307,26 @@
     </div>
 
     <input type="checkbox" id="debug-skip-post" class="hidden">
+
+    <div id="caption-preview-backdrop" class="caption-preview-backdrop hidden" onclick="closeCaptionPreview(event)">
+        <div class="caption-preview-dialog" role="dialog" aria-labelledby="caption-preview-title" onclick="event.stopPropagation()">
+            <header class="caption-preview-head">
+                <div>
+                    <h2 id="caption-preview-title" class="caption-preview-title">AI caption preview</h2>
+                    <p id="caption-preview-subtitle" class="caption-preview-subtitle"></p>
+                </div>
+                <button type="button" class="btn-ghost btn-sm" onclick="closeCaptionPreview()">Close</button>
+            </header>
+            <div id="caption-preview-body" class="caption-preview-body"></div>
+            <footer class="caption-preview-foot">
+                <p class="caption-preview-hint">Preview only — nothing is saved until you apply.</p>
+                <div class="btn-row">
+                    <button type="button" class="btn-ghost" onclick="closeCaptionPreview()">Dismiss</button>
+                    <button type="button" class="btn-ghost btn-primary-outline" id="btn-caption-preview-apply" onclick="applyCaptionPreview()">Apply to post content</button>
+                </div>
+            </footer>
+        </div>
+    </div>
 
     <script>
         window.__FARM__ = { slots: __FARM_SLOTS__, brand: '__BRAND_ID__', accent: '__ACCENT_COLOR__' };

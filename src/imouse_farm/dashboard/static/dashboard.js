@@ -348,10 +348,21 @@ function stopSlideshowPoll() {
             }
         }
 
+        function allSelectedSlotsWarmupOnly() {
+            if (BRAND_ID !== 'valcoin') return false;
+            ensureBatchSelectionDefaults();
+            const slots = [...batchSelectedSlots];
+            if (!slots.length) return false;
+            return slots.every((slot) => {
+                const profile = slotProfiles[`slot:${slot}`] || slotToDevice[slot]?.account_profile || {};
+                return Boolean(profile.warmup_enabled);
+            });
+        }
+
         async function startDailyRun() {
             void tileSplitWindows();
             const fromPost = getSelectedFromPost('batch-from-post');
-            if (fromPost !== null) {
+            if (fromPost !== null || allSelectedSlotsWarmupOnly()) {
                 await startFarmBatch({ skipConfirm: true });
             } else {
                 await generateAndRunSlideshow();
@@ -647,15 +658,27 @@ async function stopDailyRun() {
             return slots;
         }
 
+        function slotProfile(slot) {
+            return slotToDevice[slot]?.account_profile || slotProfiles[`slot:${slot}`] || null;
+        }
+
+        function isPhoneDead(slot) {
+            return Boolean(slotProfile(slot)?.phone_dead);
+        }
+
+        function selectableBatchSlots() {
+            return registeredSlots().filter(s => !isPhoneDead(s));
+        }
+
         function ensureBatchSelectionDefaults() {
             const reg = registeredSlots();
             batchSelectedSlots.forEach(s => {
-                if (!slotToDevice[s]) batchSelectedSlots.delete(s);
+                if (!slotToDevice[s] || isPhoneDead(s)) batchSelectedSlots.delete(s);
             });
             // Only auto-select all on first visit for this brand (no saved preference yet).
             if (localStorage.getItem(batchSelectionStorageKey()) !== null) return;
-            if (!batchSelectedSlots.size && reg.length) {
-                reg.forEach(s => batchSelectedSlots.add(s));
+            if (!batchSelectedSlots.size && selectableBatchSlots().length) {
+                selectableBatchSlots().forEach(s => batchSelectedSlots.add(s));
                 saveBatchSelection();
             }
         }
@@ -668,7 +691,7 @@ async function stopDailyRun() {
         }
 
         function toggleBatchSlot(slot, checked) {
-            if (!slotToDevice[slot]) return;
+            if (!slotToDevice[slot] || isPhoneDead(slot)) return;
             if (checked) batchSelectedSlots.add(slot);
             else batchSelectedSlots.delete(slot);
             saveBatchSelection();
@@ -683,7 +706,7 @@ async function stopDailyRun() {
         function updateBatchSelectAllCheckbox() {
             const master = document.getElementById('batch-select-all');
             if (!master) return;
-            const reg = registeredSlots();
+            const reg = selectableBatchSlots();
             const picked = reg.filter(s => batchSelectedSlots.has(s));
             master.checked = reg.length > 0 && picked.length === reg.length;
             master.indeterminate = picked.length > 0 && picked.length < reg.length;
@@ -691,7 +714,7 @@ async function stopDailyRun() {
         }
 
         function selectAllBatchSlots() {
-            registeredSlots().forEach(s => batchSelectedSlots.add(s));
+            selectableBatchSlots().forEach(s => batchSelectedSlots.add(s));
             saveBatchSelection();
             renderFarmGrid();
         }
@@ -705,7 +728,8 @@ async function stopDailyRun() {
         function setBatchPickerEnabled(enabled) {
             document.querySelectorAll('#farm-grid .phones-table-row input[type="checkbox"]').forEach(cb => {
                 const row = cb.closest('.phones-table-row');
-                cb.disabled = row?.classList.contains('empty') || !enabled;
+                const slot = row?.dataset?.slot;
+                cb.disabled = row?.classList.contains('empty') || !enabled || isPhoneDead(slot);
             });
             const master = document.getElementById('batch-select-all');
             if (master) master.disabled = !enabled || !registeredSlots().length;
@@ -798,10 +822,14 @@ async function stopDailyRun() {
                 const warmupEnabled = BRAND_ID === 'valcoin' && Boolean(profile?.warmup_enabled);
                 const warmupDays = parseInt(profile?.warmup_days_completed || 0, 10);
                 const cantCast = Boolean(profile?.cant_cast_imouse);
+                const phoneDead = isPhoneDead(key);
+                const uiLabel = d?.ui_label || '';
                 const runCell = lastRunCell(profile);
+                const canSelect = hasDevice && !phoneDead;
                 const classes = [
                     'phones-table-row',
                     hasDevice ? '' : 'empty',
+                    phoneDead ? 'dead' : '',
                     selected ? 'selected' : '',
                     pipe && pipe.status === 'running' ? 'running' : '',
                 ].filter(Boolean).join(' ');
@@ -810,8 +838,8 @@ async function stopDailyRun() {
                 <tr class="${classes}" data-slot="${key}" data-selected="${selected ? 'true' : 'false'}"
                     title="${title}" onclick="selectSlot('${key}')">
                     <td class="phones-td phones-td-check" onclick="event.stopPropagation()">
-                        <input type="checkbox" class="phones-check" ${hasDevice ? '' : 'disabled'}
-                               ${checked ? 'checked' : ''}
+                        <input type="checkbox" class="phones-check" ${canSelect ? '' : 'disabled'}
+                               ${checked && canSelect ? 'checked' : ''}
                                onchange="toggleBatchSlot('${key}', this.checked)"
                                aria-label="Include phone ${key}">
                     </td>
@@ -819,7 +847,9 @@ async function stopDailyRun() {
                     <td class="phones-td phones-td-handle">
                         ${tiktokHandleCell(handle)}
                         ${BRAND_ID === 'valcoin' ? `<span class="warmup-day-badge">${warmupDays > 0 ? `Day ${warmupDays} Warmup ✓` : 'Day 0 Warmup'}</span>` : ''}
+                        ${phoneDead ? `<span class="phone-dead-badge">phone dead</span>` : ''}
                         ${cantCast ? `<span class="cant-cast-badge" title="Click to clear tag" onclick="event.stopPropagation(); clearCantCast('${key}')">⚠ cant cast iMouse</span>` : ''}
+                        ${uiLabel ? `<span class="ui-label-badge" title="This phone uses alternate TikTok UI coordinates">${escapeHtml(uiLabel)}</span>` : ''}
                     </td>
                     <td class="phones-td">
                         <div class="phones-status-cell">
@@ -829,7 +859,7 @@ async function stopDailyRun() {
                         </div>
                     </td>
                     <td class="phones-td phones-td-warmup" onclick="event.stopPropagation()">
-                        <input type="checkbox" class="phones-check" ${hasDevice ? '' : 'disabled'}
+                        <input type="checkbox" class="phones-check" ${canSelect ? '' : 'disabled'}
                                ${warmupEnabled ? 'checked' : ''}
                                onchange="toggleWarmupSlot('${key}', this.checked)"
                                aria-label="Warmup only (no posting) for phone ${key}">
@@ -1900,6 +1930,106 @@ async function stopDailyRun() {
                 appendRunLog(`Cleared cant cast tag for slot ${slot}`, 'info', 'batch');
                 refreshFarmDevices({ quiet: true });
             } catch (err) { alert(`Clear failed: ${err.message}`); }
+        }
+
+        let captionPreviewPosts = null;
+
+        function escapeHtml(text) {
+            return String(text || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        function renderCaptionPreviewModal(result) {
+            const backdrop = document.getElementById('caption-preview-backdrop');
+            const body = document.getElementById('caption-preview-body');
+            const subtitle = document.getElementById('caption-preview-subtitle');
+            if (!backdrop || !body) return;
+
+            const posts = [...(result.posts || [])].sort((a, b) => a.post - b.post);
+            captionPreviewPosts = posts;
+
+            const label = result.label || result.slot || 'selected phone';
+            if (subtitle) {
+                subtitle.textContent = `Phone ${label} · ${result.brand || BRAND_ID} · preview only`;
+            }
+
+            body.innerHTML = posts.map((p) => {
+                const file = p.media_file || p.food_name || '';
+                const onscreen = p.onscreen || '(empty)';
+                const final = p.final || '(empty)';
+                return `
+                    <article class="caption-preview-post">
+                        <div class="caption-preview-post-head">
+                            <strong>Post ${p.post}</strong>
+                            ${file ? `<span>${escapeHtml(file)}</span>` : ''}
+                        </div>
+                        <div class="caption-preview-block">
+                            <span class="caption-preview-label">Onscreen text</span>
+                            <p class="caption-preview-text">${escapeHtml(onscreen)}</p>
+                        </div>
+                        <div class="caption-preview-block">
+                            <span class="caption-preview-label">Caption</span>
+                            <p class="caption-preview-text">${escapeHtml(final)}</p>
+                        </div>
+                    </article>
+                `;
+            }).join('') || '<p class="caption-preview-hint">No posts returned.</p>';
+
+            backdrop.classList.remove('hidden');
+        }
+
+        function closeCaptionPreview(event) {
+            if (event && event.target && event.currentTarget !== event.target) return;
+            const backdrop = document.getElementById('caption-preview-backdrop');
+            if (backdrop) backdrop.classList.add('hidden');
+        }
+
+        async function applyCaptionPreview() {
+            if (!deviceId || !captionPreviewPosts?.length) return;
+            for (const p of captionPreviewPosts) {
+                const on = document.getElementById(`onscreen-${p.post}`);
+                const fin = document.getElementById(`final-${p.post}`);
+                if (on) on.value = p.onscreen || '';
+                if (fin) fin.value = p.final || '';
+            }
+            try {
+                await flushPostTextSaves();
+                closeCaptionPreview();
+                showBanner('Preview applied to post content');
+            } catch (err) {
+                showBanner(err.message || String(err));
+            }
+        }
+
+        async function previewAiCaptions() {
+            if (!deviceId) {
+                showBanner('Select a phone in the table first');
+                return;
+            }
+            const btn = document.getElementById('btn-debug-caption-preview');
+            const body = {
+                prompt: document.getElementById('ai-prompt')?.value || '',
+                hashtags: document.getElementById('ai-hashtags')?.value || '',
+                onscreen_template: document.getElementById('onscreen-template')?.value || null,
+                brand: BRAND_ID,
+            };
+            if (btn) btn.disabled = true;
+            try {
+                await flushCaptionAiSettings();
+                const res = await api(`/devices/${enc(deviceId)}/caption-ai/preview`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                renderCaptionPreviewModal(res);
+            } catch (err) {
+                showBanner(err.message || String(err));
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         }
 
         async function generateAiCaptions(allPhones = true) {

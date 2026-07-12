@@ -52,6 +52,40 @@ async def test_wait_for_plus_returns_immediately_on_first_hit(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+async def test_wait_for_plus_uses_vision_after_two_misses(monkeypatch: pytest.MonkeyPatch) -> None:
+    controller = MagicMock()
+    controller.find_template_on_device = AsyncMock(return_value=None)
+    app_config = MagicMock()
+
+    dismiss = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "imouse_farm.workflows.vision_recovery.try_dismiss_blocking_popup",
+        dismiss,
+    )
+    monkeypatch.setattr(
+        "imouse_farm.workflows.tiktok_plus_ready.asyncio.sleep",
+        AsyncMock(),
+    )
+
+    with pytest.raises(RuntimeError, match="\\+ button not visible"):
+        await wait_for_tiktok_plus_visible(
+            controller,
+            "dev-1",
+            app_config=app_config,
+            templates_directory="config/templates",
+            timeout_seconds=0.5,
+            poll_seconds=0.1,
+        )
+
+    assert dismiss.await_count >= 1
+    first = dismiss.await_args_list[0]
+    assert first.args[0] is controller
+    assert first.args[1] == "dev-1"
+    assert first.kwargs["step_name"] == "wait_for_plus"
+    assert first.kwargs["workflow_name"] == "tiktok"
+
+
+@pytest.mark.asyncio
 async def test_wait_for_plus_times_out() -> None:
     controller = MagicMock()
     controller.find_template_on_device = AsyncMock(return_value=None)

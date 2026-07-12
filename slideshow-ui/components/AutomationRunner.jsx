@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import ConfigPanel from "@/components/ConfigPanel";
 import VideoPreview from "@/components/VideoPreview";
 import LabelyScanSequencePreview from "@/components/LabelyScanSequencePreview";
+import LabelyOutroPreview from "@/components/LabelyOutroPreview";
 import GalleryRail from "@/components/GalleryRail";
 import AutomationProgressPanel from "@/components/AutomationProgressPanel";
 import BraveSearchUsageBar from "@/components/BraveSearchUsageBar";
@@ -388,6 +389,14 @@ export default function AutomationRunner() {
                         currentSlide={currentSlide}
                         setCurrentSlide={setCurrentSlide}
                         totalSlides={totalSlides}
+                      />
+                    ) : null}
+                    {isLabely ? (
+                      <LabelyOutroPreview
+                        config={config}
+                        setConfig={setConfig}
+                        currentSlide={currentSlide}
+                        setCurrentSlide={setCurrentSlide}
                       />
                     ) : null}
                     <VideoPreview

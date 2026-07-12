@@ -12,23 +12,14 @@ home_tab:
   x: 60
   y: 1041
 
-# UI 1: tap display name area on profile to open account switcher.
+# Primary: tap display name on profile to open account switcher (try first).
 account_switcher_opener:
-  x: 301
-  y: 288
-
-# Retry if the first opener tap misses or opens the wrong sheet.
-account_switcher_opener_alt:
   x: 293
   y: 249
 
-# UI 2: if primary hits Total Likes instead, dismiss OK then tap here.
-account_likes_dismiss_ok:
-  x: 308
-  y: 766
-
-account_switcher_opener_fallback:
-  x: 136
-  y: 156
+# Alt: retry if primary tap misses or @ list not visible.
+account_switcher_opener_alt:
+  x: 301
+  y: 288
 
 account_name_search_rect_pct: [0.0, 0.0, 1.0, 0.35]

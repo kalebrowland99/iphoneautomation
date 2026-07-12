@@ -10,13 +10,10 @@ from typing import Any, Callable
 from imouse_farm.actions.cancel import is_cancelled
 from imouse_farm.actions.permission_prompts import is_tiktok_live_feed_dialog
 from imouse_farm.actions.vpn_shadowrocket import (
-    SHADOWROCKET_ICON_X,
-    SHADOWROCKET_ICON_Y,
-    TEMPLATE_THRESHOLD,
     TIKTOK_HOME_ICON_X,
     TIKTOK_HOME_ICON_Y,
-    VPN_TOGGLE_X,
-    VPN_TOGGLE_Y,
+    ensure_vpn_off,
+    ensure_vpn_on,
 )
 from imouse_farm.config.models import AppConfig
 from imouse_farm.post.account_profile_store import (
@@ -216,6 +213,7 @@ async def _ensure_account_for_warmup(
             log_activity=log_activity,
             device_manager=device_manager,
             templates_dir=app_config.analysis.templates_directory,
+            app_config=app_config,
             brand="labely",
             device_user_name=device.user_name,
             toggle_to_opposite=True,
@@ -232,6 +230,7 @@ async def _ensure_account_for_warmup(
         log_activity=log_activity,
         device_manager=device_manager,
         templates_dir=app_config.analysis.templates_directory,
+        app_config=app_config,
         brand=brand,
         device_user_name=device.user_name,
         tiktok_ready_timeout_seconds=180.0,
@@ -291,6 +290,7 @@ async def _reopen_tiktok_for_warmup_retry(
         device_id,
         device_manager=device_manager,
         templates_directory=app_config.analysis.templates_directory,
+        app_config=app_config,
         log_activity=log_activity,
         timeout_seconds=180.0,
     )
@@ -427,33 +427,12 @@ async def _teardown_after_warmup(
     app_config: AppConfig,
     log_activity: Any | None = None,
 ) -> None:
-    """Home → open Shadowrocket → turn VPN off → home. Mirrors debug _warmup_steps_post_labely."""
-    from pathlib import Path
-
-    templates_dir = app_config.analysis.templates_directory
-    blue_path = Path(templates_dir) / "bluetoggle.jpg"
-
-    await controller.press_home(device_id)
-    await asyncio.sleep(1.5)
-
-    await controller.tap(device_id, SHADOWROCKET_ICON_X, SHADOWROCKET_ICON_Y)
-    await asyncio.sleep(2.0)
-
-    if blue_path.is_file():
-        vpn_on = await controller.find_template_on_device(
-            device_id, blue_path, threshold=TEMPLATE_THRESHOLD
-        )
-        if vpn_on:
-            await controller.tap(device_id, VPN_TOGGLE_X, VPN_TOGGLE_Y)
-            await asyncio.sleep(3.0)
-            if log_activity:
-                await log_activity("info", "batch", "Warmup: VPN turned off", device_id)
-        else:
-            if log_activity:
-                await log_activity("info", "batch", "Warmup: VPN already off", device_id)
-
-    await controller.press_home(device_id)
-    await asyncio.sleep(1.0)
+    """Turn VPN off via URL shortcut after warmup scroll."""
+    await ensure_vpn_off(
+        controller, app_config, device_id, log_activity=log_activity
+    )
+    if log_activity:
+        await log_activity("info", "batch", "Warmup: VPN off (shortcut)", device_id)
     logger.info("warmup_teardown_done", device_id=device_id)
 
 
@@ -511,31 +490,7 @@ async def _ensure_vpn_on(
     log_activity: Any | None = None,
 ) -> None:
     """Open Shadowrocket and turn VPN on if it's currently off."""
-    from pathlib import Path
-
-    templates_dir = app_config.analysis.templates_directory
-    grey_path = Path(templates_dir) / "greytoggle.jpg"
-
-    await controller.press_home(device_id)
-    await asyncio.sleep(0.5)
-    await controller.tap(device_id, SHADOWROCKET_ICON_X, SHADOWROCKET_ICON_Y)
-    await asyncio.sleep(2.0)
-
-    if grey_path.is_file():
-        vpn_off = await controller.find_template_on_device(
-            device_id, grey_path, threshold=TEMPLATE_THRESHOLD
-        )
-        if vpn_off:
-            await controller.tap(device_id, VPN_TOGGLE_X, VPN_TOGGLE_Y)
-            await asyncio.sleep(3.0)
-            if log_activity:
-                await log_activity("info", "batch", "Warmup: VPN turned on", device_id)
-        else:
-            if log_activity:
-                await log_activity("info", "batch", "Warmup: VPN already on", device_id)
-
-    await controller.press_home(device_id)
-    await asyncio.sleep(1.0)
+    await ensure_vpn_on(controller, app_config, device_id, log_activity=log_activity)
 
 
 async def _wait_with_live_watch(

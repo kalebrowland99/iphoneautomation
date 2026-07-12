@@ -52,12 +52,8 @@ from imouse_farm.post.post_caption_store import (
 from imouse_farm.utils.gallery import list_media_files, phone_gallery_folder, slots_with_media
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.actions.vpn_shadowrocket import (
-    SHADOWROCKET_ICON_X,
-    SHADOWROCKET_ICON_Y,
     TIKTOK_HOME_ICON_X,
     TIKTOK_HOME_ICON_Y,
-    VPN_TOGGLE_X,
-    VPN_TOGGLE_Y,
 )
 from imouse_farm.dashboard.flow_debug import (
     FLOW_DEBUG_STEPS,
@@ -99,6 +95,8 @@ DebugKind = Literal[
     "close_app",
     "kill_app",
     "home",
+    "vpn_shortcut",
+    "vpn_off_before_album",
     "account_switch_step",
     "slideshow_generate",
     "vision_navigate",
@@ -148,23 +146,28 @@ _POST_DEBUG_LIST_PRIORITY = (
 
 _END_DEBUG_LIST_PRIORITY = (
     "end-kill-apps",
-    "end-tap-shadowrocket",
-    "end-tap-vpntoggle",
+    "prep-vpn-shortcut-off",
 )
 
 _ACCOUNT_SWITCH_DEBUG_LIST_PRIORITY = (
-    "account-ensure-current",
-    "account-ensure-full",
+    # Step-by-step switch (A→Z from step 1)
     "account-tap-profile-tab",
-    "account-open-switcher",
+    "account-switcher-tap-primary",
+    "account-switcher-tap-alt",
+    "account-switcher-verify-handle",
     "account-pick-handle",
     "account-tap-home-tab",
+    # Optional recovery after switch
     "account-swipe-continue-editing",
     "account-scan-popups",
     "account-dismiss-popup",
     "account-run-permission-watcher",
     "account-dismiss-security-checkup",
     "account-dismiss-add-phone",
+    # Production shortcuts (run alone — not part of step chain)
+    "account-open-switcher",
+    "account-ensure-current",
+    "account-ensure-full",
 )
 
 OFFLINE_HINT = "Device offline — click Connect AirPlay first"
@@ -246,34 +249,15 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "clear-album": {
-        "label": "Clear photo library (Labely prep — VPN stays off)",
+        "label": "Clear photo library (VPN off first)",
         "kind": "album_clear",
         "group": "prep",
-        "skip_vpn_off": True,
         "offline_hint": OFFLINE_HINT,
     },
     "prep-kill-apps": {
         "label": "Prep: Force-quit apps (App btn, swipe up ×5)",
         "kind": "kill_app",
         "group": "prep",
-        "offline_hint": OFFLINE_HINT,
-    },
-    "prep-tap-shadowrocket": {
-        "label": f"Prep: Tap Shadowrocket ({SHADOWROCKET_ICON_X}, {SHADOWROCKET_ICON_Y})",
-        "kind": "tap_xy",
-        "group": "prep",
-        "x": SHADOWROCKET_ICON_X,
-        "y": SHADOWROCKET_ICON_Y,
-        "hint": "Home screen first. Fixed icon coordinate.",
-        "offline_hint": OFFLINE_HINT,
-    },
-    "prep-tap-vpn-on": {
-        "label": f"Prep: Tap VPN toggle ON ({VPN_TOGGLE_X}, {VPN_TOGGLE_Y})",
-        "kind": "tap_xy",
-        "group": "prep",
-        "x": VPN_TOGGLE_X,
-        "y": VPN_TOGGLE_Y,
-        "hint": "Open Shadowrocket first. Phones start VPN off; one tap turns on.",
         "offline_hint": OFFLINE_HINT,
     },
     "prep-swipe-unlock": {
@@ -299,7 +283,9 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "prep",
         "x": TIKTOK_HOME_ICON_X,
         "y": TIKTOK_HOME_ICON_Y,
-        "hint": "Home screen — fixed dock icon coordinate.",
+        "wait_for_tiktok_ready": True,
+        "tiktok_ready_timeout_seconds": 120.0,
+        "hint": "Home screen — opens TikTok and waits for the + button (home feed ready).",
         "offline_hint": OFFLINE_HINT,
     },
     "list-album": {
@@ -337,7 +323,7 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "texts": ["Not Connected", "NOT CONNECTED"],
         "open_shadowrocket": True,
         "expect_missing": True,
-        "hint": "Opens Shadowrocket; VPN is on when Not Connected is absent.",
+        "hint": "Opens Shadowrocket via URL shortcut; VPN is on when Not Connected is absent.",
         "offline_hint": OFFLINE_HINT,
     },
     "detect-vpn-off": {
@@ -346,7 +332,73 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "prep",
         "texts": ["Not Connected", "NOT CONNECTED"],
         "open_shadowrocket": True,
-        "hint": "Opens Shadowrocket; VPN is off when Not Connected is visible.",
+        "hint": "Opens Shadowrocket via URL shortcut; VPN is off when Not Connected is visible.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-shortcut-on": {
+        "label": "Prep: VPN ON via URL shortcut (browser)",
+        "kind": "vpn_shortcut",
+        "group": "prep",
+        "mode": "on",
+        "hint": (
+            "Opens vpn.shortcut_url_on via iMouse shortcut_exec_url. "
+            "Default: shadowrocket://connect — edit config.yaml if you use a custom Shortcuts URL."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-open-shadowrocket-shortcut": {
+        "label": "Prep: Open Shadowrocket via URL shortcut (browser)",
+        "kind": "vpn_shortcut",
+        "group": "prep",
+        "mode": "open",
+        "press_home_after": False,
+        "hint": (
+            "Opens vpn.shortcut_url_open via iMouse shortcut_exec_url. "
+            "Default: shadowrocket:// — stays on Shadowrocket (no home press)."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-shortcut-off": {
+        "label": "Prep: VPN OFF via URL shortcut (browser)",
+        "kind": "vpn_shortcut",
+        "group": "prep",
+        "mode": "off",
+        "hint": (
+            "Opens vpn.shortcut_url_off via iMouse shortcut_exec_url. "
+            "Default: shadowrocket://disconnect. "
+            "For the exact clear_album production preamble, use "
+            "'VPN OFF before album (production)' instead."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-off-before-album": {
+        "label": "Prep: VPN OFF before album (production clear_album path)",
+        "kind": "vpn_off_before_album",
+        "group": "prep",
+        "hint": (
+            "Exact production path: tiktok_prep clear_album → ensure_vpn_off_before_album → "
+            "shortcut_exec_url(vpn.shortcut_url_off). Default shadowrocket://disconnect. "
+            "Run after kill-apps + home, before clear gallery. Logs each SDK step."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-shortcut-toggle": {
+        "label": "Prep: VPN toggle via URL shortcut (browser)",
+        "kind": "vpn_shortcut",
+        "group": "prep",
+        "mode": "toggle",
+        "hint": (
+            "Opens vpn.shortcut_url_toggle via iMouse shortcut_exec_url. "
+            "Default: shadowrocket://toggle."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "tap-vpntoggle": {
+        "label": "VPN toggle via URL shortcut (browser)",
+        "kind": "vpn_shortcut",
+        "group": "prep",
+        "mode": "toggle",
+        "hint": "Alias for prep-vpn-shortcut-toggle (backward-compatible API).",
         "offline_hint": OFFLINE_HINT,
     },
 }
@@ -757,24 +809,6 @@ TIKTOK_END_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "end",
         "offline_hint": OFFLINE_HINT,
     },
-    "end-tap-shadowrocket": {
-        "label": f"End: Tap Shadowrocket ({SHADOWROCKET_ICON_X}, {SHADOWROCKET_ICON_Y})",
-        "kind": "tap_xy",
-        "group": "end",
-        "x": SHADOWROCKET_ICON_X,
-        "y": SHADOWROCKET_ICON_Y,
-        "hint": "Home screen first.",
-        "offline_hint": OFFLINE_HINT,
-    },
-    "end-tap-vpntoggle": {
-        "label": f"End: Tap VPN toggle OFF ({VPN_TOGGLE_X}, {VPN_TOGGLE_Y})",
-        "kind": "tap_xy",
-        "group": "end",
-        "x": VPN_TOGGLE_X,
-        "y": VPN_TOGGLE_Y,
-        "hint": "Open Shadowrocket first; one tap turns VPN off after ValCoin posts.",
-        "offline_hint": OFFLINE_HINT,
-    },
 }
 
 TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
@@ -784,7 +818,10 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "account_switch",
         "step": "ensure",
         "toggle_to_opposite": False,
-        "hint": "Labely dashboard → confirms device is on Labely @. Skips only if already on that @.",
+        "hint": (
+            "Opens profile tab and OCR-scans for the current brand @ only. "
+            "If already correct → home. If wrong @ → full switch sequence."
+        ),
         "offline_hint": OFFLINE_HINT,
     },
     "account-ensure-full": {
@@ -797,12 +834,11 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "account-tap-profile-tab": {
-        "label": "Account: Tap profile tab (550, 1037)",
-        "kind": "tap_xy",
+        "label": "Account: Tap profile tab",
+        "kind": "account_switch_step",
         "group": "account_switch",
-        "x": 550,
-        "y": 1037,
-        "hint": "TikTok must be open. Opens the profile tab.",
+        "step": "tap_profile",
+        "hint": "TikTok must be open. Opens the profile tab (coords from tiktok_navigation.yaml).",
         "offline_hint": OFFLINE_HINT,
     },
     "account-tap-home-tab": {
@@ -815,11 +851,38 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "account-open-switcher": {
-        "label": "Account: Open switcher (profile + tap 301, 288 then 293, 249)",
+        "label": "Account: Open switcher (production — primary → alt)",
         "kind": "account_switch_step",
         "group": "account_switch",
         "step": "open_switcher",
-        "hint": "Taps profile tab, then fixed opener coordinates from tiktok_navigation.yaml.",
+        "hint": (
+            "Taps profile tab, then primary (293,249) and alt (301,288) openers. "
+            "Phone 16 uses alternate UI (101,147) only."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-switcher-tap-primary": {
+        "label": "Account: Switcher opener — primary tap (293, 249)",
+        "kind": "account_switch_step",
+        "group": "account_switch",
+        "step": "tap_opener_primary",
+        "hint": "Profile tab must be open. First opener in production — taps (293, 249); reports if @ list visible.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-switcher-tap-alt": {
+        "label": "Account: Switcher opener — alt tap (301, 288)",
+        "kind": "account_switch_step",
+        "group": "account_switch",
+        "step": "tap_opener_alt",
+        "hint": "Profile tab must be open. Second opener if primary missed — taps (301, 288); reports if @ list visible.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "account-switcher-verify-handle": {
+        "label": "Account: Switcher — OCR check other brand @ visible",
+        "kind": "account_switch_step",
+        "group": "account_switch",
+        "step": "verify_switcher",
+        "hint": "Switcher should be open. OCR scan only — does not tap.",
         "offline_hint": OFFLINE_HINT,
     },
     "account-pick-handle": {
@@ -885,40 +948,28 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
 }
 
 _VALCOIN_PREP_DEBUG_LIST_PRIORITY = (
-    "valcoin-prep-tap-shadowrocket",
-    "valcoin-prep-tap-vpn-off",
+    "valcoin-prep-vpn-shortcut-off",
     "valcoin-prep-clear-album",
     "valcoin-prep-upload-gallery",
     "valcoin-prep-tap-allow",
-    "valcoin-prep-tap-vpn-on",
+    "valcoin-prep-vpn-shortcut-on",
     "valcoin-prep-tap-tiktok",
 )
 
 TIKTOK_VALCOIN_PREP_DEBUG_TESTS: dict[str, DebugTest] = {
-    "valcoin-prep-tap-shadowrocket": {
-        "label": f"ValCoin prep: Tap Shadowrocket ({SHADOWROCKET_ICON_X}, {SHADOWROCKET_ICON_Y})",
-        "kind": "tap_xy",
+    "valcoin-prep-vpn-shortcut-off": {
+        "label": "ValCoin prep: VPN OFF via URL shortcut",
+        "kind": "vpn_shortcut",
         "group": "valcoin_prep",
-        "x": SHADOWROCKET_ICON_X,
-        "y": SHADOWROCKET_ICON_Y,
-        "hint": "After Labely post 3. Home first — turns VPN off next step.",
-        "offline_hint": OFFLINE_HINT,
-    },
-    "valcoin-prep-tap-vpn-off": {
-        "label": f"ValCoin prep: Tap VPN OFF ({VPN_TOGGLE_X}, {VPN_TOGGLE_Y})",
-        "kind": "tap_xy",
-        "group": "valcoin_prep",
-        "x": VPN_TOGGLE_X,
-        "y": VPN_TOGGLE_Y,
-        "hint": "Inside Shadowrocket after Labely posts. One tap turns VPN off.",
+        "mode": "off",
+        "hint": "After Labely posts. Opens vpn.shortcut_url_off on the phone.",
         "offline_hint": OFFLINE_HINT,
     },
     "valcoin-prep-clear-album": {
-        "label": "ValCoin prep: Clear photo library (VPN must be off)",
+        "label": "ValCoin prep: Clear photo library (VPN off first)",
         "kind": "album_clear",
         "group": "valcoin_prep",
-        "skip_vpn_off": True,
-        "hint": "Run VPN-off steps first. Clears Labely videos before ValCoin upload.",
+        "hint": "Clears Labely videos before ValCoin upload. Sends VPN disconnect shortcut first.",
         "offline_hint": OFFLINE_HINT,
     },
     "valcoin-prep-upload-gallery": {
@@ -926,8 +977,7 @@ TIKTOK_VALCOIN_PREP_DEBUG_TESTS: dict[str, DebugTest] = {
         "kind": "upload_gallery",
         "group": "valcoin_prep",
         "brand": "valcoin",
-        "skip_vpn_off": True,
-        "hint": "VPN off. Uploads ValCoin MP4s from the valcoin subfolder.",
+        "hint": "After ValCoin clear in same prep. Upload only — VPN off already sent on clear.",
         "offline_hint": OFFLINE_HINT,
     },
     "valcoin-prep-tap-allow": {
@@ -938,13 +988,12 @@ TIKTOK_VALCOIN_PREP_DEBUG_TESTS: dict[str, DebugTest] = {
         "hint": "After ValCoin gallery upload if iOS asks for photo access.",
         "offline_hint": OFFLINE_HINT,
     },
-    "valcoin-prep-tap-vpn-on": {
-        "label": f"ValCoin prep: Tap VPN ON ({VPN_TOGGLE_X}, {VPN_TOGGLE_Y})",
-        "kind": "tap_xy",
+    "valcoin-prep-vpn-shortcut-on": {
+        "label": "ValCoin prep: VPN ON via URL shortcut",
+        "kind": "vpn_shortcut",
         "group": "valcoin_prep",
-        "x": VPN_TOGGLE_X,
-        "y": VPN_TOGGLE_Y,
-        "hint": "After ValCoin upload. One tap turns VPN on before TikTok.",
+        "mode": "on",
+        "hint": "After ValCoin upload. Opens vpn.shortcut_url_on before TikTok.",
         "offline_hint": OFFLINE_HINT,
     },
     "valcoin-prep-tap-tiktok": {
@@ -953,7 +1002,9 @@ TIKTOK_VALCOIN_PREP_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "valcoin_prep",
         "x": TIKTOK_HOME_ICON_X,
         "y": TIKTOK_HOME_ICON_Y,
-        "hint": "Home screen — opens TikTok for ValCoin account switch + posts.",
+        "wait_for_tiktok_ready": True,
+        "tiktok_ready_timeout_seconds": 120.0,
+        "hint": "Home screen — opens TikTok and waits for the + button (home feed ready).",
         "offline_hint": OFFLINE_HINT,
     },
 }
@@ -1105,6 +1156,7 @@ VISION_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "manual",
         "prompt": "Tap the button that creates a new note",
         "hint": "Takes a screenshot, asks GPT for the tap coordinate, then taps it.",
+        "offline_hint": OFFLINE_HINT,
     },
 }
 
@@ -1131,8 +1183,11 @@ _DEBUG_LIST_PRIORITY = (
     "prep-kill-apps",
     "clear-album",
     "list-album",
-    "prep-tap-shadowrocket",
-    "prep-tap-vpn-on",
+    "prep-open-shadowrocket-shortcut",
+    "prep-vpn-shortcut-on",
+    "prep-vpn-off-before-album",
+    "prep-vpn-shortcut-off",
+    "prep-vpn-shortcut-toggle",
     "detect-vpn-on",
     "detect-vpn-off",
     "open-photos-spotlight",
@@ -1253,6 +1308,10 @@ def list_debug_tests(group: str | None = None) -> list[dict[str, str]]:
         items = [item for item in items if item["group"] == "end"]
     elif key == "account_switch":
         items = [item for item in items if item["group"] == "account_switch"]
+        return [
+            {**item, "label": f"{idx + 1}. {item['label']}"}
+            for idx, item in enumerate(items)
+        ]
     elif key == "slideshow":
         items = [item for item in items if item["group"] == "slideshow"]
     elif key == "valcoin_prep":
@@ -1338,6 +1397,10 @@ async def run_debug_test(
         return await kill_app_debug(app, device_id, test_id, spec)
     if kind == "home":
         return await home_debug(app, device_id, test_id, spec)
+    if kind == "vpn_shortcut":
+        return await vpn_shortcut_debug(app, device_id, test_id, spec)
+    if kind == "vpn_off_before_album":
+        return await vpn_off_before_album_debug(app, device_id, test_id, spec)
     if kind == "detect_ocr":
         return await detect_ocr_debug(app, device_id, test_id, spec)
     if kind == "warmup_run":
@@ -1353,7 +1416,7 @@ async def run_debug_test(
         return await account_switch_step_debug(app, device_id, test_id, spec, brand=brand)
     if kind == "detect":
         if spec.get("open_shadowrocket"):
-            open_err = await _open_shadowrocket_coord_debug(app, device_id, spec, test_id)
+            open_err = await _open_shadowrocket_via_shortcut_debug(app, device_id, spec, test_id)
             if open_err:
                 return {**open_err, "detection": spec["detection"]}
         return await tap_detection(
@@ -1601,30 +1664,24 @@ async def tiktok_popup_scan_debug(
     return payload
 
 
-async def _open_shadowrocket_coord_debug(
+async def _open_shadowrocket_via_shortcut_debug(
     app: Any,
     device_id: str,
     spec: DebugTest,
     test_id: str,
 ) -> dict[str, Any] | None:
-    """Tap fixed Shadowrocket icon; return error dict on failure."""
-    ok = await _debug_execute_direct(
-        app,
-        device_id,
-        spec,
-        f"{test_id}_open_shadowrocket",
-        ActionType.TAP,
-        {"x": SHADOWROCKET_ICON_X, "y": SHADOWROCKET_ICON_Y},
-        step_name=f"debug_{test_id}_open_shadowrocket",
-    )
-    if not ok:
-        return {
-            "success": False,
-            "message": (
-                f"Could not tap Shadowrocket at ({SHADOWROCKET_ICON_X}, {SHADOWROCKET_ICON_Y})"
-            ),
-        }
-    await asyncio.sleep(2)
+    """Open Shadowrocket via URL shortcut; return error dict on failure."""
+    from imouse_farm.actions.vpn_shadowrocket import open_shadowrocket_via_shortcut
+
+    try:
+        await open_shadowrocket_via_shortcut(
+            app.device_manager.controller,
+            app.config,
+            device_id,
+        )
+    except Exception as exc:
+        return {"success": False, "message": str(exc)}
+    await asyncio.sleep(1)
     return None
 
 
@@ -1647,7 +1704,7 @@ async def detect_ocr_debug(
         raise HTTPException(500, f"Debug test {test_id} has no texts configured")
 
     if spec.get("open_shadowrocket"):
-        open_err = await _open_shadowrocket_coord_debug(app, device_id, spec, test_id)
+        open_err = await _open_shadowrocket_via_shortcut_debug(app, device_id, spec, test_id)
         if open_err:
             return open_err
 
@@ -2085,7 +2142,7 @@ async def clear_album_debug(
     test_id: str,
     spec: DebugTest,
 ) -> dict[str, Any]:
-    """Clear photo library via shortcut_album_clear + tapping the iOS Delete popup."""
+    """Clear photo library — VPN disconnect shortcut first, then album clear."""
     dm = app.device_manager
     device = dm.get_device(device_id)
     if not device:
@@ -2103,24 +2160,22 @@ async def clear_album_debug(
     if spec.get("skip_vpn_off"):
         params["skip_vpn_off"] = True
 
-    ctrl = dm.controller
     start = time.monotonic()
     error_detail = ""
-    success = False
-    try:
-        success = await ctrl.album_clear(
-            device_id,
-            timeout_ms=timeout_ms,
-            sheet_appear_timeout=float(params["sheet_appear_timeout_seconds"]),
-            round_active_timeout=float(params["round_active_timeout_seconds"]),
-            sheet_poll_interval_seconds=float(params["sheet_poll_interval_seconds"]),
-        )
-        if not success:
-            error_detail = "album_clear returned false (items may remain in Recents)"
-    except Exception as exc:
-        error_detail = str(exc)
-        success = False
+    success = await _debug_execute_direct(
+        app,
+        device_id,
+        spec,
+        test_id,
+        ActionType.ALBUM_CLEAR,
+        params,
+        step_name="clear_album",
+    )
     duration_ms = int((time.monotonic() - start) * 1000)
+    if not success:
+        error_detail = await _latest_action_error(app, device_id, "album_clear")
+        if not error_detail:
+            error_detail = "album_clear returned false (items may remain in Recents)"
 
     if success:
         await app.screenshot_service.capture(device_id)
@@ -2306,10 +2361,9 @@ async def upload_gallery_debug(
     timeout_ms = int(gallery.upload_timeout_ms)
     file_sha256 = _file_sha256(files[0]) if files else ""
 
-    # Match tiktok_prep.yaml upload_gallery exactly (folder + skip_vpn_off only).
+    # Upload follows clear in prep — VPN disconnect already ran on album_clear.
     upload_params: dict[str, Any] = {
         "folder": str(folder),
-        "skip_vpn_off": True,
     }
 
     await app.db.log_activity(
@@ -2466,10 +2520,58 @@ async def tap_xy_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) 
     ok = await _debug_execute_direct(
         app, device_id, spec, test_id, ActionType.TAP, params
     )
+    if not ok:
+        await app.screenshot_service.capture(device_id)
+        return {"success": False, "message": f"Tap failed at ({x}, {y})"}
+    if spec.get("wait_for_tiktok_ready"):
+        try:
+            await _wait_for_tiktok_ready_debug(app, device_id, test_id, spec)
+        except RuntimeError as exc:
+            await app.screenshot_service.capture(device_id)
+            return {"success": False, "message": str(exc)}
     await app.screenshot_service.capture(device_id)
     count = int(params.get("tap_count", 1))
     msg = f"Tapped ({x}, {y}) ×{count}" if count > 1 else f"Tapped ({x}, {y})"
-    return {"success": ok, "message": msg, "x": x, "y": y}
+    if spec.get("wait_for_tiktok_ready"):
+        msg += " — TikTok + visible (home feed ready)"
+    return {"success": True, "message": msg, "x": x, "y": y}
+
+
+async def _wait_for_tiktok_ready_debug(
+    app: Any,
+    device_id: str,
+    test_id: str,
+    spec: DebugTest,
+) -> None:
+    from imouse_farm.workflows.tiktok_plus_ready import wait_for_tiktok_plus_visible
+
+    timeout = float(spec.get("tiktok_ready_timeout_seconds") or 120.0)
+
+    async def _log(
+        level: str,
+        category: str,
+        message: str,
+        *args: Any,
+        **details: Any,
+    ) -> None:
+        await app.db.log_activity(
+            level,
+            category,
+            message,
+            device_id,
+            {"test_id": test_id, **details},
+        )
+
+    await wait_for_tiktok_plus_visible(
+        app.device_manager.controller,
+        device_id,
+        device_manager=app.device_manager,
+        vision=app.vision,
+        app_config=app.config,
+        templates_directory=app.config.analysis.templates_directory,
+        log_activity=_log,
+        timeout_seconds=timeout,
+    )
 
 
 async def swipe_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:
@@ -2508,7 +2610,12 @@ async def account_switch_step_debug(
         handle_match_queries,
         opposite_brand,
     )
+    from imouse_farm.workflows.tiktok_device_ui import (
+        alternate_account_switcher_opener,
+        uses_alternate_account_switcher_ui,
+    )
     from imouse_farm.workflows.account_switch import (
+        _switcher_shows_account,
         _tap_account_switcher_opener,
         _tap_handle_in_list,
         ensure_tiktok_account,
@@ -2527,6 +2634,110 @@ async def account_switch_step_debug(
     switch_tap_handle = str(other_profile.get("tiktok_handle") or "").strip()
     dest_handle = switch_tap_handle if toggle_to_opposite else handle
 
+    switch_queries = handle_match_queries(switch_tap_handle) if switch_tap_handle else []
+
+    async def _tap_nav_xy(x: int, y: int, *, step_suffix: str) -> bool:
+        return await _debug_execute_direct(
+            app,
+            device_id,
+            spec,
+            test_id,
+            ActionType.TAP,
+            {"x": x, "y": y},
+            step_name=f"debug_{test_id}_{step_suffix}",
+        )
+
+    async def _switcher_visibility_message(prefix: str) -> tuple[str, bool | None]:
+        if not switch_queries:
+            return prefix, None
+        visible = await _switcher_shows_account(ctrl, device_id, switch_queries)
+        suffix = f" — @ list {'visible' if visible else 'not visible'}"
+        if switch_tap_handle:
+            suffix += f" ({switch_tap_handle})"
+        return prefix + suffix, visible
+
+    if step == "tap_profile":
+        ok = await _tap_nav_xy(nav.profile_tab_x, nav.profile_tab_y, step_suffix="profile")
+        await app.screenshot_service.capture(device_id)
+        if not ok:
+            return {"success": False, "message": "Failed to tap profile tab"}
+        message = f"Tapped profile tab ({nav.profile_tab_x}, {nav.profile_tab_y})"
+        await app.db.log_activity(
+            "info", "test", message, device_id, {"test_id": test_id}
+        )
+        return {"success": True, "message": message}
+
+    if step == "tap_opener_primary":
+        if uses_alternate_account_switcher_ui(app.config, device.user_name):
+            opener = alternate_account_switcher_opener(app.config, device.user_name)
+            x, y = int(opener.x), int(opener.y) if opener else (0, 0)
+            label = f"alternate UI opener ({x}, {y})"
+        else:
+            x, y = nav.account_switcher_opener_x, nav.account_switcher_opener_y
+            label = f"primary opener ({x}, {y})"
+        ok = await _tap_nav_xy(x, y, step_suffix="opener_primary")
+        await asyncio.sleep(1.0)
+        await app.screenshot_service.capture(device_id)
+        if not ok:
+            return {"success": False, "message": f"Failed to tap {label}"}
+        message, visible = await _switcher_visibility_message(f"Tapped {label}")
+        await app.db.log_activity(
+            "info", "test", message, device_id, {"test_id": test_id, "visible": visible}
+        )
+        return {"success": True, "message": message, "switcher_visible": visible}
+
+    if step == "tap_opener_alt":
+        if uses_alternate_account_switcher_ui(app.config, device.user_name):
+            return {
+                "success": True,
+                "message": (
+                    f"Phone {device.user_name} uses alternate UI — "
+                    "alt opener (301/293) not used; run primary step instead"
+                ),
+                "skipped": True,
+            }
+        x, y = nav.account_switcher_opener_alt_x, nav.account_switcher_opener_alt_y
+        ok = await _tap_nav_xy(x, y, step_suffix="opener_alt")
+        await asyncio.sleep(1.0)
+        await app.screenshot_service.capture(device_id)
+        if not ok:
+            return {"success": False, "message": f"Failed to tap alt opener ({x}, {y})"}
+        message, visible = await _switcher_visibility_message(
+            f"Tapped alt opener ({x}, {y})"
+        )
+        await app.db.log_activity(
+            "info", "test", message, device_id, {"test_id": test_id, "visible": visible}
+        )
+        return {"success": True, "message": message, "switcher_visible": visible}
+
+    if step == "verify_switcher":
+        if not switch_queries:
+            return {
+                "success": False,
+                "message": (
+                    f"No @ handle saved for {opposite_brand(brand)} on this slot — "
+                    "set it on the other dashboard first."
+                ),
+            }
+        visible = await _switcher_shows_account(ctrl, device_id, switch_queries)
+        await app.screenshot_service.capture(device_id)
+        message = (
+            f"Switcher OCR: {switch_tap_handle} {'found' if visible else 'not found'}"
+        )
+        await app.db.log_activity(
+            "info" if visible else "warn",
+            "test",
+            message,
+            device_id,
+            {"test_id": test_id, "handle": switch_tap_handle, "visible": visible},
+        )
+        return {
+            "success": visible,
+            "message": message,
+            "handle": switch_tap_handle,
+            "switcher_visible": visible,
+        }
+
     if step == "ensure":
         if toggle_to_opposite:
             if not switch_tap_handle:
@@ -2543,8 +2754,32 @@ async def account_switch_step_debug(
                 "message": "No @ handle saved for this slot — set it in Content panel first.",
             }
 
-        async def _log(level: str, category: str, message: str, **_details: Any) -> None:
-            await app.db.log_activity(level, category, message, device_id, {"test_id": test_id})
+        async def _log(
+            level: str,
+            category: str,
+            message: str,
+            *args: Any,
+            **details: Any,
+        ) -> None:
+            await app.db.log_activity(
+                level,
+                category,
+                message,
+                device_id,
+                {"test_id": test_id, **details},
+            )
+
+        async def _clear_popups(context: str) -> bool:
+            watchers = getattr(app, "permission_watchers", None)
+            if watchers is None:
+                return False
+            cleared = 0
+            for _ in range(5):
+                if not await watchers.try_dismiss(device_id):
+                    break
+                cleared += 1
+                await asyncio.sleep(1.0)
+            return cleared > 0
 
         try:
             await ensure_tiktok_account(
@@ -2556,13 +2791,23 @@ async def account_switch_step_debug(
                 device_manager=app.device_manager,
                 templates_dir=app.config.analysis.templates_directory,
                 vision=app.vision,
+                app_config=app.config,
                 brand=brand,
                 device_user_name=device.user_name,
                 toggle_to_opposite=toggle_to_opposite,
+                tiktok_ready_timeout_seconds=180.0,
+                clear_popups=_clear_popups,
             )
         except RuntimeError as exc:
             await app.screenshot_service.capture(device_id)
             return {"success": False, "message": str(exc), "handle": dest_handle}
+        except Exception as exc:
+            await app.screenshot_service.capture(device_id)
+            return {
+                "success": False,
+                "message": f"Account switch error: {exc}",
+                "handle": dest_handle,
+            }
         await app.screenshot_service.capture(device_id)
         await app.db.log_activity(
             "info",
@@ -2591,30 +2836,33 @@ async def account_switch_step_debug(
             return {"success": False, "message": "Failed to tap profile tab"}
         await asyncio.sleep(2.0)
         opened = await _tap_account_switcher_opener(
-            ctrl, device_id, nav, handle_match_queries(switch_tap_handle)
+            ctrl,
+            device_id,
+            nav,
+            switch_queries,
+            app_config=app.config,
+            device_user_name=device.user_name,
         )
         await app.screenshot_service.capture(device_id)
         if not opened:
             return {
                 "success": False,
                 "message": (
-                    f"Failed to tap account switcher opener "
-                    f"({nav.account_switcher_opener_x}, {nav.account_switcher_opener_y})"
+                    "Failed to open account switcher — tried primary "
+                    f"({nav.account_switcher_opener_x}, {nav.account_switcher_opener_y}) "
+                    f"then alt ({nav.account_switcher_opener_alt_x}, {nav.account_switcher_opener_alt_y})"
                 ),
             }
         await app.db.log_activity(
             "info",
             "test",
-            f"Opened account switcher ({nav.account_switcher_opener_x}, {nav.account_switcher_opener_y})",
+            "Opened account switcher (production sequence)",
             device_id,
             {"test_id": test_id},
         )
         return {
             "success": True,
-            "message": (
-                f"Tapped profile then opener at "
-                f"({nav.account_switcher_opener_x}, {nav.account_switcher_opener_y})"
-            ),
+            "message": "Tapped profile then production switcher opener sequence",
         }
 
     if step == "pick_handle":
@@ -2993,6 +3241,136 @@ async def home_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) ->
     )
     await app.screenshot_service.capture(device_id)
     return {"success": ok, "message": "Pressed home"}
+
+
+async def vpn_off_before_album_debug(
+    app: Any, device_id: str, test_id: str, spec: DebugTest
+) -> dict[str, Any]:
+    """Run ensure_vpn_off_before_album — the exact VPN-off preamble before album clear."""
+    from imouse_farm.actions.vpn_shadowrocket import (
+        ensure_vpn_off_before_album,
+        vpn_shortcut_url,
+    )
+
+    await _require_online_device(app, device_id, spec)
+    url = vpn_shortcut_url(app.config, "off")
+    settle = float(app.config.vpn.shortcut_settle_seconds)
+
+    async def _log(
+        level: str,
+        category: str,
+        message: str,
+        *args: Any,
+        **details: Any,
+    ) -> None:
+        await app.db.log_activity(
+            level,
+            category,
+            message,
+            device_id,
+            {"test_id": test_id, **details},
+        )
+
+    await _log(
+        "info",
+        "test",
+        (
+            f"Production clear_album VPN preamble — URL {url!r}, "
+            f"settle {settle:g}s, SDK shortcut_exec_url"
+        ),
+        url=url,
+        settle_seconds=settle,
+        production_step="clear_album",
+    )
+
+    start = time.monotonic()
+    try:
+        await ensure_vpn_off_before_album(
+            app.device_manager.controller,
+            app.config,
+            app.device_manager,
+            device_id,
+            log_activity=_log,
+        )
+    except Exception as exc:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        message = f"VPN off before album failed after {duration_ms // 1000}s — {exc}"
+        await _log("error", "test", message, url=url, error=str(exc))
+        await app.screenshot_service.capture(device_id)
+        return {
+            "success": False,
+            "message": message,
+            "url": url,
+            "error": str(exc),
+            "duration_ms": duration_ms,
+        }
+
+    duration_ms = int((time.monotonic() - start) * 1000)
+    await app.screenshot_service.capture(device_id)
+    message = f"VPN off before album OK ({url}) — same path as production clear_album"
+    await _log("info", "test", message, url=url, duration_ms=duration_ms)
+    return {
+        "success": True,
+        "message": message,
+        "url": url,
+        "duration_ms": duration_ms,
+    }
+
+
+async def vpn_shortcut_debug(
+    app: Any, device_id: str, test_id: str, spec: DebugTest
+) -> dict[str, Any]:
+    from imouse_farm.actions.vpn_shadowrocket import (
+        VpnShortcutMode,
+        exec_vpn_shortcut_url,
+        vpn_shortcut_url,
+    )
+
+    await _require_online_device(app, device_id, spec)
+    mode = str(spec.get("mode") or "toggle").strip().lower()
+    if mode not in ("on", "off", "toggle", "open"):
+        raise HTTPException(400, f"Invalid VPN shortcut mode: {mode}")
+    url = str(spec.get("url") or "").strip() or vpn_shortcut_url(
+        app.config, mode  # type: ignore[arg-type]
+    )
+    if not url:
+        config_key = "open" if mode == "open" else mode
+        raise HTTPException(
+            400,
+            f"VPN shortcut URL for mode={mode!r} is empty — set vpn.shortcut_url_{config_key} in config.yaml",
+        )
+    settle = float(spec.get("settle_seconds") or app.config.vpn.shortcut_settle_seconds)
+    outtime_ms = int(app.config.vpn.shortcut_url_timeout_ms)
+    press_home_after = bool(spec.get("press_home_after", mode != "open"))
+    try:
+        await exec_vpn_shortcut_url(
+            app.device_manager.controller,
+            device_id,
+            url,
+            settle_seconds=settle,
+            outtime_ms=outtime_ms,
+            press_home_after=press_home_after,
+        )
+    except Exception as exc:
+        await app.db.log_activity(
+            "error",
+            "test",
+            f"VPN shortcut failed: {exc}",
+            device_id,
+            {"test_id": test_id, "url": url, "mode": mode},
+        )
+        return {"success": False, "message": str(exc), "url": url, "mode": mode}
+    await app.screenshot_service.capture(device_id)
+    label = {"on": "ON", "off": "OFF", "toggle": "toggle", "open": "open"}[mode]
+    message = f"VPN shortcut {label}: opened {url}"
+    await app.db.log_activity(
+        "info",
+        "test",
+        message,
+        device_id,
+        {"test_id": test_id, "url": url, "mode": mode},
+    )
+    return {"success": True, "message": message, "url": url, "mode": mode}
 
 
 async def kill_app_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:

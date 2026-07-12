@@ -163,19 +163,16 @@ Return this exact JSON shape:
 
   if (type === "labelyOutroVariation") {
     const seedText = String(text || "").trim();
-    const base =
-      seedText
-      || "Just found 2 cancerous foods in my cabinet. I had no idea was probably shortening my lifespan since it was a tier 1 carcinogen, who knows if i kept consuming that what i'd get 10 years down the line. The app i use is called labely.";
-    const prompt = `Rewrite this TikTok outro into ONE varied version with the same core meaning and tone:
-"${base}"
+    const base = seedText || "the app i use is called labely";
+    const prompt = `Write ONE short TikTok outro line (max 14 words), all lowercase.
+Core message: the speaker uses an app called Labely to scan/check groceries or ingredients.
+Base line to vary: "${base}"
 
-Requirements:
-- Output exactly 2-3 short sentences.
-- Keep first-person voice ("I", "my").
-- Mention: found cancerous foods at home/cabinet, concern about long-term health risk, and app name Labely.
-- Keep it natural and conversational, not robotic.
-- No hashtags, no emojis, no markdown, no quotes.
-- Return ONLY the final text.`;
+Rules:
+- Must include the word labely.
+- Same meaning as the base, fresh wording each time.
+- Conversational, not robotic. No hashtags, emojis, or quotes.
+- Return ONLY the single line.`;
     try {
       const res = await fetch(OPENAI_CHAT, {
         method: "POST",

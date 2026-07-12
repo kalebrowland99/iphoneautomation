@@ -7,6 +7,7 @@ from imouse_farm.captions.ai_generator import (
     normalize_hashtags,
     resolve_hashtag_template,
     sanitize_caption_statements,
+    sanitize_labely_caption_voice,
     stem_to_food_name,
     _parse_posts_json,
 )
@@ -18,6 +19,8 @@ def test_stem_to_food_name() -> None:
     assert stem_to_food_name("slot-mac_and_cheese") == "Mac And Cheese"
     assert stem_to_food_name("02-cup-noodles-3") == "Cup Noodles"
     assert stem_to_food_name("slideshow-02-cup-noodles-3") == "Cup Noodles"
+    assert stem_to_food_name("02-phone-1-video-2-sugary-cereal-breakf-2") == "Sugary Cereal Breakf"
+    assert stem_to_food_name("02-phone-1-video-1-processed-meat-deli-1") == "Processed Meat Deli"
     assert stem_to_food_name("chicken_tikka_masala") == ""
     assert stem_to_food_name("") == ""
 
@@ -36,6 +39,19 @@ def test_append_hashtags() -> None:
 def test_sanitize_caption_statements() -> None:
     assert sanitize_caption_statements("did u know this? wild.") == "did u know this. wild."
     assert sanitize_caption_statements("no questions here") == "no questions here"
+
+
+def test_sanitize_labely_caption_voice_strips_cliches() -> None:
+    raw = "the sugar content is off the charts. labely showed me corn syrup first."
+    cleaned = sanitize_labely_caption_voice(raw)
+    assert "off the charts" not in cleaned.lower()
+    assert "labely" in cleaned.lower()
+
+
+def test_sanitize_labely_caption_voice_limits_like() -> None:
+    raw = "this tastes like candy like dessert like a milkshake."
+    cleaned = sanitize_labely_caption_voice(raw)
+    assert cleaned.lower().count("like") == 1
 
 
 def test_hashtag_shuffle_preserves_tags() -> None:
