@@ -25,6 +25,8 @@ openai:
   api_key: ""  # set OPENAI_API_KEY in .env (see .env.example)
   model: "gpt-4o-mini"
   temperature: 0.85
+  # Account-switcher opener (dropdown arrow tap) — gpt-5.5 vision
+  account_switcher_vision_model: "gpt-5.5"
 
 gallery:
   base_directory: "gallery"
@@ -118,8 +120,12 @@ vpn:
   shortcut_url_off: "shadowrocket://disconnect"
   shortcut_url_toggle: "shadowrocket://toggle"
   shortcut_url_open: "shadowrocket://"
-  shortcut_settle_seconds: 4
-  shortcut_url_timeout_ms: 30000
+  # Wait for shortcut_exec_url up to 120s; then settle another 120s (can be slow).
+  shortcut_settle_seconds: 120
+  shortcut_url_timeout_ms: 120000
+  confirm_via_vision: false
+  confirm_max_attempts: 2
+  confirm_settle_seconds: 2
 
 # Per-phone TikTok UI overrides (farm slot number = iMouse user_name).
 tiktok_device_ui:

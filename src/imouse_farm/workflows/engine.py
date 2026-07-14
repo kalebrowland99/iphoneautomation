@@ -38,6 +38,7 @@ from imouse_farm.post.post_caption_store import (
     text_key_for_device,
 )
 from imouse_farm.settings.device_settings import get_debug_skip_post
+from imouse_farm.settings.run_settings import get_use_supplied_videos
 from imouse_farm.utils.gallery import list_media_stems_for_posts, phone_gallery_folder
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.vision.fallbacks import (
@@ -366,6 +367,16 @@ class WorkflowRunner:
         """Regenerate onscreen + final captions from gallery before typing."""
         if self._workflow.name != "tiktok_post":
             return
+        if get_use_supplied_videos():
+            # Supplied mode skips Aa overlays; only require a final caption.
+            text_key = self._post_text_key()
+            final = get_final_caption(text_key, post_index, brand=self._brand).strip()
+            if not final:
+                raise RuntimeError(
+                    f"Post {post_index}: final caption is empty "
+                    "(supplied-video mode still needs TikTok captions)"
+                )
+            return
         if not self._config.openai.enabled or not self._config.slideshow.auto_generate_captions:
             return
         if post_index in self._captions_auto_generated_posts:
@@ -631,6 +642,11 @@ class WorkflowRunner:
             return "debug skip post is off"
         if step.unless_debug_skip_post is True and debug_skip:
             return "debug skip post is on"
+        use_supplied = get_use_supplied_videos()
+        if step.when_use_supplied_videos is True and not use_supplied:
+            return "use supplied videos is off"
+        if step.unless_use_supplied_videos is True and use_supplied:
+            return "use supplied videos is on"
         return None
 
     async def _execute_step(self, step: WorkflowStepConfig) -> None:
@@ -869,37 +885,8 @@ class WorkflowRunner:
                 f"TikTok restart failed during recovery: {restart_exc}",
                 step=step.name,
             )
-            try:
-                await self._reset_phone_recast_and_open_tiktok(parent_step=step.name)
-            except Exception as reset_exc:
-                await self._log_activity(
-                    "error",
-                    "workflow",
-                    f"Phone reset/recast failed during recovery: {reset_exc}",
-                    step=step.name,
-                )
-                return False
-            return await self._resume_tiktok_post_from_plus()
-
-        if await self._resume_tiktok_post_from_plus():
-            return True
-
-        await self._log_activity(
-            "warn",
-            "workflow",
-            "TikTok restart did not recover — resetting phone and recasting",
-            step=step.name,
-        )
-        try:
-            await self._reset_phone_recast_and_open_tiktok(parent_step=step.name)
-        except Exception as reset_exc:
-            await self._log_activity(
-                "error",
-                "workflow",
-                f"Phone reset/recast failed after TikTok restart: {reset_exc}",
-                step=step.name,
-            )
             return False
+
         return await self._resume_tiktok_post_from_plus()
 
     async def _try_recover_tiktok_account_switch(
@@ -1029,34 +1016,6 @@ class WorkflowRunner:
                 level, category, message, *args, step=parent_step, **details
             ),
             recent_errors=self._recent_workflow_errors,
-        )
-
-    async def _reset_phone_recast_and_open_tiktok(self, *, parent_step: str) -> None:
-        """Reboot phone, reconnect AirPlay, reopen TikTok, resume from +."""
-        await self._log_activity(
-            "warn",
-            "workflow",
-            "Resetting phone, reconnecting cast, and reopening TikTok",
-            step=parent_step,
-        )
-        await self._device_manager.reset_phone_and_recast(self._device_id)
-        from imouse_farm.actions.vpn_shadowrocket import ensure_vpn_on
-
-        await ensure_vpn_on(
-            self._device_manager.controller,
-            self._config,
-            self._device_id,
-            log_activity=lambda level, category, message, *args, **details: self._log_activity(
-                level, category, message, *args, step=parent_step, **details
-            ),
-        )
-        await self._open_tiktok_from_home(parent_step=f"{parent_step}_phone_reset")
-        self._pending_white_background_after_restart = True
-        await self._log_activity(
-            "info",
-            "workflow",
-            "Phone reset complete — resuming from + button",
-            step=parent_step,
         )
 
     async def _restart_tiktok(self, *, parent_step: str) -> None:
@@ -1819,7 +1778,6 @@ class WorkflowRunner:
         max_restarts = max(1, int(action_cfg.get("max_app_restarts") or 5))
         attempts_since_restart = 0
         restart_count = 0
-        phone_reset_used = False
         vision_dismiss_count = 0
         tiktok_restart_enabled = restart_after > 0 and is_tiktok_workflow(self._workflow.name)
 
@@ -1915,31 +1873,6 @@ class WorkflowRunner:
                         "info",
                         "workflow",
                         f"TikTok reopened ({restart_count}/{max_restarts}) — waiting for {target} again",
-                        step=step.name,
-                        detection=target,
-                    )
-                elif (
-                    not phone_reset_used
-                    and restart_count >= max_restarts
-                    and is_tiktok_workflow(self._workflow.name)
-                ):
-                    phone_reset_used = True
-                    await self._log_activity(
-                        "warn",
-                        "workflow",
-                        f"TikTok restarts exhausted — resetting phone and recasting",
-                        step=step.name,
-                        detection=target,
-                    )
-                    await self._reset_phone_recast_and_open_tiktok(
-                        parent_step=step.name or target
-                    )
-                    restart_count = 0
-                    attempts_since_restart = 0
-                    await self._log_activity(
-                        "info",
-                        "workflow",
-                        f"Phone reset complete — waiting for {target} again",
                         step=step.name,
                         detection=target,
                     )

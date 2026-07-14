@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -59,6 +59,7 @@ from imouse_farm.post.account_profile_store import (
     set_cant_cast_imouse,
     set_profile,
 )
+from imouse_farm.integrations.slideshow_ingest import SlideshowVideoRejected
 from imouse_farm.post.brand_keys import device_storage_key as _device_storage_key
 from imouse_farm.post.post_caption_store import (
     POST_COUNT,
@@ -78,6 +79,16 @@ from imouse_farm.settings.device_settings import (
     get_debug_skip_post,
     get_device_settings,
     set_debug_skip_post,
+)
+from imouse_farm.settings.run_settings import (
+    get_run_settings,
+    set_run_settings,
+)
+from imouse_farm.utils.supplied_videos import (
+    clear_supplied_videos,
+    delete_supplied_video,
+    save_supplied_video,
+    supplied_videos_status,
 )
 from imouse_farm.dashboard.run_status import compute_run_progress
 from imouse_farm.dashboard.slideshow_routes import register_slideshow_routes
@@ -152,6 +163,10 @@ class PostTextFieldBody(BaseModel):
 
 class DeviceSettingsBody(BaseModel):
     debug_skip_post: bool = False
+
+
+class RunSettingsBody(BaseModel):
+    use_supplied_videos: bool | None = None
 
 
 class WindowLayoutBody(BaseModel):
@@ -462,7 +477,9 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             else frozenset(),
         )
         if not started:
-            raise HTTPException(400, "Failed to start batch run")
+            status = app_instance.farm_batch.get_status()
+            detail = str(status.get("message") or "").strip() or "Failed to start batch run"
+            raise HTTPException(400, detail)
         return {"success": True, "device_count": len(devices), "status": app_instance.farm_batch.get_status()}
 
     @app.post("/api/batch/stop")
@@ -994,6 +1011,90 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             "slideshow_job_id": resolved_job_id or None,
             "slideshow_orchestrator_busy": orch_busy,
             "progress": progress,
+        }
+
+    @app.get("/api/run-settings")
+    async def read_run_settings() -> dict[str, Any]:
+        return get_run_settings()
+
+    @app.put("/api/run-settings")
+    async def write_run_settings(body: RunSettingsBody) -> dict[str, Any]:
+        return set_run_settings(use_supplied_videos=body.use_supplied_videos)
+
+    @app.get("/api/supplied-videos")
+    async def get_supplied_videos(brand: str = "labely") -> dict[str, Any]:
+        brand_key = str(brand or "labely").strip().lower() or "labely"
+        expected = max(1, int(getattr(config.slideshow, "slideshows_per_slot", POST_COUNT) or POST_COUNT))
+        return supplied_videos_status(
+            config.gallery.base_directory,
+            brand=brand_key,
+            expected_count=expected,
+            extensions=list(config.gallery.media_extensions),
+        )
+
+    @app.post("/api/supplied-videos")
+    async def upload_supplied_video(
+        brand: str = Form("labely"),
+        file: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        brand_key = str(brand or "labely").strip().lower() or "labely"
+        expected = max(1, int(getattr(config.slideshow, "slideshows_per_slot", POST_COUNT) or POST_COUNT))
+        data = await file.read()
+        try:
+            path = save_supplied_video(
+                data,
+                base_directory=config.gallery.base_directory,
+                brand=brand_key,
+                filename=file.filename or "video.mp4",
+                max_count=expected,
+            )
+        except SlideshowVideoRejected as exc:
+            raise HTTPException(400, str(exc.reason or exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        status = supplied_videos_status(
+            config.gallery.base_directory,
+            brand=brand_key,
+            expected_count=expected,
+            extensions=list(config.gallery.media_extensions),
+        )
+        return {"success": True, "saved": path.name, "status": status}
+
+    @app.delete("/api/supplied-videos")
+    async def clear_brand_supplied_videos(brand: str = "labely") -> dict[str, Any]:
+        brand_key = str(brand or "labely").strip().lower() or "labely"
+        removed = clear_supplied_videos(config.gallery.base_directory, brand=brand_key)
+        expected = max(1, int(getattr(config.slideshow, "slideshows_per_slot", POST_COUNT) or POST_COUNT))
+        return {
+            "success": True,
+            "removed": removed,
+            "status": supplied_videos_status(
+                config.gallery.base_directory,
+                brand=brand_key,
+                expected_count=expected,
+                extensions=list(config.gallery.media_extensions),
+            ),
+        }
+
+    @app.delete("/api/supplied-videos/{filename}")
+    async def remove_supplied_video(filename: str, brand: str = "labely") -> dict[str, Any]:
+        brand_key = str(brand or "labely").strip().lower() or "labely"
+        ok = delete_supplied_video(
+            config.gallery.base_directory,
+            filename,
+            brand=brand_key,
+        )
+        if not ok:
+            raise HTTPException(404, "Video not found")
+        expected = max(1, int(getattr(config.slideshow, "slideshows_per_slot", POST_COUNT) or POST_COUNT))
+        return {
+            "success": True,
+            "status": supplied_videos_status(
+                config.gallery.base_directory,
+                brand=brand_key,
+                expected_count=expected,
+                extensions=list(config.gallery.media_extensions),
+            ),
         }
 
     register_slideshow_routes(

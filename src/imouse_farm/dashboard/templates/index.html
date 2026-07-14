@@ -48,7 +48,7 @@
             --brand: __ACCENT_COLOR__;
         }
     </style>
-    <link rel="stylesheet" href="/static/dashboard.css">
+    <link rel="stylesheet" href="/static/dashboard.css?v=supplied4">
 </head>
 <body class="min-h-screen bg-white text-foreground antialiased brand-__BRAND_ID__">
     <div id="page-banner"></div>
@@ -188,6 +188,32 @@
                         </div>
                     </div>
                     <div id="unified-log" class="flex-1 overflow-y-auto pr-1 min-h-0"></div>
+                </div>
+
+                <div class="supplied-videos-card rounded-3xl border p-4 md:p-5 shadow-sm bg-background space-y-3">
+                    <div class="supplied-videos-toggle flex items-start gap-3">
+                        <input type="checkbox" id="use-supplied-videos" class="supplied-videos-check mt-1 shrink-0"
+                               aria-describedby="use-supplied-videos-help">
+                        <div class="min-w-0">
+                            <label for="use-supplied-videos" class="block text-sm font-semibold text-foreground cursor-pointer">Use my videos</label>
+                            <p id="use-supplied-videos-help" class="text-xs text-muted-foreground mt-0.5 leading-relaxed">Skip slideshow generation, TikTok music, and on-screen text. Upload separately on the Labely and ValCoin tabs — each brand keeps its own videos.</p>
+                        </div>
+                    </div>
+                    <div id="supplied-videos-panel" class="supplied-videos-panel hidden border-t border-border pt-3 space-y-3">
+                        <div class="flex flex-wrap items-start justify-between gap-2">
+                            <div class="min-w-0">
+                                <p class="text-sm font-semibold" id="supplied-videos-title">__APP_NAME__ videos</p>
+                                <p class="text-xs text-muted-foreground mt-0.5" id="supplied-videos-hint">Upload 3 MP4s for this brand only</p>
+                            </div>
+                            <button type="button" id="supplied-videos-clear" class="btn-ghost btn-sm shrink-0" onclick="clearSuppliedVideos()">Clear all</button>
+                        </div>
+                        <label for="supplied-videos-input" id="supplied-videos-drop" class="supplied-videos-drop block cursor-pointer rounded-xl border-2 border-dashed border-border bg-muted/30 px-4 py-8 text-center transition-colors">
+                            <span class="block text-sm font-medium text-foreground">Click to choose videos</span>
+                            <span class="block text-xs text-muted-foreground mt-1">or drop MP4 / MOV files here (up to 3 for __APP_NAME__)</span>
+                            <input type="file" id="supplied-videos-input" class="sr-only" accept="video/mp4,video/quicktime,video/*" multiple>
+                        </label>
+                        <ul id="supplied-videos-list" class="supplied-videos-list text-sm"></ul>
+                    </div>
                 </div>
 
                 <details class="advanced-panel rounded-2xl border p-4 md:p-6 bg-background shadow-sm" id="advanced-panel">
@@ -331,6 +357,6 @@
     <script>
         window.__FARM__ = { slots: __FARM_SLOTS__, brand: '__BRAND_ID__', accent: '__ACCENT_COLOR__' };
     </script>
-    <script src="/static/dashboard.js"></script>
+    <script src="/static/dashboard.js?v=supplied4"></script>
 </body>
 </html>

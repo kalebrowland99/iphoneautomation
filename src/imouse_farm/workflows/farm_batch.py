@@ -9,7 +9,11 @@ from imouse_farm.config.models import AppConfig, BatchConfig
 from imouse_farm.database.repository import DatabaseRepository
 from imouse_farm.devices.manager import DeviceManager
 from imouse_farm.permissions.watcher import PermissionWatcherManager
-from imouse_farm.post.post_caption_store import validate_post_texts, text_key_for_device
+from imouse_farm.post.post_caption_store import (
+    POST_COUNT,
+    validate_post_texts,
+    text_key_for_device,
+)
 from imouse_farm.post.account_profile_store import (
     get_profile_for_device,
     is_cant_cast_imouse,
@@ -22,7 +26,9 @@ from imouse_farm.captions.service import (
     default_onscreen_template_for_brand,
     generate_captions_for_device,
 )
+from imouse_farm.settings.run_settings import get_use_supplied_videos
 from imouse_farm.utils.logging import get_logger
+from imouse_farm.utils.supplied_videos import distribute_supplied_videos
 from imouse_farm.recordings.session_recorder import (
     SessionRecordingManager,
     session_recording_path,
@@ -167,11 +173,71 @@ class FarmBatchRunner:
             "message": f"Queued {len(devices)} phone(s) one at a time",
             "from_post": from_post,
         }
+        try:
+            self._distribute_supplied_if_needed(devices, brand=brand)
+        except ValueError as exc:
+            logger.warning("supplied_videos_distribute_failed", error=str(exc))
+            self._status.update(
+                {
+                    "status": "idle",
+                    "message": str(exc),
+                    "active": False,
+                }
+            )
+            return False
+
         self._task = asyncio.create_task(
             self._run_batches(batches, from_post=from_post, brand=brand)
         )
         await self._emit("batch_started", self.get_status())
         return True
+
+    def _distribute_supplied_if_needed(
+        self,
+        devices: list[Any],
+        *,
+        brand: str,
+    ) -> None:
+        if not get_use_supplied_videos():
+            return
+        slots = [str(d.user_name) for d in devices if str(d.user_name or "").strip()]
+        if not slots:
+            return
+        base = str(self._app_config.gallery.base_directory)
+        exts = list(self._app_config.gallery.media_extensions)
+        expected = max(1, int(self._app_config.slideshow.slideshows_per_slot or POST_COUNT))
+        result = distribute_supplied_videos(
+            base,
+            slots,
+            brand=brand,
+            extensions=exts,
+            expected_count=expected,
+        )
+        logger.info(
+            "supplied_videos_ready",
+            brand=brand,
+            slots=len(result.get("slots") or []),
+            source_count=result.get("source_count"),
+        )
+        # Labely runs may chain ValCoin posts on selected ValCoin slots.
+        if brand == "labely" and self._config.chain_valcoin_after_labely and self._valcoin_post_slots:
+            valcoin_slots = [
+                s for s in slots if s in self._valcoin_post_slots
+            ]
+            if valcoin_slots:
+                vc = distribute_supplied_videos(
+                    base,
+                    valcoin_slots,
+                    brand="valcoin",
+                    extensions=exts,
+                    expected_count=expected,
+                )
+                logger.info(
+                    "supplied_videos_ready",
+                    brand="valcoin",
+                    slots=len(vc.get("slots") or []),
+                    source_count=vc.get("source_count"),
+                )
 
     async def _disconnect_unselected_casts(self, selected_ids: set[str]) -> None:
         """Drop AirPlay for any online phone not in the current batch selection."""
@@ -410,7 +476,12 @@ class FarmBatchRunner:
                     # Caption validation only needed when actually posting.
                     text_key = _post_text_key(device, brand)
                     check_from = effective_from_post if effective_from_post is not None else 1
-                    if self._auto_captions and self._app_config.openai.enabled:
+                    use_supplied = get_use_supplied_videos()
+                    if (
+                        not use_supplied
+                        and self._auto_captions
+                        and self._app_config.openai.enabled
+                    ):
                         try:
                             await generate_captions_for_device(
                                 self._app_config,
@@ -434,11 +505,21 @@ class FarmBatchRunner:
                                 slot=device.user_name,
                                 error=str(exc),
                             )
-                    missing = validate_post_texts(text_key, from_post=check_from, brand=brand)
+                    missing = validate_post_texts(
+                        text_key,
+                        from_post=check_from,
+                        brand=brand,
+                        require_onscreen=not use_supplied,
+                    )
                     if chain_valcoin:
                         valcoin_key = _post_text_key(device, "valcoin")
                         missing.extend(
-                            validate_post_texts(valcoin_key, from_post=1, brand="valcoin")
+                            validate_post_texts(
+                                valcoin_key,
+                                from_post=1,
+                                brand="valcoin",
+                                require_onscreen=not use_supplied,
+                            )
                         )
                     if missing:
                         self._status["failed"].append({

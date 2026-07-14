@@ -130,10 +130,12 @@ steps:
   # ── 4. Music gallery button ─────────────────────────────────────────
   - type: wait
     name: before_music_gallery
+    unless_use_supplied_videos: true
     duration_seconds: 6
 
   - type: execute_action
     name: tap_music_gallery
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: tap
@@ -143,11 +145,13 @@ steps:
 
   - type: wait
     name: after_music_gallery
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 5. Wait for Favorites, then tap ─────────────────────────────────
   - type: execute_action
     name: tap_favorites
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: tap_ocr
@@ -162,6 +166,7 @@ steps:
   # ── 6. Wait for Hvitserk or unstable retry while music loads ────────
   - type: execute_action
     name: tap_hvitserk_choice
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: tap_ocr
@@ -188,11 +193,13 @@ steps:
 
   - type: wait
     name: after_hvitserk
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 7. Dismiss music picker (center tap) ────────────────────────────
   - type: execute_action
     name: dismiss_music_box
+    unless_use_supplied_videos: true
     action:
       type: tap
       x: 187
@@ -201,15 +208,18 @@ steps:
 
   - type: wait
     name: after_dismiss_music
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 8. Tap Aa (fixed coord) ─────────────────────────────────────────
   - type: wait
     name: before_tap_aa
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   - type: execute_action
     name: tap_aa
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: tap
@@ -220,11 +230,13 @@ steps:
 
   - type: wait
     name: after_aa
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 9. Type onscreen text from dashboard ────────────────────────────
   - type: execute_action
     name: type_onscreen_text
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: text_input
@@ -233,11 +245,13 @@ steps:
 
   - type: wait
     name: after_caption
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 10. White background — fixed coord (303, 63) ×2, post 1 only ───
   - type: execute_action
     name: tap_white_background
+    unless_use_supplied_videos: true
     when_post_index: 1
     on_failure: pause
     action:
@@ -250,12 +264,14 @@ steps:
 
   - type: wait
     name: after_white_background
+    unless_use_supplied_videos: true
     when_post_index: 1
     duration_seconds: 3
 
   # ── 11. Done (top-right) ────────────────────────────────────────────
   - type: execute_action
     name: tap_done
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: tap_ocr
@@ -268,11 +284,13 @@ steps:
 
   - type: wait
     name: after_done
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 12. Editor icon — fixed coord (566, 247) ────────────────────────
   - type: execute_action
     name: tap_editor
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: tap
@@ -282,11 +300,13 @@ steps:
 
   - type: wait
     name: after_editor
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 13. Swipe left twice (timeline scrub area) ──────────────────────
   - type: execute_action
     name: swipe_left
+    unless_use_supplied_videos: true
     action:
       type: swipe
       direction: left
@@ -300,11 +320,13 @@ steps:
 
   - type: wait
     name: after_swipe_left
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 14. Text scrub marker ───────────────────────────────────────────
   - type: execute_action
     name: tap_text_scrub
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: tap
@@ -314,11 +336,13 @@ steps:
 
   - type: wait
     name: after_text_scrub
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 15. Hold + drag clip trim ───────────────────────────────────────
   - type: execute_action
     name: drag_trim
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: drag
@@ -333,7 +357,14 @@ steps:
 
   - type: wait
     name: after_drag_trim
+    unless_use_supplied_videos: true
     duration_seconds: 3
+
+  # Supplied-video mode: skip music + Aa; settle before continue/post.
+  - type: wait
+    name: after_media_supplied
+    when_use_supplied_videos: true
+    duration_seconds: 6
 
   # ── 16. Wait for continue arrow (or Post), then tap ─────────────────
   - type: wait_for_detection

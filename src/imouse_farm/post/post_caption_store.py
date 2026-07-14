@@ -234,13 +234,14 @@ def validate_post_texts(
     *,
     from_post: int = 1,
     brand: str | None = None,
+    require_onscreen: bool = True,
 ) -> list[str]:
     """Return errors for empty onscreen/final fields required before a pipeline run."""
     if from_post < 1 or from_post > POST_COUNT:
         raise ValueError(f"from_post must be 1..{POST_COUNT}, got {from_post}")
     errors: list[str] = []
     for post in range(from_post, POST_COUNT + 1):
-        if not get_onscreen_text(device_key, post, brand=brand).strip():
+        if require_onscreen and not get_onscreen_text(device_key, post, brand=brand).strip():
             errors.append(f"Post {post}: onscreen text is empty")
         if not get_final_caption(device_key, post, brand=brand).strip():
             errors.append(f"Post {post}: final caption is empty")

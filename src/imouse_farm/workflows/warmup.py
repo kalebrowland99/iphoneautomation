@@ -508,7 +508,7 @@ async def _open_tiktok_for_warmup(
     """Turn VPN on, open TikTok from the home screen, then wait for the + button.
 
     Always taps the TikTok icon after VPN — do not skip open based on a pre-VPN
-    + match (phone reset during VPN recovery lands on Springboard).
+    + match (stale detections from earlier in the run are not trusted here).
     """
     await _ensure_vpn_on(
         controller,
@@ -565,27 +565,9 @@ async def _ensure_vpn_on(
     *,
     device_manager: Any | None = None,
 ) -> None:
-    """Turn VPN on; on shortcut failure, reboot phone + recast once, then retry."""
-    try:
-        await ensure_vpn_on(controller, app_config, device_id, log_activity=log_activity)
-        return
-    except Exception as exc:
-        if device_manager is None:
-            raise
-        logger.warning(
-            "warmup_vpn_on_failed_resetting_phone",
-            device_id=device_id,
-            error=str(exc),
-        )
-        if log_activity:
-            await log_activity(
-                "warn",
-                "batch",
-                f"VPN on failed ({exc}) — restarting phone and recasting, then retrying VPN",
-                device_id,
-            )
-        await device_manager.reset_phone_and_recast(device_id)
-        await ensure_vpn_on(controller, app_config, device_id, log_activity=log_activity)
+    """Turn VPN on via shortcut (no phone reboot on failure)."""
+    del device_manager  # kept for call-site compatibility
+    await ensure_vpn_on(controller, app_config, device_id, log_activity=log_activity)
 
 
 async def _wait_with_live_watch(

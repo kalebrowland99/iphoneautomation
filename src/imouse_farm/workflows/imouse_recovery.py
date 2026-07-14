@@ -22,7 +22,7 @@ _IMOUSE_FAILURE_SUBSTRINGS = (
     "kernel",
 )
 
-# VPN URL shortcuts time out on a stuck phone — recover with phone reset, not kernel restart.
+# VPN URL shortcut timeouts are phone/app issues — do not treat as iMouse kernel failures.
 _VPN_SHORTCUT_MARKERS = (
     "shortcut_exec_url",
     "shadowrocket://",

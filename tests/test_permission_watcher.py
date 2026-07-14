@@ -31,6 +31,21 @@ def test_denies_contacts_location_notifications() -> None:
     )
 
 
+def test_detects_ios_local_network_dialog() -> None:
+    from imouse_farm.actions.permission_prompts import (
+        is_ios_local_network_dialog,
+        is_ok_button_label,
+    )
+
+    text = (
+        '"Shadowrocket" Would Like to Find and Connect to Devices on Your Local Network.\n'
+        "Don't Allow\nOK"
+    )
+    assert is_ios_local_network_dialog(text)
+    assert is_ok_button_label("OK")
+    assert not is_ok_button_label("Don't Allow")
+
+
 def test_button_texts_for_deny_vs_allow() -> None:
     assert "Don't Allow" in button_texts_for_permission(False)
     assert "Allow" in button_texts_for_permission(True)

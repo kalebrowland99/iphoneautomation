@@ -97,6 +97,7 @@ DebugKind = Literal[
     "home",
     "vpn_shortcut",
     "vpn_off_before_album",
+    "vpn_vision_status",
     "account_switch_step",
     "slideshow_generate",
     "vision_navigate",
@@ -237,6 +238,8 @@ class DebugTest(TypedDict, total=False):
     expect_missing: bool
     apply_watcher: bool
     skip_vpn_off: bool
+    want: str  # vpn_vision_status: on | off | empty = report only
+    mode: str
 
 
 # Manual tests override auto-generated template entries with the same id.
@@ -335,13 +338,13 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "prep-vpn-shortcut-on": {
-        "label": "Prep: VPN ON via URL shortcut (browser)",
+        "label": "Prep: VPN ON via URL shortcut",
         "kind": "vpn_shortcut",
         "group": "prep",
         "mode": "on",
         "hint": (
-            "Opens vpn.shortcut_url_on via iMouse shortcut_exec_url. "
-            "Default: shadowrocket://connect — edit config.yaml if you use a custom Shortcuts URL."
+            "Runs production ensure_vpn_on: shadowrocket://connect via shortcut_exec_url "
+            "(waits up to shortcut_url_timeout_ms, then shortcut_settle_seconds). No vision."
         ),
         "offline_hint": OFFLINE_HINT,
     },
@@ -358,15 +361,45 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "prep-vpn-shortcut-off": {
-        "label": "Prep: VPN OFF via URL shortcut (browser)",
+        "label": "Prep: VPN OFF via URL shortcut",
         "kind": "vpn_shortcut",
         "group": "prep",
         "mode": "off",
         "hint": (
-            "Opens vpn.shortcut_url_off via iMouse shortcut_exec_url. "
-            "Default: shadowrocket://disconnect. "
-            "For the exact clear_album production preamble, use "
-            "'VPN OFF before album (production)' instead."
+            "Runs production ensure_vpn_off: shadowrocket://disconnect via shortcut_exec_url "
+            "(waits up to shortcut_url_timeout_ms, then shortcut_settle_seconds). No vision."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-vision-status": {
+        "label": "Prep: VPN vision status (status-bar VPN label)",
+        "kind": "vpn_vision_status",
+        "group": "prep",
+        "hint": (
+            "Goes home, screenshots, and asks GPT-4o if the small top-left 'VPN' "
+            "status-bar label is visible. Does not open Shadowrocket."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-vision-confirm-on": {
+        "label": "Prep: VPN vision confirm ON (status-bar)",
+        "kind": "vpn_vision_status",
+        "group": "prep",
+        "want": "on",
+        "hint": (
+            "Goes home and requires GPT-4o STATUS: ON (top-left 'VPN' label visible). "
+            "Does not open Shadowrocket."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-vision-confirm-off": {
+        "label": "Prep: VPN vision confirm OFF (status-bar)",
+        "kind": "vpn_vision_status",
+        "group": "prep",
+        "want": "off",
+        "hint": (
+            "Goes home and requires GPT-4o STATUS: OFF (no top-left 'VPN' label). "
+            "Does not open Shadowrocket."
         ),
         "offline_hint": OFFLINE_HINT,
     },
@@ -1179,6 +1212,9 @@ _DEBUG_LIST_PRIORITY = (
     "list-album",
     "prep-open-shadowrocket-shortcut",
     "prep-vpn-shortcut-on",
+    "prep-vpn-vision-status",
+    "prep-vpn-vision-confirm-on",
+    "prep-vpn-vision-confirm-off",
     "prep-vpn-off-before-album",
     "prep-vpn-shortcut-off",
     "prep-vpn-shortcut-toggle",
@@ -1393,6 +1429,8 @@ async def run_debug_test(
         return await home_debug(app, device_id, test_id, spec)
     if kind == "vpn_shortcut":
         return await vpn_shortcut_debug(app, device_id, test_id, spec)
+    if kind == "vpn_vision_status":
+        return await vpn_vision_status_debug(app, device_id, test_id, spec)
     if kind == "vpn_off_before_album":
         return await vpn_off_before_album_debug(app, device_id, test_id, spec)
     if kind == "detect_ocr":
@@ -2659,14 +2697,19 @@ async def account_switch_step_debug(
         return {"success": True, "message": message}
 
     if step == "tap_opener_vision":
+        async def _vision_log(level: str, category: str, message: str, *args: Any, **_kw: Any) -> None:
+            did = args[0] if args else device_id
+            await app.db.log_activity(level, category, message, did, {"test_id": test_id})
+
         try:
             x, y, reason = await _vision_locate_account_switcher_opener(
                 ctrl,
                 device_id,
                 app_config=app.config,
+                log_activity=_vision_log,
             )
         except Exception as exc:
-            msg = f"GPT-4o vision opener failed: {type(exc).__name__}: {exc}"
+            msg = f"Vision opener failed ({app.config.openai.account_switcher_vision_model}): {type(exc).__name__}: {exc}"
             await app.db.log_activity(
                 "warn", "test", msg, device_id, {"test_id": test_id}
             )
@@ -2680,15 +2723,16 @@ async def account_switch_step_debug(
                 "success": False,
                 "message": f"Failed to tap vision opener ({x}, {y}) — {reason}",
             }
+        model = str(app.config.openai.account_switcher_vision_model or "gpt-4o")
         message, visible = await _switcher_visibility_message(
-            f"Vision tapped display name at ({x}, {y}) — {reason}"
+            f"Vision ({model}) tapped display name at ({x}, {y}) — {reason}"
         )
         await app.db.log_activity(
             "info",
             "test",
             message,
             device_id,
-            {"test_id": test_id, "x": x, "y": y, "visible": visible},
+            {"test_id": test_id, "x": x, "y": y, "visible": visible, "model": model},
         )
         return {
             "success": True,
@@ -2696,6 +2740,7 @@ async def account_switch_step_debug(
             "x": x,
             "y": y,
             "reason": reason,
+            "model": model,
             "switcher_visible": visible,
         }
 
@@ -3303,11 +3348,82 @@ async def vpn_off_before_album_debug(
     }
 
 
+async def vpn_vision_status_debug(
+    app: Any, device_id: str, test_id: str, spec: DebugTest
+) -> dict[str, Any]:
+    """Go home and ask GPT-4o if the top-left status-bar 'VPN' label is visible."""
+    from imouse_farm.actions.vpn_shadowrocket import (
+        _vision_read_vpn_status,
+        confirm_vpn_status_via_vision,
+    )
+
+    await _require_online_device(app, device_id, spec)
+    want_raw = str(spec.get("want") or "").strip().lower()
+    want = want_raw if want_raw in ("on", "off") else ""
+    ctrl = app.device_manager.controller
+
+    async def _log(level: str, category: str, message: str, device: str = device_id) -> None:
+        await app.db.log_activity(
+            level,
+            category,
+            message,
+            device,
+            {"test_id": test_id, "want": want or None},
+        )
+
+    try:
+        if want:
+            status = await confirm_vpn_status_via_vision(
+                ctrl,
+                app.config,
+                device_id,
+                want=want,  # type: ignore[arg-type]
+                log_activity=_log,
+            )
+            message = f"VPN vision confirmed STATUS: {status.upper()} (status-bar)"
+        else:
+            await ctrl.press_home(device_id)
+            await asyncio.sleep(max(0.5, float(app.config.vpn.confirm_settle_seconds)))
+            status = await _vision_read_vpn_status(
+                ctrl,
+                device_id,
+                app_config=app.config,
+            )
+            message = f"VPN vision status: STATUS: {status.upper()} (status-bar)"
+            await _log("info", "device", message)
+    except Exception as exc:
+        await app.db.log_activity(
+            "error",
+            "test",
+            f"VPN vision status failed: {exc}",
+            device_id,
+            {"test_id": test_id, "want": want or None},
+        )
+        await app.screenshot_service.capture(device_id)
+        return {"success": False, "message": str(exc), "want": want or None}
+
+    await app.screenshot_service.capture(device_id)
+    await app.db.log_activity(
+        "info",
+        "test",
+        message,
+        device_id,
+        {"test_id": test_id, "status": status, "want": want or None},
+    )
+    return {
+        "success": True,
+        "message": message,
+        "status": status,
+        "want": want or None,
+    }
+
+
 async def vpn_shortcut_debug(
     app: Any, device_id: str, test_id: str, spec: DebugTest
 ) -> dict[str, Any]:
     from imouse_farm.actions.vpn_shadowrocket import (
-        VpnShortcutMode,
+        ensure_vpn_off,
+        ensure_vpn_on,
         exec_vpn_shortcut_url,
         vpn_shortcut_url,
     )
@@ -3316,6 +3432,49 @@ async def vpn_shortcut_debug(
     mode = str(spec.get("mode") or "toggle").strip().lower()
     if mode not in ("on", "off", "toggle", "open"):
         raise HTTPException(400, f"Invalid VPN shortcut mode: {mode}")
+
+    async def _log(level: str, category: str, message: str, device: str = device_id) -> None:
+        await app.db.log_activity(
+            level, category, message, device, {"test_id": test_id, "mode": mode}
+        )
+
+    # Production on/off path includes GPT-4o STATUS: ON/OFF confirmation.
+    if mode in ("on", "off"):
+        try:
+            if mode == "on":
+                await ensure_vpn_on(
+                    app.device_manager.controller,
+                    app.config,
+                    device_id,
+                    log_activity=_log,
+                )
+            else:
+                await ensure_vpn_off(
+                    app.device_manager.controller,
+                    app.config,
+                    device_id,
+                    log_activity=_log,
+                )
+        except Exception as exc:
+            await app.db.log_activity(
+                "error",
+                "test",
+                f"VPN {mode.upper()} failed: {exc}",
+                device_id,
+                {"test_id": test_id, "mode": mode},
+            )
+            return {"success": False, "message": str(exc), "mode": mode}
+        await app.screenshot_service.capture(device_id)
+        message = f"VPN {mode.upper()} confirmed (shortcut + vision)"
+        await app.db.log_activity(
+            "info",
+            "test",
+            message,
+            device_id,
+            {"test_id": test_id, "mode": mode},
+        )
+        return {"success": True, "message": message, "mode": mode}
+
     url = str(spec.get("url") or "").strip() or vpn_shortcut_url(
         app.config, mode  # type: ignore[arg-type]
     )
@@ -3336,6 +3495,7 @@ async def vpn_shortcut_debug(
             settle_seconds=settle,
             outtime_ms=outtime_ms,
             press_home_after=press_home_after,
+            log_activity=_log,
         )
     except Exception as exc:
         await app.db.log_activity(
@@ -3347,7 +3507,7 @@ async def vpn_shortcut_debug(
         )
         return {"success": False, "message": str(exc), "url": url, "mode": mode}
     await app.screenshot_service.capture(device_id)
-    label = {"on": "ON", "off": "OFF", "toggle": "toggle", "open": "open"}[mode]
+    label = {"toggle": "toggle", "open": "open"}[mode]
     message = f"VPN shortcut {label}: opened {url}"
     await app.db.log_activity(
         "info",

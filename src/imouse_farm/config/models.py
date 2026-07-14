@@ -143,6 +143,8 @@ class OpenAICaptionConfig(BaseModel):
     api_key: str = ""
     model: str = "gpt-4o-mini"
     temperature: float = 0.85
+    # Vision model for tapping the account-switcher dropdown arrow.
+    account_switcher_vision_model: str = "gpt-5.5"
 
 
 class DashboardConfig(BaseModel):
@@ -283,8 +285,11 @@ class VpnConfig(BaseModel):
     shortcut_url_off: str = "shadowrocket://disconnect"
     shortcut_url_toggle: str = "shadowrocket://toggle"
     shortcut_url_open: str = "shadowrocket://"
-    shortcut_settle_seconds: float = 4.0
-    shortcut_url_timeout_ms: int = 30000
+    shortcut_settle_seconds: float = 120.0
+    shortcut_url_timeout_ms: int = 120000
+    confirm_via_vision: bool = False
+    confirm_max_attempts: int = 2
+    confirm_settle_seconds: float = 2.0
 
 
 class BatchConfig(BaseModel):
@@ -345,6 +350,8 @@ class WorkflowStepConfig(BaseModel):
     when_post_index: int | None = None
     when_debug_skip_post: bool | None = None
     unless_debug_skip_post: bool | None = None
+    when_use_supplied_videos: bool | None = None
+    unless_use_supplied_videos: bool | None = None
     requires_screenshot: bool = False
     requires_analysis: bool = False
     duration_seconds: float | None = None

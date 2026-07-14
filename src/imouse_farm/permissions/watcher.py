@@ -12,7 +12,9 @@ from imouse_farm.actions.permission_prompts import (
     find_contacts_search_texts,
     is_deny_permission_label,
     is_find_contacts_context_label,
+    is_ios_local_network_dialog,
     is_not_now_label,
+    is_ok_button_label,
     is_permission_dialog_text,
     is_photo_delete_sheet_text,
     is_tiktok_continue_editing_dialog,
@@ -30,6 +32,7 @@ from imouse_farm.actions.permission_prompts import (
     is_tiktok_virtual_items_policies_dialog,
     is_got_it_label,
     is_save_button_label,
+    local_network_ok_button_texts,
     should_allow_permission,
     tiktok_continue_editing_swipe_coords,
     tiktok_dont_allow_button_texts,
@@ -485,6 +488,21 @@ class PermissionWatcher:
                     await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
                     return True
 
+            if is_ios_local_network_dialog(screen):
+                tapped = await self._tap_ok()
+                if tapped:
+                    logger.info(
+                        "permission_watcher_tap",
+                        device_id=self._device_id,
+                        action="local_network_ok",
+                        text=tapped.get("text", ""),
+                        x=tapped.get("x"),
+                        y=tapped.get("y"),
+                    )
+                    await self._touch_activity()
+                    await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
+                    return True
+
             if is_photo_delete_sheet_text(screen):
                 return False
 
@@ -652,6 +670,22 @@ class PermissionWatcher:
             )
             candidates = [
                 m for m in matches if is_got_it_label(str(m.get("text", "")))
+            ]
+            if not candidates:
+                continue
+            best = max(candidates, key=lambda m: float(m.get("confidence", 0)))
+            await self._pre_touch_if_tiktok()
+            await self._controller.tap(self._device_id, int(best["x"]), int(best["y"]))
+            return best
+        return None
+
+    async def _tap_ok(self) -> dict[str, Any] | None:
+        for text in local_network_ok_button_texts():
+            matches = await self._controller.find_text_on_device(
+                self._device_id, [text], threshold=0.65, contain=True
+            )
+            candidates = [
+                m for m in matches if is_ok_button_label(str(m.get("text", "")))
             ]
             if not candidates:
                 continue

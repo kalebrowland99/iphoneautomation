@@ -113,6 +113,10 @@ def test_debug_tests_have_required_fields() -> None:
         elif kind == "vpn_shortcut":
             assert spec.get("mode") in {"on", "off", "toggle", "open"}
             assert spec["hint"]
+        elif kind == "vpn_vision_status":
+            want = spec.get("want")
+            assert want in (None, "", "on", "off")
+            assert spec["hint"]
         elif kind == "vpn_off_before_album":
             assert test_id == "prep-vpn-off-before-album"
             assert spec["hint"]

@@ -320,7 +320,7 @@ async def _switch_to_dest_account(
             )
     if not switcher_open:
         raise RuntimeError(
-            "Could not open TikTok account switcher — GPT-4o vision could not locate the display name"
+            "Could not open TikTok account switcher — vision could not locate the display name"
         )
 
     await _sleep(1.0)
@@ -430,7 +430,7 @@ async def _open_account_switcher(
     device_user_name: str = "",
     log_activity: LogFn | None = None,
 ) -> bool:
-    """Open the account switcher by tapping the profile display name via GPT-4o vision."""
+    """Open the account switcher by tapping the profile display name via vision."""
     del navigation, device_user_name  # opener no longer uses fixed coords / per-slot UI
     if app_config is None or not app_config.openai.enabled:
         logger.warning("account_switcher_vision_unavailable", reason="openai disabled")
@@ -441,6 +441,7 @@ async def _open_account_switcher(
             controller,
             device_id,
             app_config=app_config,
+            log_activity=log_activity,
         )
     except Exception as exc:
         logger.warning(
@@ -491,28 +492,18 @@ async def _open_account_switcher(
     return True
 
 
-_ACCOUNT_SWITCHER_OPENER_MODEL = "gpt-4o"
+_ACCOUNT_SWITCHER_OPENER_MODEL_DEFAULT = "gpt-5.5"
 
-_ACCOUNT_SWITCHER_OPENER_SYSTEM = """You are looking at a TikTok profile screen on an iPhone.
-The account-switcher popup is NOT open yet — you should NOT see a list of other @ accounts.
-
-On the profile header there is a display NAME above the @handle.
-Tap that display name (the text above the @handle, or the small chevron next to it) to open the account switcher and reveal the accounts.
-
-Reply with EXACTLY two lines and nothing else:
+_ACCOUNT_SWITCHER_OPENER_SYSTEM = """Screenshot is {width}×{height} pixels. Reply with exactly two lines and nothing else:
 X: <integer>
-Y: <integer>
+Y: <integer>"""
 
-Example:
-X: 312
-Y: 238
 
-Rules:
-- Use that exact label format: "X: " then the number, newline, "Y: " then the number.
-- No JSON, no markdown, no reason text, no extra lines.
-- Coordinates are integer pixels on this screenshot for the display name ABOVE the @handle.
-- Screen dimensions are {width}×{height} pixels.
-- Do not tap the @handle, profile picture, or bottom tabs."""
+def _account_switcher_opener_model(app_config: AppConfig) -> str:
+    configured = str(
+        getattr(app_config.openai, "account_switcher_vision_model", "") or ""
+    ).strip()
+    return configured or _ACCOUNT_SWITCHER_OPENER_MODEL_DEFAULT
 
 
 def _parse_account_switcher_opener_coords(raw: str) -> tuple[int, int, str]:
@@ -530,7 +521,7 @@ def _parse_account_switcher_opener_coords(raw: str) -> tuple[int, int, str]:
     x_match = re.search(r"(?im)^\s*X\s*:\s*(-?\d+)\s*$", text)
     y_match = re.search(r"(?im)^\s*Y\s*:\s*(-?\d+)\s*$", text)
     if x_match and y_match:
-        return int(x_match.group(1)), int(y_match.group(1)), "display name above @handle"
+        return int(x_match.group(1)), int(y_match.group(1)), "dropdown arrow next to name"
 
     # Same labels inline on one line: "X: 312 Y: 238"
     inline = re.search(
@@ -538,7 +529,7 @@ def _parse_account_switcher_opener_coords(raw: str) -> tuple[int, int, str]:
         text,
     )
     if inline:
-        return int(inline.group(1)), int(inline.group(2)), "display name above @handle"
+        return int(inline.group(1)), int(inline.group(2)), "dropdown arrow next to name"
 
     parsed: dict[str, Any] | None = None
     try:
@@ -560,7 +551,7 @@ def _parse_account_switcher_opener_coords(raw: str) -> tuple[int, int, str]:
         x_val = lower.get("x", lower.get("cx"))
         y_val = lower.get("y", lower.get("cy"))
         if x_val is not None and y_val is not None:
-            return int(float(x_val)), int(float(y_val)), "display name above @handle"
+            return int(float(x_val)), int(float(y_val)), "dropdown arrow next to name"
 
     raise RuntimeError(
         "Vision reply must be exactly 'X: <int>' and 'Y: <int>' lines; "
@@ -568,16 +559,98 @@ def _parse_account_switcher_opener_coords(raw: str) -> tuple[int, int, str]:
     )
 
 
+def _account_switcher_image_detail(model: str) -> str:
+    if model.startswith(("gpt-5.4", "gpt-5.5", "gpt-5.6")):
+        return "original"
+    return "high"
+
+
+def _is_reasoning_vision_model(model: str) -> bool:
+    return model.startswith("gpt-5") or model.startswith("o")
+
+
+async def _openai_account_switcher_coords(
+    client: Any,
+    *,
+    model: str,
+    system: str,
+    user_text: str,
+    b64_jpeg: str,
+    image_detail: str,
+) -> str:
+    """Call OpenAI for X/Y coords; returns raw assistant text (may be empty)."""
+    messages = [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": user_text},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{b64_jpeg}",
+                        "detail": image_detail,
+                    },
+                },
+            ],
+        },
+    ]
+    create_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+    }
+    if _is_reasoning_vision_model(model):
+        # Reasoning tokens count against this budget; 128 was too low → empty ''.
+        create_kwargs["max_completion_tokens"] = 4096
+        # Coordinate tap is simple — keep reasoning light so visible output is produced.
+        create_kwargs["reasoning_effort"] = "low"
+    else:
+        create_kwargs["max_tokens"] = 40
+        create_kwargs["temperature"] = 0
+
+    try:
+        response = await client.chat.completions.create(**create_kwargs)
+    except Exception as exc:
+        # Older SDK / endpoint may reject reasoning_effort — retry without it.
+        msg = str(exc).lower()
+        if "reasoning_effort" in msg or "unexpected" in msg or "unsupported" in msg:
+            create_kwargs.pop("reasoning_effort", None)
+            logger.warning(
+                "account_switcher_vision_retry_without_reasoning_effort",
+                model=model,
+                error=str(exc),
+            )
+            response = await client.chat.completions.create(**create_kwargs)
+        else:
+            raise
+
+    choice = response.choices[0]
+    raw = (choice.message.content or "").strip()
+    finish = getattr(choice, "finish_reason", None)
+    usage = getattr(response, "usage", None)
+    logger.info(
+        "account_switcher_vision_api",
+        model=model,
+        finish_reason=finish,
+        content_len=len(raw),
+        usage=str(usage)[:200] if usage else None,
+    )
+    return raw
+
+
 async def _vision_locate_account_switcher_opener(
     controller: Any,
     device_id: str,
     *,
     app_config: AppConfig,
+    log_activity: Any | None = None,
 ) -> tuple[int, int, str]:
-    """Screenshot profile and ask GPT-4o for the display-name tap to open the switcher."""
+    """Screenshot profile and ask vision model for the dropdown-arrow tap."""
     import base64
     import io
     import os
+    from datetime import datetime
+    from pathlib import Path
 
     from PIL import Image
 
@@ -600,59 +673,150 @@ async def _vision_locate_account_switcher_opener(
     width, height = img.size
     b64 = base64.b64encode(jpeg_bytes).decode("ascii")
 
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI(api_key=api_key)
-    system = _ACCOUNT_SWITCHER_OPENER_SYSTEM.format(width=width, height=height)
-    response = await client.chat.completions.create(
-        model=_ACCOUNT_SWITCHER_OPENER_MODEL,
-        max_tokens=40,
-        temperature=0,
-        messages=[
-            {"role": "system", "content": system},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "Find the display name ABOVE the @handle. "
-                            "Reply with exactly two lines:\nX: <integer>\nY: <integer>"
-                        ),
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{b64}",
-                            "detail": "high",
-                        },
-                    },
-                ],
-            },
-        ],
+    # Save the exact JPEG sent to OpenAI for debugging.
+    now = datetime.now()
+    safe_id = str(device_id).replace(":", "-").replace("/", "-")
+    debug_dir = (
+        Path(app_config.gallery.base_directory).resolve()
+        / "_debug"
+        / "account_switcher_vision"
+        / now.strftime("%Y-%m-%d")
     )
-    raw = (response.choices[0].message.content or "").strip()
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    debug_path = debug_dir / f"vision_{now.strftime('%H%M%S')}_{safe_id}.jpg"
     try:
-        x, y, reason = _parse_account_switcher_opener_coords(raw)
-    except Exception as exc:
-        logger.warning(
-            "account_switcher_vision_parse_failed",
+        debug_path.write_bytes(jpeg_bytes)
+        logger.info(
+            "account_switcher_vision_screenshot_saved",
             device_id=device_id,
-            raw=raw[:300],
+            path=str(debug_path),
+        )
+        if log_activity:
+            await log_activity(
+                "info",
+                "workflow",
+                f"Account switcher vision screenshot saved — {debug_path}",
+                device_id,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "account_switcher_vision_screenshot_save_failed",
+            device_id=device_id,
             error=str(exc),
         )
-        raise RuntimeError(f"Could not parse opener coords from: {raw[:180]!r}") from exc
-    logger.info(
-        "account_switcher_vision_locate",
-        device_id=device_id,
-        x=x,
-        y=y,
-        reason=reason,
-        screen=(width, height),
-        model=_ACCOUNT_SWITCHER_OPENER_MODEL,
-        raw=raw[:120],
+
+    from openai import AsyncOpenAI
+
+    model = _account_switcher_opener_model(app_config)
+    image_detail = _account_switcher_image_detail(model)
+    client = AsyncOpenAI(api_key=api_key)
+    system = _ACCOUNT_SWITCHER_OPENER_SYSTEM.format(width=width, height=height)
+    user_text = (
+        "Tap the dropdown arrow on the screen, typically next to the bold letters/name. "
+        "Reply with exactly two lines:\nX: <integer>\nY: <integer>"
     )
-    return x, y, reason
+
+    models_to_try = [model]
+    if model != "gpt-4o":
+        models_to_try.append("gpt-4o")
+
+    last_raw = ""
+    last_model = model
+    parse_error: Exception | None = None
+    for attempt_model in models_to_try:
+        detail = _account_switcher_image_detail(attempt_model)
+        if log_activity:
+            await log_activity(
+                "info",
+                "workflow",
+                (
+                    f"Account switcher vision: model={attempt_model} detail={detail} "
+                    f"screen={width}x{height}"
+                ),
+                device_id,
+            )
+        try:
+            raw = await _openai_account_switcher_coords(
+                client,
+                model=attempt_model,
+                system=system,
+                user_text=user_text,
+                b64_jpeg=b64,
+                image_detail=detail,
+            )
+        except Exception as api_exc:
+            logger.warning(
+                "account_switcher_vision_api_failed",
+                device_id=device_id,
+                model=attempt_model,
+                error=str(api_exc),
+            )
+            if log_activity:
+                await log_activity(
+                    "warn",
+                    "workflow",
+                    f"Account switcher vision API error ({attempt_model}): {api_exc}",
+                    device_id,
+                )
+            last_raw = ""
+            last_model = attempt_model
+            parse_error = api_exc
+            continue
+
+        last_raw = raw
+        last_model = attempt_model
+        if log_activity:
+            await log_activity(
+                "info",
+                "workflow",
+                f"Account switcher vision raw reply ({attempt_model}): {raw[:200]!r}",
+                device_id,
+            )
+        if not raw:
+            logger.warning(
+                "account_switcher_vision_empty_reply",
+                device_id=device_id,
+                model=attempt_model,
+            )
+            if log_activity and attempt_model != models_to_try[-1]:
+                await log_activity(
+                    "warn",
+                    "workflow",
+                    f"Empty reply from {attempt_model} — retrying with fallback model",
+                    device_id,
+                )
+            continue
+        try:
+            x, y, reason = _parse_account_switcher_opener_coords(raw)
+        except Exception as exc:
+            parse_error = exc
+            logger.warning(
+                "account_switcher_vision_parse_failed",
+                device_id=device_id,
+                model=attempt_model,
+                raw=raw[:300],
+                error=str(exc),
+            )
+            continue
+
+        logger.info(
+            "account_switcher_vision_locate",
+            device_id=device_id,
+            x=x,
+            y=y,
+            reason=reason,
+            screen=(width, height),
+            model=attempt_model,
+            detail=detail,
+            raw=raw[:120],
+            screenshot=str(debug_path),
+        )
+        return x, y, reason
+
+    detail = str(parse_error) if parse_error else "empty or unparseable reply"
+    raise RuntimeError(
+        f"Could not parse opener coords from {last_model}: {last_raw[:180]!r} ({detail})"
+    )
 
 
 async def _switcher_shows_account(
@@ -675,7 +839,7 @@ async def _tap_account_switcher_opener(
     device_user_name: str = "",
     log_activity: LogFn | None = None,
 ) -> bool:
-    """Open the account switcher via GPT-4o vision (debug/production shared path)."""
+    """Open the account switcher via vision (debug/production shared path)."""
     return await _open_account_switcher(
         controller,
         device_id,

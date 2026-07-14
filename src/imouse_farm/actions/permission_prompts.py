@@ -310,6 +310,19 @@ ALLOW_RESOURCE_KEYWORDS = (
     "add photos",
 )
 
+# Shadowrocket / iOS local-network sheet — always tap OK (buttons are Don't Allow | OK).
+LOCAL_NETWORK_DIALOG_KEYWORDS = (
+    "local network",
+    "find and connect to devices",
+    "devices on your local network",
+    "connect to devices on your local",
+)
+
+LOCAL_NETWORK_OK_BUTTON_TEXTS = [
+    "OK",
+    "Ok",
+]
+
 # Signals that a system permission sheet is on screen.
 PERMISSION_DIALOG_KEYWORDS = (
     "would like to",
@@ -407,6 +420,72 @@ async def tap_open_external_app_allow_if_visible(
                 "info",
                 "device",
                 f"Tapped Allow ({best.get('text')}) for Shadowrocket shortcut at ({x}, {y})",
+                device_id,
+            )
+        return True
+    return False
+
+
+def is_ios_local_network_dialog(ocr_text: str) -> bool:
+    """True for iOS local-network access sheet (e.g. Shadowrocket)."""
+    if any(
+        ocr_contains_phrase(ocr_text, kw) for kw in LOCAL_NETWORK_DIALOG_KEYWORDS
+    ):
+        return True
+    text = str(ocr_text or "").lower()
+    return "local network" in text
+
+
+def is_ok_button_label(text: str) -> bool:
+    """True when OCR text is a bare OK button (not Don't Allow)."""
+    if is_deny_permission_label(text):
+        return False
+    return ocr_compact(str(text or "")) == "ok"
+
+
+def local_network_ok_button_texts() -> list[str]:
+    """Button labels for local-network OK."""
+    return list(LOCAL_NETWORK_OK_BUTTON_TEXTS)
+
+
+async def tap_local_network_ok_if_visible(
+    controller: Any,
+    device_id: str,
+    *,
+    log_activity: Any | None = None,
+) -> bool:
+    """Tap OK when iOS asks for local network access (Shadowrocket VPN path)."""
+    from imouse_farm.utils.logging import get_logger
+
+    log = get_logger(__name__)
+    for text in LOCAL_NETWORK_OK_BUTTON_TEXTS:
+        matches = await controller.find_text_on_device(
+            device_id,
+            [text],
+            threshold=0.55,
+            contain=True,
+        )
+        candidates = [
+            m for m in matches if is_ok_button_label(str(m.get("text", "")))
+        ]
+        if not candidates:
+            continue
+        best = max(candidates, key=lambda m: float(m.get("confidence", 0)))
+        x, y = int(best["x"]), int(best["y"])
+        if not await controller.tap(device_id, x, y):
+            continue
+        log.info(
+            "local_network_ok_tapped",
+            device_id=device_id,
+            text=best.get("text"),
+            x=x,
+            y=y,
+        )
+        if log_activity:
+            await log_activity(
+                "info",
+                "device",
+                f"Tapped OK ({best.get('text')}) for local network at ({x}, {y})",
                 device_id,
             )
         return True
@@ -1154,6 +1233,7 @@ def known_popup_watcher_button_labels() -> list[str]:
         *TIKTOK_DONT_ALLOW_BUTTON_TEXTS,
         *TIKTOK_VIEWER_HISTORY_SAVE_TEXTS,
         *TIKTOK_GOT_IT_BUTTON_TEXTS,
+        *LOCAL_NETWORK_OK_BUTTON_TEXTS,
         *UPLOAD_PERMISSION_TEXTS,
         *DENY_BUTTON_TEXTS,
     ):
@@ -1303,6 +1383,15 @@ def analyze_popup_screen(ocr_text: str) -> dict[str, Any]:
             "watcher_action": "tap_got_it",
             "watcher_detail": "Tap Got it on Virtual Items and Rewards Policies update.",
             "button_labels": tiktok_got_it_button_texts(),
+            "ocr_snippet": snippet,
+        }
+
+    if is_ios_local_network_dialog(text):
+        return {
+            "dialog": "ios_local_network",
+            "watcher_action": "tap_ok",
+            "watcher_detail": "Tap OK on local network access sheet (e.g. Shadowrocket).",
+            "button_labels": local_network_ok_button_texts(),
             "ocr_snippet": snippet,
         }
 

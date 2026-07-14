@@ -95,32 +95,29 @@ async def test_warmup_scroll_taps_home_every_few_swipes(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_warmup_vpn_on_resets_phone_then_retries(monkeypatch) -> None:
+async def test_warmup_vpn_on_does_not_reset_phone_on_failure(monkeypatch) -> None:
     cfg = load_config("config/config.yaml")
     controller = AsyncMock()
     device_manager = AsyncMock()
     device_manager.reset_phone_and_recast = AsyncMock()
-    calls = {"n": 0}
 
-    async def fake_ensure(*_a, **_k):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError(
-                "shortcut_exec_url failed for 'shadowrocket://connect' — 调用超时"
-            )
+    async def fail_ensure(*_a, **_k):
+        raise RuntimeError(
+            "shortcut_exec_url failed for 'shadowrocket://connect' — 调用超时"
+        )
 
-    monkeypatch.setattr(warmup_mod, "ensure_vpn_on", fake_ensure)
+    monkeypatch.setattr(warmup_mod, "ensure_vpn_on", fail_ensure)
 
-    await warmup_mod._ensure_vpn_on(
-        controller,
-        "dev-1",
-        cfg,
-        None,
-        device_manager=device_manager,
-    )
+    with pytest.raises(RuntimeError, match="调用超时"):
+        await warmup_mod._ensure_vpn_on(
+            controller,
+            "dev-1",
+            cfg,
+            None,
+            device_manager=device_manager,
+        )
 
-    device_manager.reset_phone_and_recast.assert_awaited_once_with("dev-1")
-    assert calls["n"] == 2
+    device_manager.reset_phone_and_recast.assert_not_awaited()
 
 
 @pytest.mark.asyncio

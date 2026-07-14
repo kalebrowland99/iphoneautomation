@@ -32,6 +32,8 @@ let runConsolePollPending = false;
 let slideshowJobPollInFlight = false;
 let slideshowJobPollPending = false;
 let embedLoadToken = 0;
+let useSuppliedVideos = false;
+let suppliedVideosStatus = null;
 
 window.addEventListener('message', (ev) => {
     if (ev?.data?.type !== 'autoslideshow:encode-done') return;
@@ -183,8 +185,181 @@ async function refreshSlideshowConfig() {
         const cfg = await api('/slideshow/config');
         slideshowConfig = cfg || slideshowConfig;
         const btn = document.getElementById('btn-run');
-        if (btn && !cfg.enabled) btn.disabled = true;
+        if (btn && !cfg.enabled && !useSuppliedVideos) btn.disabled = true;
     } catch (_) {}
+}
+
+async function refreshRunSettings() {
+    try {
+        const settings = await api('/run-settings');
+        useSuppliedVideos = Boolean(settings?.use_supplied_videos);
+        const cb = document.getElementById('use-supplied-videos');
+        if (cb) cb.checked = useSuppliedVideos;
+        applySuppliedVideosMode();
+        if (useSuppliedVideos) {
+            await refreshSuppliedVideos();
+        }
+    } catch (_) {}
+}
+
+function applySuppliedVideosMode() {
+    const expected = Number(slideshowConfig.slideshows_per_slot) || 3;
+    const panel = document.getElementById('supplied-videos-panel');
+    const hint = document.getElementById('supplied-videos-hint');
+    const brandName = BRAND_ID === 'valcoin' ? 'ValCoin' : 'Labely';
+    if (panel) panel.classList.toggle('hidden', !useSuppliedVideos);
+    if (hint) {
+        hint.textContent = `Upload ${expected} MP4s for ${brandName} only (switch brand tabs for the other set)`;
+    }
+    document.querySelectorAll('.post-group [data-field="onscreen"]').forEach((el) => {
+        const field = el.closest('.field');
+        if (field) field.classList.toggle('hidden', useSuppliedVideos);
+    });
+    const onscreenTemplate = document.getElementById('onscreen-template');
+    if (onscreenTemplate) {
+        const wrap = onscreenTemplate.closest('.field');
+        if (wrap) wrap.classList.toggle('hidden', useSuppliedVideos);
+    }
+}
+
+async function onUseSuppliedVideosChange(enabled) {
+    useSuppliedVideos = Boolean(enabled);
+    applySuppliedVideosMode();
+    try {
+        await api('/run-settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ use_supplied_videos: useSuppliedVideos }),
+        });
+        if (useSuppliedVideos) {
+            await refreshSuppliedVideos();
+            appendRunLog('Use my videos enabled — slideshow generation will be skipped on Run.', 'info', 'run');
+        } else {
+            appendRunLog('Use my videos disabled — Full run will generate slideshows again.', 'info', 'run');
+        }
+    } catch (err) {
+        appendRunLog(`Could not persist Use my videos setting: ${err.message}`, 'warn', 'run');
+        alert(`Setting is on for this page, but failed to save: ${err.message}`);
+    }
+}
+
+function bindSuppliedVideosControls() {
+    const cb = document.getElementById('use-supplied-videos');
+    if (cb && cb.dataset.bound !== '1') {
+        cb.dataset.bound = '1';
+        cb.addEventListener('change', () => {
+            onUseSuppliedVideosChange(cb.checked);
+        });
+    }
+    const input = document.getElementById('supplied-videos-input');
+    if (input && input.dataset.bound !== '1') {
+        input.dataset.bound = '1';
+        input.addEventListener('change', () => {
+            uploadSuppliedVideos(input.files);
+        });
+    }
+    const drop = document.getElementById('supplied-videos-drop');
+    if (!drop || drop.dataset.bound === '1') return;
+    drop.dataset.bound = '1';
+    drop.addEventListener('dragover', (ev) => {
+        if (!useSuppliedVideos) return;
+        ev.preventDefault();
+        drop.classList.add('dragover');
+    });
+    drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+    drop.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        drop.classList.remove('dragover');
+        if (!useSuppliedVideos) return;
+        if (ev.dataTransfer?.files?.length) {
+            uploadSuppliedVideos(ev.dataTransfer.files);
+        }
+    });
+}
+
+function renderSuppliedVideosList(status) {
+    suppliedVideosStatus = status || null;
+    const list = document.getElementById('supplied-videos-list');
+    if (!list) return;
+    const files = status?.files || [];
+    const expected = Number(status?.expected_count) || Number(slideshowConfig.slideshows_per_slot) || 3;
+    if (!files.length) {
+        list.innerHTML = `<li class="text-muted-foreground">No videos yet — upload ${expected} for this brand.</li>`;
+        return;
+    }
+    list.innerHTML = files.map((f) => {
+        const mb = ((Number(f.bytes) || 0) / (1024 * 1024)).toFixed(1);
+        const name = String(f.name || '').replace(/"/g, '&quot;');
+        return `<li class="supplied-videos-item flex items-center justify-between gap-2 py-1">
+            <span class="truncate">${name} <span class="text-muted-foreground">(${mb} MB)</span></span>
+            <button type="button" class="btn-ghost btn-sm shrink-0" onclick="deleteSuppliedVideo('${name}')">Remove</button>
+        </li>`;
+    }).join('');
+    if (files.length < expected) {
+        list.innerHTML += `<li class="text-muted-foreground text-xs pt-1">${files.length}/${expected} ready</li>`;
+    }
+}
+
+async function refreshSuppliedVideos() {
+    try {
+        const status = await api(`/supplied-videos?brand=${encodeURIComponent(BRAND_ID)}`);
+        renderSuppliedVideosList(status);
+    } catch (err) {
+        const list = document.getElementById('supplied-videos-list');
+        if (list) list.innerHTML = `<li class="text-red-600">${err.message || err}</li>`;
+    }
+}
+
+async function uploadSuppliedVideos(fileList) {
+    if (!useSuppliedVideos) {
+        alert('Check “Use my videos” first, then upload.');
+        return;
+    }
+    const files = [...(fileList || [])];
+    const input = document.getElementById('supplied-videos-input');
+    if (input) input.value = '';
+    if (!files.length) return;
+    for (const file of files) {
+        const form = new FormData();
+        form.append('brand', BRAND_ID);
+        form.append('file', file);
+        try {
+            const res = await fetch('/api/supplied-videos', { method: 'POST', body: form });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || data.message || res.statusText);
+            renderSuppliedVideosList(data.status);
+            appendRunLog(`Uploaded ${file.name}`, 'info', 'run');
+        } catch (err) {
+            alert(`Upload failed for ${file.name}: ${err.message}`);
+            break;
+        }
+    }
+    await refreshSuppliedVideos();
+}
+
+async function deleteSuppliedVideo(filename) {
+    try {
+        const res = await api(
+            `/supplied-videos/${encodeURIComponent(filename)}?brand=${encodeURIComponent(BRAND_ID)}`,
+            { method: 'DELETE' },
+        );
+        renderSuppliedVideosList(res.status);
+    } catch (err) {
+        alert(`Remove failed: ${err.message}`);
+    }
+}
+
+async function clearSuppliedVideos() {
+    if (!confirm('Remove all uploaded videos for this brand?')) return;
+    try {
+        const res = await api(
+            `/supplied-videos?brand=${encodeURIComponent(BRAND_ID)}`,
+            { method: 'DELETE' },
+        );
+        renderSuppliedVideosList(res.status);
+    } catch (err) {
+        alert(`Clear failed: ${err.message}`);
+    }
 }
 
 function loadSlideshowEmbedFrame(url) {
@@ -362,7 +537,20 @@ function stopSlideshowPoll() {
         async function startDailyRun() {
             void tileSplitWindows();
             const fromPost = getSelectedFromPost('batch-from-post');
-            if (fromPost !== null || allSelectedSlotsWarmupOnly()) {
+            if (useSuppliedVideos || fromPost !== null || allSelectedSlotsWarmupOnly()) {
+                if (useSuppliedVideos) {
+                    const expected = Number(slideshowConfig.slideshows_per_slot) || 3;
+                    const count = Number(suppliedVideosStatus?.count) || 0;
+                    if (count < expected) {
+                        alert(`Upload ${expected} videos for this brand before running (have ${count}).`);
+                        return;
+                    }
+                    appendRunLog(
+                        `Using supplied videos (${count}) — skipping slideshow, music, and on-screen text`,
+                        'info',
+                        'run',
+                    );
+                }
                 await startFarmBatch({ skipConfirm: true });
             } else {
                 await generateAndRunSlideshow();
@@ -2196,6 +2384,10 @@ async function stopDailyRun() {
                 await loadCaptionAiSettings();
                 await loadDebugTests();
                 await refreshSlideshowConfig();
+                await refreshRunSettings();
+                bindSuppliedVideosControls();
+                applySuppliedVideosMode();
+                await refreshSuppliedVideos();
                 await refreshFarmDevices();
                 const urlSlot = new URLSearchParams(location.search).get('slot');
                 const savedSlot = localStorage.getItem('farmSelectedSlot');

@@ -162,6 +162,17 @@ def test_analyze_popup_screen_ios_permission_allow() -> None:
     assert result["allow_resource"] is True
 
 
+def test_analyze_popup_screen_ios_local_network() -> None:
+    result = analyze_popup_screen(
+        '"Shadowrocket" Would Like to Find and Connect to Devices on Your Local Network.\n'
+        "Local network access is needed to remotely manage your configuration files on your "
+        "local network.\nDon't Allow\nOK"
+    )
+    assert result["dialog"] == "ios_local_network"
+    assert result["watcher_action"] == "tap_ok"
+    assert "OK" in result["button_labels"]
+
+
 def test_analyze_popup_screen_ios_permission_deny_tracking() -> None:
     result = analyze_popup_screen(
         "Allow TikTok to track your activity across apps?\nAllow\nAsk App Not to Track"
