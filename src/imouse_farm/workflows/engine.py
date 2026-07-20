@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
+from imouse_farm.actions.cast_ui import ensure_cast_via_control_bar
 from imouse_farm.actions.engine import ActionEngine
 from imouse_farm.actions.pre_touch_reset import is_tiktok_workflow
 from imouse_farm.config.models import (
@@ -32,14 +33,18 @@ from imouse_farm.post.account_profile_store import get_profile_for_device
 from imouse_farm.post.post_caption_store import (
     POST_COUNT,
     get_final_caption,
-    get_gallery_coords,
     get_onscreen_text,
+    gallery_coords_for_post,
     post_media_stem,
     text_key_for_device,
 )
 from imouse_farm.settings.device_settings import get_debug_skip_post
 from imouse_farm.settings.run_settings import get_use_supplied_videos
-from imouse_farm.utils.gallery import list_media_stems_for_posts, phone_gallery_folder
+from imouse_farm.utils.gallery import (
+    list_media_files,
+    list_media_stems_for_posts,
+    phone_gallery_folder,
+)
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.vision.fallbacks import (
     apply_detection_fallbacks,
@@ -139,6 +144,7 @@ class WorkflowRunner:
         self._has_recent_analysis = False
         self._current_step_index = -1
         self._start_post_index = max(1, int(start_post_index))
+        self._post_count = POST_COUNT
         self._brand = str(brand or "labely").strip().lower()
         self._tiktok_post_failure_recoveries = 0
         self._tiktok_account_switch_recoveries = 0
@@ -208,6 +214,12 @@ class WorkflowRunner:
 
     async def _run_loop(self) -> None:
         max_iter = self._workflow.max_iterations
+        if self._workflow.name == "tiktok_post":
+            self._post_count = self._resolve_post_count()
+            if max_iter > 0:
+                max_iter = min(max_iter, self._post_count)
+            else:
+                max_iter = self._post_count
         start_at = self._start_post_index
         if max_iter > 0:
             start_at = min(start_at, max_iter)
@@ -231,7 +243,7 @@ class WorkflowRunner:
                 await self._log_activity(
                     "info",
                     "workflow",
-                    f"{self._workflow.name} post {iteration}/{self._workflow.max_iterations or iteration}",
+                    f"{self._workflow.name} post {iteration}/{max_iter or iteration}",
                 )
 
                 for step_index, step in enumerate(self._workflow.steps):
@@ -323,11 +335,31 @@ class WorkflowRunner:
             )
         return text_key_for_device(self._device_id, brand=self._brand)
 
+    def _resolve_post_count(self) -> int:
+        """How many posts this tiktok_post run should do (1–3).
+
+        Use my videos may stage fewer than 3 files — only loop that many times.
+        """
+        if not get_use_supplied_videos(self._brand):
+            return POST_COUNT
+        device = self._device_manager.get_device(self._device_id)
+        if not device:
+            return POST_COUNT
+        folder = phone_gallery_folder(
+            self._config.gallery.base_directory,
+            device.user_name,
+            device.phone_name,
+            brand=self._brand,
+        )
+        files = list_media_files(folder, self._config.gallery.media_extensions)
+        return max(1, min(POST_COUNT, len(files)))
+
     def _refresh_post_variables(self, post_index: int) -> None:
         self._variables["post_index"] = post_index
         text_key = self._post_text_key()
         device = self._device_manager.get_device(self._device_id)
         media_stems: list[str] = []
+        post_total = max(1, min(POST_COUNT, int(self._post_count or POST_COUNT)))
         if device:
             folder = phone_gallery_folder(
                 self._config.gallery.base_directory,
@@ -338,13 +370,13 @@ class WorkflowRunner:
             media_stems = list_media_stems_for_posts(
                 folder,
                 self._config.gallery.media_extensions,
-                POST_COUNT,
+                post_total,
             )
-        stem = post_media_stem(media_stems, post_index)
+        stem = post_media_stem(media_stems, post_index, total=post_total)
         food_name = stem_to_food_name(stem) if stem else ""
         onscreen = get_onscreen_text(text_key, post_index)
         final_caption = get_final_caption(text_key, post_index)
-        gx, gy = get_gallery_coords(post_index)
+        gx, gy = gallery_coords_for_post(post_index, post_total)
         self._variables["post_caption"] = onscreen
         self._variables["final_post_caption"] = final_caption
         self._variables["media_stem"] = stem
@@ -355,6 +387,7 @@ class WorkflowRunner:
             "workflow_post_variables",
             device_id=self._device_id,
             post_index=post_index,
+            post_total=post_total,
             media_stem=stem,
             food_name=food_name,
             gallery_x=gx,
@@ -366,16 +399,6 @@ class WorkflowRunner:
     async def _ensure_post_captions(self, post_index: int) -> None:
         """Regenerate onscreen + final captions from gallery before typing."""
         if self._workflow.name != "tiktok_post":
-            return
-        if get_use_supplied_videos():
-            # Supplied mode skips Aa overlays; only require a final caption.
-            text_key = self._post_text_key()
-            final = get_final_caption(text_key, post_index, brand=self._brand).strip()
-            if not final:
-                raise RuntimeError(
-                    f"Post {post_index}: final caption is empty "
-                    "(supplied-video mode still needs TikTok captions)"
-                )
             return
         if not self._config.openai.enabled or not self._config.slideshow.auto_generate_captions:
             return
@@ -627,6 +650,10 @@ class WorkflowRunner:
             return f"'{step.unless_detection}' is present"
         if step.when_post_index is not None:
             current = int(self._variables.get("post_index", 0))
+            target = int(step.when_post_index)
+            # YAML marks final-post cleanup as post 3; map to last post when posting fewer.
+            if target == POST_COUNT:
+                target = max(1, min(POST_COUNT, int(self._post_count or POST_COUNT)))
             if step.name in ("tap_white_background", "after_white_background"):
                 if current == step.when_post_index or self._pending_white_background_after_restart:
                     pass
@@ -635,14 +662,14 @@ class WorkflowRunner:
                         f"post {current}, white background only for post "
                         f"{step.when_post_index} or after TikTok restart"
                     )
-            elif current != step.when_post_index:
-                return f"post {current}, need post {step.when_post_index}"
+            elif current != target:
+                return f"post {current}, need post {target}"
         debug_skip = get_debug_skip_post(self._device_id)
         if step.when_debug_skip_post is True and not debug_skip:
             return "debug skip post is off"
         if step.unless_debug_skip_post is True and debug_skip:
             return "debug skip post is on"
-        use_supplied = get_use_supplied_videos()
+        use_supplied = get_use_supplied_videos(self._brand)
         if step.when_use_supplied_videos is True and not use_supplied:
             return "use supplied videos is off"
         if step.unless_use_supplied_videos is True and use_supplied:
@@ -991,6 +1018,22 @@ class WorkflowRunner:
         self._iteration_completed_by_recovery = True
         return True
 
+    async def _reconnect_cast_with_fallback(self) -> bool:
+        """Re-cast via Control Bar UI (no airplay/connect API)."""
+        cast_cfg = self._config.batch.cast_ui
+
+        def _online(did: str) -> bool:
+            device = self._device_manager.get_device(did)
+            return bool(device and device.is_online)
+
+        return await ensure_cast_via_control_bar(
+            self._device_manager.controller,
+            self._device_id,
+            cast_cfg,
+            refresh_devices=self._device_manager.refresh_devices,
+            is_online=_online,
+        )
+
     async def _open_tiktok_from_home(self, *, parent_step: str) -> None:
         """Open TikTok from the home screen via configured icon coordinates."""
         nav = self._config.tiktok_navigation
@@ -1044,13 +1087,17 @@ class WorkflowRunner:
             await asyncio.sleep(wait_s)
 
         await self._open_tiktok_from_home(parent_step=parent_step)
-        self._pending_white_background_after_restart = True
-        await self._log_activity(
-            "info",
-            "workflow",
-            "Next post will run white-background tap (TikTok was restarted)",
-            step=parent_step,
-        )
+        # White-background is for on-screen text; Use my videos skips that path.
+        if get_use_supplied_videos(self._brand):
+            self._pending_white_background_after_restart = False
+        else:
+            self._pending_white_background_after_restart = True
+            await self._log_activity(
+                "info",
+                "workflow",
+                "Next post will run white-background tap (TikTok was restarted)",
+                step=parent_step,
+            )
 
     async def _step_check_ocr_state(self, step: WorkflowStepConfig) -> None:
         """Set device state from on-device OCR, with optional template fallback."""
@@ -1103,7 +1150,7 @@ class WorkflowRunner:
                         device_id=self._device_id,
                         step=step.name,
                     )
-                    await self._device_manager.reconnect_airplay(self._device_id)
+                    await self._reconnect_cast_with_fallback()
                     await asyncio.sleep(2.0)
                     await self._device_manager.refresh_devices()
                     if focus_app_after_reconnect:
@@ -1229,7 +1276,7 @@ class WorkflowRunner:
                         device_id=self._device_id,
                         step=step.name,
                     )
-                    await self._device_manager.reconnect_airplay(self._device_id)
+                    await self._reconnect_cast_with_fallback()
                     await asyncio.sleep(2.0)
                     await self._device_manager.refresh_devices()
                     if focus_app_after_reconnect:
@@ -1514,6 +1561,47 @@ class WorkflowRunner:
         action_def = self._resolve_variables(step.action)
         action_type = ActionType(action_def.get("type", "tap_detection"))
         params = {k: v for k, v in action_def.items() if k != "type"}
+
+        if action_type == ActionType.TAP_AA_VISION or (
+            step.name == "tap_aa" and action_def.get("type") == "tap_aa_vision"
+        ):
+            from imouse_farm.actions.pre_touch_reset import pre_touch_mouse_reset
+            from imouse_farm.workflows.tiktok_aa_vision import tap_aa_via_vision
+
+            await pre_touch_mouse_reset(
+                self._actions._controller,  # noqa: SLF001
+                self._device_id,
+                step_name=step.name or "tap_aa",
+            )
+            ok = await tap_aa_via_vision(
+                self._actions._controller,  # noqa: SLF001
+                self._device_id,
+                app_config=self._config,
+                log_activity=self._log_activity,
+            )
+            if not ok:
+                raise RuntimeError("Aa vision tap failed")
+            return
+
+        if action_type == ActionType.TAP_SAVED_EDITOR or (
+            step.name == "tap_editor" and action_def.get("type") == "tap_saved_editor"
+        ):
+            from imouse_farm.actions.pre_touch_reset import pre_touch_mouse_reset
+            from imouse_farm.workflows.tiktok_aa_vision import tap_saved_editor
+
+            await pre_touch_mouse_reset(
+                self._actions._controller,  # noqa: SLF001
+                self._device_id,
+                step_name=step.name or "tap_editor",
+            )
+            ok = await tap_saved_editor(
+                self._actions._controller,  # noqa: SLF001
+                self._device_id,
+                log_activity=self._log_activity,
+            )
+            if not ok:
+                raise RuntimeError("Saved editor tap failed")
+            return
 
         if step.name == "tap_gallery":
             params["tap_count"] = max(2, int(params.get("tap_count", 2)))
@@ -1869,6 +1957,9 @@ class WorkflowRunner:
                     await self._restart_tiktok(parent_step=step.name or target)
                     restart_count += 1
                     attempts_since_restart = 0
+                    # Reopen already waited for + — give a fresh window so we
+                    # don't immediately timeout on a deadline set before reopen.
+                    deadline = max(deadline, time.monotonic() + max(timeout * 0.5, 45.0))
                     await self._log_activity(
                         "info",
                         "workflow",
@@ -1876,6 +1967,7 @@ class WorkflowRunner:
                         step=step.name,
                         detection=target,
                     )
+                    continue
 
             if time.monotonic() >= deadline:
                 raise RuntimeError(

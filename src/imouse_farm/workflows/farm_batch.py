@@ -17,6 +17,7 @@ from imouse_farm.post.post_caption_store import (
 from imouse_farm.post.account_profile_store import (
     get_profile_for_device,
     is_cant_cast_imouse,
+    is_disabled,
     is_phone_dead,
     set_cant_cast_imouse,
     clear_cant_cast_imouse,
@@ -26,13 +27,14 @@ from imouse_farm.captions.service import (
     default_onscreen_template_for_brand,
     generate_captions_for_device,
 )
-from imouse_farm.settings.run_settings import get_use_supplied_videos
+from imouse_farm.settings.run_settings import get_batch_size, get_use_supplied_videos
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.utils.supplied_videos import distribute_supplied_videos
 from imouse_farm.recordings.session_recorder import (
     SessionRecordingManager,
     session_recording_path,
 )
+from imouse_farm.actions.cast_ui import ensure_cast_via_control_bar
 from imouse_farm.workflows.pipeline import WorkflowPipeline
 from imouse_farm.workflows.warmup import run_tiktok_warmup
 from imouse_farm.workflows.imouse_recovery import is_imouse_failure
@@ -47,7 +49,7 @@ def _post_text_key(device: Any, brand: str) -> str:
 
 
 class FarmBatchRunner:
-    """Connect one phone at a time, run pipeline, disconnect, then next (lowest slot first)."""
+    """Run production pipelines in parallel batches (N phones at a time)."""
 
     def __init__(
         self,
@@ -152,8 +154,25 @@ class FarmBatchRunner:
         if not devices:
             return False
 
+        excluded = {str(s).strip() for s in self._config.excluded_slots}
+        devices = [
+            d
+            for d in devices
+            if str(d.user_name).strip() not in excluded
+            and not is_disabled(
+                device_storage_key(d.device_id, d.user_name), brand=brand
+            )
+        ]
+        if not devices:
+            self._status = {
+                "status": "idle",
+                "message": "All selected accounts are excluded or disabled",
+                "active": False,
+            }
+            return False
+
         batches: list[list[Any]] = []
-        size = max(1, int(self._config.batch_size))
+        size = get_batch_size()
         for i in range(0, len(devices), size):
             batches.append(devices[i : i + size])
 
@@ -163,6 +182,7 @@ class FarmBatchRunner:
         if self._permission_watchers:
             for device in devices:
                 await self._permission_watchers.ensure_watching(device.device_id)
+        concurrently = "one at a time" if size == 1 else f"{size} at a time"
         self._status = {
             "status": "connecting",
             "batch_index": 0,
@@ -170,8 +190,9 @@ class FarmBatchRunner:
             "current_batch": [],
             "completed": [],
             "failed": [],
-            "message": f"Queued {len(devices)} phone(s) one at a time",
+            "message": f"Queued {len(devices)} phone(s) ({concurrently})",
             "from_post": from_post,
+            "batch_size": size,
         }
         try:
             self._distribute_supplied_if_needed(devices, brand=brand)
@@ -198,29 +219,39 @@ class FarmBatchRunner:
         *,
         brand: str,
     ) -> None:
-        if not get_use_supplied_videos():
-            return
+        if not get_use_supplied_videos(brand):
+            # Still may need ValCoin copies when Labely chains into ValCoin posts.
+            if not (
+                brand == "labely"
+                and self._config.chain_valcoin_after_labely
+                and self._valcoin_post_slots
+                and get_use_supplied_videos("valcoin")
+            ):
+                return
         slots = [str(d.user_name) for d in devices if str(d.user_name or "").strip()]
         if not slots:
             return
         base = str(self._app_config.gallery.base_directory)
         exts = list(self._app_config.gallery.media_extensions)
         expected = max(1, int(self._app_config.slideshow.slideshows_per_slot or POST_COUNT))
-        result = distribute_supplied_videos(
-            base,
-            slots,
-            brand=brand,
-            extensions=exts,
-            expected_count=expected,
-        )
-        logger.info(
-            "supplied_videos_ready",
-            brand=brand,
-            slots=len(result.get("slots") or []),
-            source_count=result.get("source_count"),
-        )
+        if get_use_supplied_videos(brand):
+            result = distribute_supplied_videos(
+                base,
+                slots,
+                brand=brand,
+                extensions=exts,
+                expected_count=expected,
+            )
+            logger.info(
+                "supplied_videos_ready",
+                brand=brand,
+                slots=len(result.get("slots") or []),
+                source_count=result.get("source_count"),
+            )
         # Labely runs may chain ValCoin posts on selected ValCoin slots.
         if brand == "labely" and self._config.chain_valcoin_after_labely and self._valcoin_post_slots:
+            if not get_use_supplied_videos("valcoin"):
+                return
             valcoin_slots = [
                 s for s in slots if s in self._valcoin_post_slots
             ]
@@ -311,86 +342,28 @@ class FarmBatchRunner:
                 slot_labels = [str(d.user_name) for d in batch]
                 phone_num = batch_index
                 phone_total = len(batches)
+                slots_csv = ", ".join(slot_labels)
                 self._status.update({
                     "status": "connecting",
                     "batch_index": batch_index,
                     "current_batch": slot_labels,
-                    "message": f"Phone {phone_num}/{phone_total}: connecting slot {slot_labels[0]}",
+                    "message": (
+                        f"Batch {phone_num}/{phone_total}: connecting "
+                        f"{len(batch)} phone(s) ({slots_csv})"
+                    ),
                 })
                 await self._emit("batch_connecting", self.get_status())
 
-                connected: list[Any] = []
-                for device in batch:
-                    if self._stop_requested:
-                        break
-                    base_key = device_storage_key(device.device_id, device.user_name)
-                    if is_phone_dead(base_key):
-                        logger.info(
-                            "batch_cast_skipped_phone_dead",
-                            device_id=device.device_id,
-                            slot=device.user_name,
-                        )
-                        await self._db.log_activity(
-                            "info",
-                            "batch",
-                            f"Phone {device.user_name}: skipped — phone dead",
-                            device.device_id,
-                            {"batch_index": batch_index},
-                        )
-                        self._status["failed"].append({
-                            "slot": device.user_name,
-                            "device_id": device.device_id,
-                            "reason": "phone_dead",
-                        })
-                        continue
-                    if is_cant_cast_imouse(base_key):
-                        logger.info(
-                            "batch_cast_skipped_tagged",
-                            device_id=device.device_id,
-                            slot=device.user_name,
-                        )
-                        await self._db.log_activity(
-                            "error",
-                            "batch",
-                            f"Phone {device.user_name}: skipped — tagged as cant cast iMouse",
-                            device.device_id,
-                            {"batch_index": batch_index},
-                        )
-                        self._status["failed"].append({
-                            "slot": device.user_name,
-                            "device_id": device.device_id,
-                            "reason": "cant_cast_imouse",
-                        })
-                        continue
-                    ok = await self._ensure_cast(device.device_id)
-                    if ok:
-                        connected.append(device)
-                    else:
-                        self._note_imouse_failure(batch_index, "cast_connect_failed")
-                        logger.info(
-                            "batch_cast_tagged_cant_cast",
-                            device_id=device.device_id,
-                            slot=device.user_name,
-                        )
-                        self._status["failed"].append({
-                            "slot": device.user_name,
-                            "device_id": device.device_id,
-                            "reason": "cast_connect_failed",
-                        })
-                        if self._should_tag_cant_cast_after_failure():
-                            set_cant_cast_imouse(base_key)
-                        await self._db.log_activity(
-                            "error",
-                            "batch",
-                            f"Phone {device.user_name}: cast connect failed"
-                            + (
-                                " — tagged as cant cast iMouse"
-                                if self._should_tag_cant_cast_after_failure()
-                                else " — kernel recovery may retry"
-                            ),
-                            device.device_id,
-                            {"batch_index": batch_index},
-                        )
+                connected = [
+                    d
+                    for d in await asyncio.gather(
+                        *[
+                            self._connect_batch_device(device, batch_index)
+                            for device in batch
+                        ]
+                    )
+                    if d
+                ]
 
                 resume = await self._check_kernel_recovery(batches, selected_ids)
                 if resume is not None:
@@ -401,180 +374,40 @@ class FarmBatchRunner:
                     batch_index += 1
                     continue
 
+                connected_labels = [str(d.user_name) for d in connected]
                 self._status["status"] = "running"
                 self._status["message"] = (
-                    f"Phone {phone_num}/{phone_total}: running slot {slot_labels[0]}"
+                    f"Batch {phone_num}/{phone_total}: running "
+                    f"{len(connected)} phone(s) in parallel ({', '.join(connected_labels)})"
                 )
                 await self._emit("batch_running", self.get_status())
 
-                for device in connected:
-                    if self._stop_requested:
-                        break
-                    valcoin_profile = get_profile_for_device(
-                        device.device_id, device.user_name, brand="valcoin"
-                    )
-                    profile = get_profile_for_device(
-                        device.device_id, device.user_name, brand=brand
-                    )
-
-                    effective_from_post = from_post
-                    base_key = device_storage_key(device.device_id, device.user_name)
-                    chain_valcoin = (
-                        brand == "labely"
-                        and effective_from_post is None
-                        and self._config.chain_valcoin_after_labely
-                        and str(device.user_name) in self._valcoin_post_slots
-                        and not valcoin_profile.get("warmup_enabled")
-                    )
-                    if profile.get("warmup_enabled"):
-                        self._status["message"] = (
-                            f"Phone {phone_num}/{phone_total}: warmup slot {device.user_name}"
+                launch_results = await asyncio.gather(
+                    *[
+                        self._launch_batch_device(
+                            device,
+                            brand=brand,
+                            from_post=from_post,
+                            batch_index=batch_index,
+                            phone_num=phone_num,
+                            phone_total=phone_total,
                         )
-                        await self._emit("batch_running", self.get_status())
-                        await self._start_session_recording(device)
-                        try:
-                            await run_tiktok_warmup(
-                                self._dm.controller,
-                                device,
-                                brand=brand,
-                                app_config=self._app_config,
-                                device_manager=self._dm,
-                                stop_check=lambda: self._stop_requested,
-                                log_activity=self._db.log_activity,
-                                permission_watchers=self._permission_watchers,
-                            )
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning(
-                                "batch_warmup_failed",
-                                device_id=device.device_id,
-                                slot=device.user_name,
-                                error=str(exc),
-                            )
-                            self._status["failed"].append({
-                                "slot": device.user_name,
-                                "device_id": device.device_id,
-                                "reason": f"warmup_failed: {exc}",
-                            })
-                            self._note_imouse_failure(batch_index, f"warmup_failed: {exc}")
-                            await self._finish_device_session(device.device_id)
-                            resume = await self._check_kernel_recovery(batches, selected_ids)
-                            if resume is not None:
-                                batch_index = resume
-                                break
-                            continue
-                        if self._stop_requested:
-                            break
-                        self._status["completed"].append({
-                            "slot": device.user_name,
-                            "device_id": device.device_id,
-                            "event": "warmup_only",
-                        })
-                        self._clear_imouse_failure_streak()
-                        await self._finish_device_session(device.device_id)
+                        for device in connected
+                    ]
+                )
+                if any(result == "recovery" for result in launch_results):
+                    resume = await self._check_kernel_recovery(batches, selected_ids)
+                    if resume is not None:
+                        batch_index = resume
                         continue
-
-                    # Caption validation only needed when actually posting.
-                    text_key = _post_text_key(device, brand)
-                    check_from = effective_from_post if effective_from_post is not None else 1
-                    use_supplied = get_use_supplied_videos()
-                    if (
-                        not use_supplied
-                        and self._auto_captions
-                        and self._app_config.openai.enabled
-                    ):
-                        try:
-                            await generate_captions_for_device(
-                                self._app_config,
-                                device,
-                                onscreen_template=default_onscreen_template_for_brand(brand),
-                                brand=brand,
-                            )
-                            if chain_valcoin:
-                                await generate_captions_for_device(
-                                    self._app_config,
-                                    device,
-                                    onscreen_template=default_onscreen_template_for_brand(
-                                        "valcoin"
-                                    ),
-                                    brand="valcoin",
-                                )
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning(
-                                "batch_auto_caption_failed",
-                                device_id=device.device_id,
-                                slot=device.user_name,
-                                error=str(exc),
-                            )
-                    missing = validate_post_texts(
-                        text_key,
-                        from_post=check_from,
-                        brand=brand,
-                        require_onscreen=not use_supplied,
-                    )
-                    if chain_valcoin:
-                        valcoin_key = _post_text_key(device, "valcoin")
-                        missing.extend(
-                            validate_post_texts(
-                                valcoin_key,
-                                from_post=1,
-                                brand="valcoin",
-                                require_onscreen=not use_supplied,
-                            )
-                        )
-                    if missing:
-                        self._status["failed"].append({
-                            "slot": device.user_name,
-                            "device_id": device.device_id,
-                            "reason": "; ".join(missing),
-                        })
-                        await self._finish_device_session(device.device_id)
-                        continue
-
-                    valcoin_warmup_after_labely = (
-                        brand == "labely"
-                        and bool(valcoin_profile.get("warmup_enabled"))
-                    )
-                    self._batch_done_events[device.device_id] = asyncio.Event()
-                    await self._start_session_recording(device)
-                    started = await self._pipeline.start(
-                        device.device_id,
-                        from_post=effective_from_post,
-                        brand=brand,
-                        chain_valcoin_after_labely=chain_valcoin,
-                        skip_prep_when_valid=self._config.skip_prep_when_valid,
-                        skip_labely_end_for_valcoin_warmup=valcoin_warmup_after_labely,
-                    )
-                    if not started:
-                        self._batch_done_events.pop(device.device_id, None)
-                        self._status["failed"].append({
-                            "slot": device.user_name,
-                            "device_id": device.device_id,
-                            "reason": "pipeline_start_failed",
-                        })
-                        await self._finish_device_session(device.device_id)
 
                 pending = list(self._batch_done_events.keys())
-                for device_id in pending:
-                    if self._stop_requested:
-                        break
-                    event = self._batch_done_events.get(device_id)
-                    if not event:
-                        continue
-                    try:
-                        await asyncio.wait_for(
-                            event.wait(),
-                            timeout=float(self._config.batch_device_timeout_seconds),
-                        )
-                    except asyncio.TimeoutError:
-                        await self._pipeline.stop(device_id)
-                        self._status["failed"].append({
-                            "device_id": device_id,
-                            "reason": "batch_device_timeout",
-                        })
-                        self._note_imouse_failure(batch_index, "batch_device_timeout")
-                        if self._config.disconnect_on_complete:
-                            await self._finish_device_session(device_id)
-                        self._batch_done_events.pop(device_id, None)
+                await asyncio.gather(
+                    *[
+                        self._wait_pipeline_done(device_id, batch_index)
+                        for device_id in pending
+                    ]
+                )
 
                 resume = await self._check_kernel_recovery(batches, selected_ids)
                 if resume is not None:
@@ -582,6 +415,7 @@ class FarmBatchRunner:
                     continue
 
                 if not self._stop_requested and brand == "labely":
+                    valcoin_devices: list[Any] = []
                     for device in connected:
                         if self._stop_requested:
                             break
@@ -603,61 +437,34 @@ class FarmBatchRunner:
                                 device.device_id,
                             )
                             continue
+                        valcoin_devices.append(device)
+                    if valcoin_devices and not self._stop_requested:
+                        vc_labels = ", ".join(str(d.user_name) for d in valcoin_devices)
                         self._status["message"] = (
-                            f"Phone {phone_num}/{phone_total}: ValCoin warmup slot {device.user_name}"
+                            f"Batch {phone_num}/{phone_total}: ValCoin warmup ({vc_labels})"
                         )
                         await self._emit("batch_running", self.get_status())
-
-                        # Ensure AirPlay is still live before ValCoin warmup scroll.
-                        cast_ok = await self._ensure_cast(device.device_id)
-                        if not cast_ok:
-                            logger.warning(
-                                "batch_valcoin_warmup_no_cast",
-                                device_id=device.device_id,
-                                slot=device.user_name,
-                            )
-                            await self._db.log_activity(
-                                "warn",
-                                "batch",
-                                f"ValCoin warmup skipped — could not reconnect AirPlay for slot {device.user_name}",
-                                device.device_id,
-                            )
-                            continue
-
-                        try:
-                            await run_tiktok_warmup(
-                                self._dm.controller,
-                                device,
-                                brand="valcoin",
-                                app_config=self._app_config,
-                                device_manager=self._dm,
-                                stop_check=lambda: self._stop_requested,
-                                log_activity=self._db.log_activity,
-                                after_labely=True,
-                                permission_watchers=self._permission_watchers,
-                            )
-                        except Exception as exc:  # noqa: BLE001
-                            logger.warning(
-                                "batch_valcoin_warmup_failed",
-                                device_id=device.device_id,
-                                slot=device.user_name,
-                                error=str(exc),
-                            )
-                            await self._db.log_activity(
-                                "warn",
-                                "batch",
-                                f"ValCoin warmup failed for slot {device.user_name}: {exc}",
-                                device.device_id,
-                            )
+                        await asyncio.gather(
+                            *[
+                                self._run_valcoin_warmup_device(device)
+                                for device in valcoin_devices
+                            ]
+                        )
 
                 if not self._stop_requested:
                     self._status["status"] = "disconnecting"
-                    self._status["message"] = f"Phone {phone_num}/{phone_total}: disconnecting cast"
+                    self._status["message"] = (
+                        f"Batch {phone_num}/{phone_total}: disconnecting cast"
+                    )
                     await self._emit("batch_disconnecting", self.get_status())
 
                     if self._config.disconnect_on_complete:
-                        for device in connected:
-                            await self._finish_device_session(device.device_id)
+                        await asyncio.gather(
+                            *[
+                                self._finish_device_session(device.device_id)
+                                for device in connected
+                            ]
+                        )
 
                 pause = float(self._config.between_phones_pause_seconds)
                 if pause > 0 and batch_index < len(batches) and not self._stop_requested:
@@ -806,7 +613,7 @@ class FarmBatchRunner:
         await self._dm.controller.reconnect()
         await self._dm.refresh_devices()
         # Do not cast all remaining phones here — the batch loop reconnects
-        # AirPlay one phone at a time via _ensure_cast when that slot runs.
+        # Cast one phone at a time via Control Bar UI (_ensure_cast) when that slot runs.
         await self._disconnect_unselected_casts(selected_ids)
 
         self._labely_pipeline_ok.intersection_update(
@@ -847,25 +654,435 @@ class FarmBatchRunner:
         if disconnect:
             await self._dm.disconnect_airplay(device_id)
 
-    async def _ensure_cast(self, device_id: str) -> bool:
-        attempts = max(1, int(self._config.cast_connect_max_attempts))
+    def _is_flawed_timeout_slot(self, user_name: Any) -> bool:
+        try:
+            slot = int(str(user_name).strip())
+        except (TypeError, ValueError):
+            return False
+        return slot in {int(s) for s in self._config.flawed_timeout_slots}
+
+    async def _preflight_flawed_timeout_restart(
+        self, device: Any, batch_index: int
+    ) -> None:
+        """Reboot phones tagged for chronic SDK timeouts, then wait for boot before cast."""
+        if not self._is_flawed_timeout_slot(device.user_name):
+            return
+        boot_wait = float(self._app_config.diagnostics.phone_restart_boot_wait_seconds)
+        logger.info(
+            "batch_flawed_timeout_preflight",
+            device_id=device.device_id,
+            slot=device.user_name,
+            boot_wait_seconds=boot_wait,
+        )
+        await self._db.log_activity(
+            "info",
+            "batch",
+            f"Phone {device.user_name}: flawed-timeout preflight — restarting phone, "
+            f"then waiting {boot_wait:.0f}s before cast",
+            device.device_id,
+            {"batch_index": batch_index, "boot_wait_seconds": boot_wait},
+        )
+        # Same as iMouseXP UI "restart" — device_restart only; do not disconnect AirPlay first.
+        restarted = await self._dm.controller.restart_device(device.device_id)
+        if not restarted:
+            await self._db.log_activity(
+                "warning",
+                "batch",
+                f"Phone {device.user_name}: flawed-timeout restart failed — "
+                "continuing to cast anyway",
+                device.device_id,
+                {"batch_index": batch_index},
+            )
+            return
+        # Interruptible boot wait so Stop doesn't hang on 90s sleep.
+        remaining = boot_wait
+        while remaining > 0 and not self._stop_requested:
+            step = min(5.0, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
+        if self._stop_requested:
+            return
+        await self._db.log_activity(
+            "info",
+            "batch",
+            f"Phone {device.user_name}: flawed-timeout boot wait done — casting iMouse",
+            device.device_id,
+            {"batch_index": batch_index},
+        )
+
+    async def _connect_batch_device(self, device: Any, batch_index: int) -> Any | None:
+        if self._stop_requested:
+            return None
+        base_key = device_storage_key(device.device_id, device.user_name)
+        if is_phone_dead(base_key):
+            logger.info(
+                "batch_cast_skipped_phone_dead",
+                device_id=device.device_id,
+                slot=device.user_name,
+            )
+            await self._db.log_activity(
+                "info",
+                "batch",
+                f"Phone {device.user_name}: skipped — phone dead",
+                device.device_id,
+                {"batch_index": batch_index},
+            )
+            self._status["failed"].append({
+                "slot": device.user_name,
+                "device_id": device.device_id,
+                "reason": "phone_dead",
+            })
+            return None
+        if is_cant_cast_imouse(base_key):
+            logger.info(
+                "batch_cast_skipped_tagged",
+                device_id=device.device_id,
+                slot=device.user_name,
+            )
+            await self._db.log_activity(
+                "error",
+                "batch",
+                f"Phone {device.user_name}: skipped — tagged as cant cast iMouse",
+                device.device_id,
+                {"batch_index": batch_index},
+            )
+            self._status["failed"].append({
+                "slot": device.user_name,
+                "device_id": device.device_id,
+                "reason": "cant_cast_imouse",
+            })
+            return None
+        await self._preflight_flawed_timeout_restart(device, batch_index)
+        if self._stop_requested:
+            return None
+        ok = await self._ensure_cast(device.device_id)
+        if ok:
+            return device
+        self._note_imouse_failure(batch_index, "cast_connect_failed")
+        logger.info(
+            "batch_cast_tagged_cant_cast",
+            device_id=device.device_id,
+            slot=device.user_name,
+        )
+        self._status["failed"].append({
+            "slot": device.user_name,
+            "device_id": device.device_id,
+            "reason": "cast_connect_failed",
+        })
+        if self._should_tag_cant_cast_after_failure():
+            set_cant_cast_imouse(base_key)
+        await self._db.log_activity(
+            "error",
+            "batch",
+            f"Phone {device.user_name}: cast connect failed"
+            + (
+                " — tagged as cant cast iMouse"
+                if self._should_tag_cant_cast_after_failure()
+                else " — kernel recovery may retry"
+            ),
+            device.device_id,
+            {"batch_index": batch_index},
+        )
+        return None
+
+    async def _launch_batch_device(
+        self,
+        device: Any,
+        *,
+        brand: str,
+        from_post: int | None,
+        batch_index: int,
+        phone_num: int,
+        phone_total: int,
+    ) -> str:
+        if self._stop_requested:
+            return "failed"
+        valcoin_profile = get_profile_for_device(
+            device.device_id, device.user_name, brand="valcoin"
+        )
+        profile = get_profile_for_device(
+            device.device_id, device.user_name, brand=brand
+        )
+
+        effective_from_post = from_post
+        chain_valcoin = (
+            brand == "labely"
+            and effective_from_post is None
+            and self._config.chain_valcoin_after_labely
+            and str(device.user_name) in self._valcoin_post_slots
+            and not valcoin_profile.get("warmup_enabled")
+            and not is_disabled(
+                device_storage_key(device.device_id, device.user_name),
+                brand="valcoin",
+            )
+        )
+        if profile.get("warmup_enabled"):
+            self._status["message"] = (
+                f"Phone {phone_num}/{phone_total}: warmup slot {device.user_name}"
+            )
+            await self._emit("batch_running", self.get_status())
+            await self._start_session_recording(device)
+            try:
+                await run_tiktok_warmup(
+                    self._dm.controller,
+                    device,
+                    brand=brand,
+                    app_config=self._app_config,
+                    device_manager=self._dm,
+                    stop_check=lambda: self._stop_requested,
+                    log_activity=self._db.log_activity,
+                    permission_watchers=self._permission_watchers,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "batch_warmup_failed",
+                    device_id=device.device_id,
+                    slot=device.user_name,
+                    error=str(exc),
+                )
+                self._status["failed"].append({
+                    "slot": device.user_name,
+                    "device_id": device.device_id,
+                    "reason": f"warmup_failed: {exc}",
+                })
+                self._note_imouse_failure(batch_index, f"warmup_failed: {exc}")
+                await self._finish_device_session(device.device_id)
+                return "recovery"
+            if self._stop_requested:
+                return "failed"
+            self._status["completed"].append({
+                "slot": device.user_name,
+                "device_id": device.device_id,
+                "event": "warmup_only",
+            })
+            self._clear_imouse_failure_streak()
+            await self._finish_device_session(device.device_id)
+            return "warmup_done"
+
+        # Caption validation only needed when actually posting.
+        text_key = _post_text_key(device, brand)
+        check_from = effective_from_post if effective_from_post is not None else 1
+        use_supplied = get_use_supplied_videos(brand)
+        post_limit = POST_COUNT
+        if use_supplied:
+            from imouse_farm.utils.supplied_videos import list_supplied_videos
+
+            post_limit = max(
+                1,
+                min(
+                    POST_COUNT,
+                    len(
+                        list_supplied_videos(
+                            str(self._app_config.gallery.base_directory),
+                            brand=brand,
+                            extensions=list(
+                                self._app_config.gallery.media_extensions
+                            ),
+                        )
+                    ),
+                ),
+            )
+        if self._auto_captions and self._app_config.openai.enabled:
+            try:
+                await generate_captions_for_device(
+                    self._app_config,
+                    device,
+                    onscreen_template=default_onscreen_template_for_brand(brand),
+                    brand=brand,
+                )
+                if chain_valcoin:
+                    await generate_captions_for_device(
+                        self._app_config,
+                        device,
+                        onscreen_template=default_onscreen_template_for_brand(
+                            "valcoin"
+                        ),
+                        brand="valcoin",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "batch_auto_caption_failed",
+                    device_id=device.device_id,
+                    slot=device.user_name,
+                    error=str(exc),
+                )
+        missing = validate_post_texts(
+            text_key,
+            from_post=check_from,
+            to_post=post_limit,
+            brand=brand,
+            require_onscreen=not use_supplied,
+        )
+        if chain_valcoin:
+            from imouse_farm.utils.supplied_videos import list_supplied_videos
+
+            valcoin_key = _post_text_key(device, "valcoin")
+            vc_limit = POST_COUNT
+            vc_supplied = get_use_supplied_videos("valcoin")
+            if vc_supplied:
+                vc_limit = max(
+                    1,
+                    min(
+                        POST_COUNT,
+                        len(
+                            list_supplied_videos(
+                                str(self._app_config.gallery.base_directory),
+                                brand="valcoin",
+                                extensions=list(
+                                    self._app_config.gallery.media_extensions
+                                ),
+                            )
+                        ),
+                    ),
+                )
+            missing.extend(
+                validate_post_texts(
+                    valcoin_key,
+                    from_post=1,
+                    to_post=vc_limit,
+                    brand="valcoin",
+                    require_onscreen=not vc_supplied,
+                )
+            )
+        if missing:
+            self._status["failed"].append({
+                "slot": device.user_name,
+                "device_id": device.device_id,
+                "reason": "; ".join(missing),
+            })
+            await self._finish_device_session(device.device_id)
+            return "failed"
+
+        valcoin_warmup_after_labely = (
+            brand == "labely"
+            and bool(valcoin_profile.get("warmup_enabled"))
+        )
+        self._batch_done_events[device.device_id] = asyncio.Event()
+        await self._start_session_recording(device)
+        started = await self._pipeline.start(
+            device.device_id,
+            from_post=effective_from_post,
+            brand=brand,
+            chain_valcoin_after_labely=chain_valcoin,
+            skip_prep_when_valid=self._config.skip_prep_when_valid,
+            skip_labely_end_for_valcoin_warmup=valcoin_warmup_after_labely,
+        )
+        if not started:
+            self._batch_done_events.pop(device.device_id, None)
+            self._status["failed"].append({
+                "slot": device.user_name,
+                "device_id": device.device_id,
+                "reason": "pipeline_start_failed",
+            })
+            await self._finish_device_session(device.device_id)
+            return "failed"
+        return "started"
+
+    async def _wait_pipeline_done(self, device_id: str, batch_index: int) -> None:
+        if self._stop_requested:
+            return
+        event = self._batch_done_events.get(device_id)
+        if not event:
+            return
+        try:
+            await asyncio.wait_for(
+                event.wait(),
+                timeout=float(self._config.batch_device_timeout_seconds),
+            )
+        except asyncio.TimeoutError:
+            await self._pipeline.stop(device_id)
+            self._status["failed"].append({
+                "device_id": device_id,
+                "reason": "batch_device_timeout",
+            })
+            self._note_imouse_failure(batch_index, "batch_device_timeout")
+            if self._config.disconnect_on_complete:
+                await self._finish_device_session(device_id)
+            self._batch_done_events.pop(device_id, None)
+
+    async def _run_valcoin_warmup_device(self, device: Any) -> None:
+        if self._stop_requested:
+            return
+        # Ensure AirPlay is still live before ValCoin warmup scroll.
+        cast_ok = await self._ensure_cast(device.device_id)
+        if not cast_ok:
+            logger.warning(
+                "batch_valcoin_warmup_no_cast",
+                device_id=device.device_id,
+                slot=device.user_name,
+            )
+            await self._db.log_activity(
+                "warn",
+                "batch",
+                f"ValCoin warmup skipped — could not cast (Control Bar) for slot {device.user_name}",
+                device.device_id,
+            )
+            return
+
+        try:
+            await run_tiktok_warmup(
+                self._dm.controller,
+                device,
+                brand="valcoin",
+                app_config=self._app_config,
+                device_manager=self._dm,
+                stop_check=lambda: self._stop_requested,
+                log_activity=self._db.log_activity,
+                after_labely=True,
+                permission_watchers=self._permission_watchers,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "batch_valcoin_warmup_failed",
+                device_id=device.device_id,
+                slot=device.user_name,
+                error=str(exc),
+            )
+            await self._db.log_activity(
+                "warn",
+                "batch",
+                f"ValCoin warmup failed for slot {device.user_name}: {exc}",
+                device.device_id,
+            )
+
+    async def _ensure_cast(
+        self,
+        device_id: str,
+        *,
+        max_attempts: int | None = None,
+    ) -> bool:
+        """Cast via Control Bar UI; success = iMouse online. No airplay/connect API."""
+        attempts = max(
+            1,
+            int(
+                max_attempts
+                if max_attempts is not None
+                else self._config.cast_connect_max_attempts
+            ),
+        )
         interval = float(self._config.cast_connect_retry_seconds)
+        cast_cfg = self._config.cast_ui
+
+        def _online(did: str) -> bool:
+            device = self._dm.get_device(did)
+            return bool(device and device.is_online)
+
         for attempt in range(1, attempts + 1):
-            await self._dm.refresh_devices()
-            device = self._dm.get_device(device_id)
-            if device and device.is_online:
-                return True
             logger.info(
                 "batch_cast_attempt",
                 device_id=device_id,
                 attempt=attempt,
                 max_attempts=attempts,
+                mode="control_bar_ui",
             )
-            await self._dm.reconnect_airplay(device_id)
-            await asyncio.sleep(self._connect_delay)
-            await self._dm.refresh_devices()
-            device = self._dm.get_device(device_id)
-            if device and device.is_online:
+            ok = await ensure_cast_via_control_bar(
+                self._dm.controller,
+                device_id,
+                cast_cfg,
+                refresh_devices=self._dm.refresh_devices,
+                is_online=_online,
+            )
+            if ok:
                 return True
             if attempt < attempts:
                 await asyncio.sleep(interval)

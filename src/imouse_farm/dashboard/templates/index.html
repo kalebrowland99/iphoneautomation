@@ -48,7 +48,7 @@
             --brand: __ACCENT_COLOR__;
         }
     </style>
-    <link rel="stylesheet" href="/static/dashboard.css?v=supplied4">
+    <link rel="stylesheet" href="/static/dashboard.css?v=embedfix1">
 </head>
 <body class="min-h-screen bg-white text-foreground antialiased brand-__BRAND_ID__">
     <div id="page-banner"></div>
@@ -100,11 +100,17 @@
                     </div>
                 </div>
 
-                <div class="flex flex-col sm:flex-row gap-3">
+                <div class="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
                     <button type="button" id="btn-run" onclick="startDailyRun()"
                         class="inline-flex items-center justify-center rounded-xl bg-foreground text-background hover:bg-foreground/90 px-6 py-2.5 text-sm font-medium transition-colors">
                         Run
                     </button>
+                    <label for="batch-size" class="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm text-muted-foreground">
+                        <span class="whitespace-nowrap">Phones at a time</span>
+                        <input type="number" id="batch-size" min="1" max="20" value="2" inputmode="numeric"
+                               class="w-14 rounded-lg border border-border bg-background px-2 py-1 text-center text-sm font-medium text-foreground tabular-nums"
+                               title="How many phones to run in parallel (1–20)">
+                    </label>
                     <button type="button" id="btn-kill" onclick="stopDailyRun()" disabled
                         class="inline-flex items-center justify-center rounded-xl border border-border px-6 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-40">
                         Stop
@@ -170,6 +176,7 @@
                                         </label>
                                     </th>
                                     <th class="phones-th" scope="col">Last run</th>
+                                    <th class="phones-th phones-th-cast" scope="col">Cast</th>
                                 </tr>
                             </thead>
                             <tbody id="farm-grid"></tbody>
@@ -196,20 +203,20 @@
                                aria-describedby="use-supplied-videos-help">
                         <div class="min-w-0">
                             <label for="use-supplied-videos" class="block text-sm font-semibold text-foreground cursor-pointer">Use my videos</label>
-                            <p id="use-supplied-videos-help" class="text-xs text-muted-foreground mt-0.5 leading-relaxed">Skip slideshow generation, TikTok music, and on-screen text. Upload separately on the Labely and ValCoin tabs — each brand keeps its own videos.</p>
+                            <p id="use-supplied-videos-help" class="text-xs text-muted-foreground mt-0.5 leading-relaxed">Skip slideshow generation and use your uploads instead. Full prep still runs (clear / upload / VPN / open TikTok). Music still runs; on-screen text and the timeline editor are skipped (put your own text in the video). Upload separately on the Labely and ValCoin tabs — each brand keeps its own videos.</p>
                         </div>
                     </div>
                     <div id="supplied-videos-panel" class="supplied-videos-panel hidden border-t border-border pt-3 space-y-3">
                         <div class="flex flex-wrap items-start justify-between gap-2">
                             <div class="min-w-0">
                                 <p class="text-sm font-semibold" id="supplied-videos-title">__APP_NAME__ videos</p>
-                                <p class="text-xs text-muted-foreground mt-0.5" id="supplied-videos-hint">Upload 3 MP4s for this brand only</p>
+                                <p class="text-xs text-muted-foreground mt-0.5" id="supplied-videos-hint">Upload 1–3 MP4s for this brand (posts that many)</p>
                             </div>
                             <button type="button" id="supplied-videos-clear" class="btn-ghost btn-sm shrink-0" onclick="clearSuppliedVideos()">Clear all</button>
                         </div>
                         <label for="supplied-videos-input" id="supplied-videos-drop" class="supplied-videos-drop block cursor-pointer rounded-xl border-2 border-dashed border-border bg-muted/30 px-4 py-8 text-center transition-colors">
                             <span class="block text-sm font-medium text-foreground">Click to choose videos</span>
-                            <span class="block text-xs text-muted-foreground mt-1">or drop MP4 / MOV files here (up to 3 for __APP_NAME__)</span>
+                            <span class="block text-xs text-muted-foreground mt-1">or drop MP4 / MOV files here (1–3 for __APP_NAME__)</span>
                             <input type="file" id="supplied-videos-input" class="sr-only" accept="video/mp4,video/quicktime,video/*" multiple>
                         </label>
                         <ul id="supplied-videos-list" class="supplied-videos-list text-sm"></ul>
@@ -306,6 +313,8 @@
                                         <label class="segment"><input type="radio" name="debug-flow-select" value="flow" checked onchange="switchDebugFlow(this.value)"><span>Full (Labely + ValCoin)</span></label>
                                         <label class="segment"><input type="radio" name="debug-flow-select" value="warmup_flow" onchange="switchDebugFlow(this.value)"><span>Labely + Warmup</span></label>
                                         <label class="segment"><input type="radio" name="debug-flow-select" value="account_switch" onchange="switchDebugFlow(this.value)"><span>Account</span></label>
+                                        <label class="segment"><input type="radio" name="debug-flow-select" value="vpn" onchange="switchDebugFlow(this.value)"><span>VPN</span></label>
+                                        <label class="segment"><input type="radio" name="debug-flow-select" value="post_draft" onchange="switchDebugFlow(this.value)"><span>Draft (TikTok home)</span></label>
                                         <label class="segment"><input type="radio" name="debug-flow-select" value="all" onchange="switchDebugFlow(this.value)"><span>All tests</span></label>
                                     </div>
                                 </div>
@@ -315,7 +324,8 @@
                                 </div>
                                 <div class="btn-row">
                                     <button type="button" class="btn-ghost btn-primary-outline" id="btn-debug-run" onclick="runDebugTest(false, false)">Run test</button>
-                                    <button type="button" class="btn-ghost" id="btn-debug-run-skip-media" onclick="runDebugTest(true, true)" title="Run all steps from the selected letter through the end; skips gallery clear/upload, generate, and TikTok publish">Run A→Z (skip media)</button>
+                                    <button type="button" class="btn-ghost" id="btn-debug-run-skip-media" onclick="runDebugAz()" title="Run all steps from the selected letter through the end. Full/Warmup: skips gallery/publish. Draft: runs real Post taps except the last video.">Run A→Z (skip media)</button>
+                                    <button type="button" class="btn-ghost" id="btn-debug-draft-post" onclick="runDraftVideoDebug()" title="From TikTok home: draft 1–3 videos from the phone gallery (or supplied set). Posts all but the last; stops before the final Post tap.">Draft video (no Post)</button>
                                     <button type="button" class="btn-ghost" id="btn-debug-upload" onclick="runGalleryUploadDebug()" title="Upload gallery files for the selected phone (same as prep upload_gallery) — logs folder, sizes, timeout, and iMouse error">Test upload</button>
                                     <button type="button" class="btn-ghost" id="btn-debug-clear" onclick="runGalleryClearDebug()" title="Clear the selected phone's photo library (same as prep clear_album) — logs OK, timeout, or error">Test delete</button>
                                     <button type="button" class="btn-ghost" id="btn-debug-upload-all" onclick="runGalleryUploadAllDebug()" title="Run gallery upload on every registered phone, one at a time — logs OK, timeout, or error per slot">Test upload all</button>
@@ -357,6 +367,6 @@
     <script>
         window.__FARM__ = { slots: __FARM_SLOTS__, brand: '__BRAND_ID__', accent: '__ACCENT_COLOR__' };
     </script>
-    <script src="/static/dashboard.js?v=supplied4"></script>
+    <script src="/static/dashboard.js?v=embedfix1"></script>
 </body>
 </html>

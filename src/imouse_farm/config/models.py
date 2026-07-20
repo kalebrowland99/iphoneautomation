@@ -25,6 +25,8 @@ class ActionType(str, Enum):
     TAP = "tap"
     TAP_DETECTION = "tap_detection"  # tap on vision-detected element (state-based)
     TAP_OCR = "tap_ocr"  # tap text found via iMouse on-device OCR
+    TAP_AA_VISION = "tap_aa_vision"  # OpenAI vision locate Aa (+ editor); tap Aa, save editor
+    TAP_SAVED_EDITOR = "tap_saved_editor"  # tap editor coords saved during tap_aa_vision
     SWIPE = "swipe"
     LONG_PRESS = "long_press"
     DRAG = "drag"  # press-hold at start, swipe to end, release
@@ -43,6 +45,7 @@ class ActionType(str, Enum):
     ALBUM_UPLOAD = "album_upload"
     CLEAR_TEXT = "clear_text"
     KEY = "key"
+    SCROLL_FEED = "scroll_feed"  # timed TikTok home-feed scroll (post-upload wait)
 
 
 class IMouseConfig(BaseModel):
@@ -55,6 +58,9 @@ class IMouseConfig(BaseModel):
     airplay_reconnect_on_startup: bool = False
     airplay_connect_delay_seconds: float = 4.0
     airplay_reconnect_interval_seconds: float = 30.0
+    # Re-broadcast AirPlay/mDNS so phones keep seeing iMouseXP-***
+    mdns_refresh_enabled: bool = True
+    mdns_refresh_interval_seconds: float = 30.0
 
 
 class DatabaseConfig(BaseModel):
@@ -145,6 +151,8 @@ class OpenAICaptionConfig(BaseModel):
     temperature: float = 0.85
     # Vision model for tapping the account-switcher dropdown arrow.
     account_switcher_vision_model: str = "gpt-5.5"
+    # Vision model for locating TikTok editor Aa (text) on the right toolbar.
+    aa_vision_model: str = "gpt-5.5"
 
 
 class DashboardConfig(BaseModel):
@@ -279,28 +287,58 @@ class KernelRecoveryConfig(BaseModel):
 
 
 class VpnConfig(BaseModel):
-    """Shadowrocket VPN via iMouse shortcut_exec_url (opens URL on the phone)."""
+    """Shadowrocket VPN: home-icon open + vision status + fixed toggle tap."""
 
-    shortcut_url_on: str = "shadowrocket://connect"
-    shortcut_url_off: str = "shadowrocket://disconnect"
-    shortcut_url_toggle: str = "shadowrocket://toggle"
-    shortcut_url_open: str = "shadowrocket://"
-    shortcut_settle_seconds: float = 120.0
-    shortcut_url_timeout_ms: int = 120000
-    confirm_via_vision: bool = False
-    confirm_max_attempts: int = 2
+    icon_x: int = 373
+    icon_y: int = 1003
+    toggle_x: int = 515
+    toggle_y: int = 171
+    app_settle_seconds: float = 4.0
+    after_toggle_settle_seconds: float = 4.0
     confirm_settle_seconds: float = 2.0
+    vision_model: str = "gpt-4o"
+
+
+class CastUiConfig(BaseModel):
+    """Cast via iMouse Control Bar UI taps (no device_airplay_connect)."""
+
+    enabled: bool = True
+    wake_screen: bool = True
+    wake_settle_seconds: float = 3.5
+    post_home_settle_seconds: float = 1.25
+    # iMouseXP console "Control Bar" button → /key/sendkey fn_key
+    control_bar_fn_key: str = "ControlBar"
+    after_control_bar_seconds: float = 1.5
+    screen_mirroring_x: int = 159
+    screen_mirroring_y: int = 384
+    after_mirroring_seconds: float = 10.0
+    target_x: int = 178
+    target_y: int = 316
+    after_target_seconds: float = 2.0
+    # Poll iMouse device state==1 after the UI sequence
+    confirm_timeout_seconds: float = 20.0
+    confirm_poll_seconds: float = 1.0
+    # After online: dismiss Screen Mirroring UI and return to home
+    home_after_connect_count: int = 3
+    home_after_connect_interval_seconds: float = 1.0
 
 
 class BatchConfig(BaseModel):
     batch_size: int = 1
-    cast_connect_max_attempts: int = 8
+    cast_connect_max_attempts: int = 1
     cast_connect_retry_seconds: float = 15.0
+    cast_ui: CastUiConfig = Field(default_factory=CastUiConfig)
     batch_device_timeout_seconds: float = 7200.0
     disconnect_on_complete: bool = True
     between_phones_pause_seconds: float = 2.0
     chain_valcoin_after_labely: bool = True
     skip_prep_when_valid: bool = True
+    # Slots that often hit iMouseXP 调用超时 — reboot + recast before automation.
+    flawed_timeout_slots: list[int] = Field(
+        default_factory=lambda: [2, 7, 9, 16, 18, 20]
+    )
+    # Slots never automated (personal phones). Skipped by batch + manual runs.
+    excluded_slots: list[int] = Field(default_factory=list)
     warmup: WarmupConfig = Field(default_factory=WarmupConfig)
     session_recording: SessionRecordingConfig = Field(default_factory=SessionRecordingConfig)
     kernel_recovery: KernelRecoveryConfig = Field(default_factory=KernelRecoveryConfig)

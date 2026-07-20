@@ -60,6 +60,8 @@ def _default_profile(brand: str = "labely") -> dict[str, Any]:
         "prep_completed_at": None,
         "cant_cast_imouse": False,
         "phone_dead": False,
+        "disabled": False,
+        "notes": "",
     }
 
 
@@ -124,6 +126,8 @@ def _normalize_profile(data: dict[str, Any], brand: str) -> dict[str, Any]:
         "prep_completed_at": prep_at or None,
         "cant_cast_imouse": bool(data.get("cant_cast_imouse", False)),
         "phone_dead": bool(data.get("phone_dead", False)),
+        "disabled": bool(data.get("disabled", False)),
+        "notes": str(data.get("notes", "") or "").strip()[:500],
     })
     return base
 
@@ -210,6 +214,8 @@ def set_profile(device_key: str, *, brand: str = "labely", **fields: Any) -> dic
         current["tiktok_handle"] = normalize_handle(str(fields["tiktok_handle"] or ""))
     if "warmup_enabled" in fields:
         current["warmup_enabled"] = bool(fields["warmup_enabled"])
+    if "notes" in fields:
+        current["notes"] = str(fields["notes"] or "").strip()[:500]
     current["brand"] = b
     _store[key] = current
     _save_store()
@@ -412,6 +418,26 @@ def is_phone_dead(base_key: str) -> bool:
         if _store.get(key, {}).get("phone_dead"):
             return True
     return False
+
+
+def set_disabled(base_key: str, *, disabled: bool = True, brand: str = "labely") -> None:
+    """Lock/unlock a single account (brand profile) manually.
+
+    Per-account: a labely and valcoin account on the same phone are disabled
+    independently. A disabled account is skipped by batch runs and rejected for
+    manual runs of that brand.
+    """
+    key = brand_profile_key(base_key, brand)
+    profile = get_profile(key, brand=brand)
+    profile["disabled"] = bool(disabled)
+    _store[key] = profile
+    _save_store()
+
+
+def is_disabled(base_key: str, *, brand: str = "labely") -> bool:
+    """Return True if this account (brand profile) is manually disabled."""
+    key = brand_profile_key(base_key, brand)
+    return bool(_store.get(key, {}).get("disabled"))
 
 
 _load_store()

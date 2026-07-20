@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import random
-import time
 from typing import Any, Callable
 
 from imouse_farm.actions.cancel import is_cancelled
-from imouse_farm.actions.permission_prompts import is_tiktok_live_feed_dialog
 from imouse_farm.actions.vpn_shadowrocket import (
     TIKTOK_HOME_ICON_X,
     TIKTOK_HOME_ICON_Y,
@@ -22,11 +19,7 @@ from imouse_farm.post.account_profile_store import (
 )
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.workflows.account_switch import ClearPopupsFn, ensure_tiktok_account
-from imouse_farm.workflows.feed_scroll import (
-    random_center_double_tap_coords,
-    screen_dimensions,
-    swipe_feed_up,
-)
+from imouse_farm.workflows.feed_scroll import scroll_tiktok_feed
 from imouse_farm.workflows.tiktok_plus_ready import wait_for_tiktok_plus_visible
 
 logger = get_logger(__name__)
@@ -329,129 +322,32 @@ async def _run_warmup_scroll(
 ) -> None:
     device_id = str(device.device_id)
     warmup_cfg = app_config.batch.warmup
-    sw, sh = screen_dimensions(device)
     duration = (
         float(duration_override)
         if duration_override is not None
         else float(warmup_cfg.duration_seconds)
     )
-    delay_min = float(warmup_cfg.swipe_delay_min_seconds)
-    delay_max = float(warmup_cfg.swipe_delay_max_seconds)
-    delay_mean = float(warmup_cfg.swipe_delay_mean_seconds)
-    long_watch_prob = float(warmup_cfg.swipe_delay_long_watch_probability)
-    tap_interval = float(warmup_cfg.double_tap_interval_seconds)
-
-    if log_activity:
-        await log_activity(
-            "info",
-            "batch",
-            f"Warmup starting ({int(duration)}s scroll)",
-            device_id,
-        )
-
     nav = app_config.tiktok_navigation
-    home_x = int(nav.home_tab_x)
-    home_y = int(nav.home_tab_y)
 
-    started = time.monotonic()
-    deadline = started + duration
-    double_tap_at = started + random.uniform(0.0, duration)
-    double_tap_done = False
-    swipes_since_home = 0
-    home_every_swipes = random.randint(3, 4)
-
-    logger.info(
-        "warmup_started",
-        device_id=device_id,
-        slot=device.user_name,
-        brand=brand,
+    await scroll_tiktok_feed(
+        controller,
+        device,
         duration_seconds=duration,
-        double_tap_at_seconds=round(double_tap_at - started, 1),
-        home_every_swipes=home_every_swipes,
+        home_tab_x=int(nav.home_tab_x),
+        home_tab_y=int(nav.home_tab_y),
+        swipe_delay_min_seconds=float(warmup_cfg.swipe_delay_min_seconds),
+        swipe_delay_max_seconds=float(warmup_cfg.swipe_delay_max_seconds),
+        swipe_delay_mean_seconds=float(warmup_cfg.swipe_delay_mean_seconds),
+        swipe_delay_long_watch_probability=float(
+            warmup_cfg.swipe_delay_long_watch_probability
+        ),
+        double_tap_interval_seconds=float(warmup_cfg.double_tap_interval_seconds),
+        tap_home_first=True,
+        enable_double_tap=True,
+        log_activity=log_activity,
+        log_label="Warmup",
+        stop_check=stop_check,
     )
-
-    while time.monotonic() < deadline:
-        if stop_check():
-            logger.info("warmup_stopped", device_id=device_id, reason="cancelled")
-            return
-
-        elapsed = time.monotonic() - started
-        remaining = deadline - time.monotonic()
-
-        if not double_tap_done and time.monotonic() >= double_tap_at:
-            x, y = random_center_double_tap_coords(sw, sh)
-            await controller.tap(device_id, x, y)
-            await asyncio.sleep(tap_interval)
-            await controller.tap(device_id, x, y)
-            double_tap_done = True
-            logger.info("warmup_double_tap", device_id=device_id, x=x, y=y)
-            if log_activity:
-                await log_activity(
-                    "info",
-                    "batch",
-                    f"Warmup liked video (double-tap) at ({x}, {y}) — {elapsed:.0f}s elapsed",
-                    device_id,
-                )
-
-        if random.random() < long_watch_prob:
-            delay = delay_max
-        else:
-            delay = min(delay_max, max(delay_min, random.expovariate(1.0 / delay_mean)))
-        if log_activity:
-            await log_activity(
-                "info",
-                "batch",
-                f"Warmup watching {delay:.0f}s — {elapsed:.0f}s elapsed, {remaining:.0f}s left",
-                device_id,
-            )
-        if not await _wait_with_live_watch(
-            controller,
-            device_id,
-            sw,
-            sh,
-            delay,
-            deadline,
-            stop_check=stop_check,
-        ):
-            return
-
-        if stop_check():
-            return
-
-        swiped = await swipe_feed_up(controller, device_id, sw, sh)
-        if swiped:
-            swipes_since_home += 1
-            logger.info("warmup_swipe", device_id=device_id, **swiped)
-            if log_activity:
-                elapsed_after = time.monotonic() - started
-                remaining_after = deadline - time.monotonic()
-                await log_activity(
-                    "info",
-                    "batch",
-                    f"Warmup swiped to next video — {elapsed_after:.0f}s elapsed, {remaining_after:.0f}s left",
-                    device_id,
-                )
-
-            if swipes_since_home >= home_every_swipes:
-                ok = await controller.tap(device_id, home_x, home_y)
-                logger.info(
-                    "warmup_home_tab",
-                    device_id=device_id,
-                    x=home_x,
-                    y=home_y,
-                    ok=ok,
-                    after_swipes=swipes_since_home,
-                )
-                if log_activity:
-                    await log_activity(
-                        "info",
-                        "batch",
-                        f"Warmup tapped home tab ({home_x}, {home_y}) after {swipes_since_home} swipes",
-                        device_id,
-                    )
-                swipes_since_home = 0
-                home_every_swipes = random.randint(3, 4)
-                await asyncio.sleep(1.0)
 
     day = increment_warmup_days(device_id, device.user_name, brand=brand)
     logger.info("warmup_completed", device_id=device_id, slot=device.user_name, warmup_day=day)
@@ -568,32 +464,3 @@ async def _ensure_vpn_on(
     """Turn VPN on via shortcut (no phone reboot on failure)."""
     del device_manager  # kept for call-site compatibility
     await ensure_vpn_on(controller, app_config, device_id, log_activity=log_activity)
-
-
-async def _wait_with_live_watch(
-    controller: Any,
-    device_id: str,
-    sw: int,
-    sh: int,
-    duration: float,
-    deadline: float,
-    *,
-    stop_check: Callable[[], bool],
-) -> bool:
-    """Sleep up to *duration* seconds, polling for LIVE feed overlays."""
-    end = min(time.monotonic() + duration, deadline)
-    while time.monotonic() < end:
-        if stop_check():
-            return False
-
-        screen = await controller.ocr_on_device(device_id)
-        if screen and is_tiktok_live_feed_dialog(screen):
-            swiped = await swipe_feed_up(controller, device_id, sw, sh)
-            if swiped:
-                logger.info("warmup_live_dismiss", device_id=device_id, **swiped)
-
-        remaining = end - time.monotonic()
-        if remaining <= 0:
-            break
-        await asyncio.sleep(min(0.5, remaining))
-    return True

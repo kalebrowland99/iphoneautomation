@@ -6,6 +6,7 @@ loop: false
 
 steps:
   # ── 1. Clear Labely videos + upload ValCoin gallery (VPN off once before clear) ─
+  # Always runs — including when Use my videos is on (not gated by unless_use_supplied_videos).
   - type: execute_action
     name: clear_album
     on_failure: pause
@@ -50,7 +51,7 @@ steps:
 
   # ── 3. Turn VPN on before TikTok ────────────────────────────────────
   - type: execute_action
-    name: vpn_on_shortcut
+    name: vpn_on
     on_failure: pause
     action:
       type: vpn_on

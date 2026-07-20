@@ -26,6 +26,8 @@ TOUCH_ACTIONS = frozenset({
     ActionType.TAP,
     ActionType.TAP_DETECTION,
     ActionType.TAP_OCR,
+    ActionType.TAP_AA_VISION,
+    ActionType.TAP_SAVED_EDITOR,
     ActionType.SWIPE,
     ActionType.DRAG,
     ActionType.LONG_PRESS,

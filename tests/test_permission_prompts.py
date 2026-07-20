@@ -83,10 +83,7 @@ def test_security_checkup_detects_unicode_apostrophe_and_body_copy() -> None:
 def test_analyze_popup_screen_tiktok_continue_editing() -> None:
     result = analyze_popup_screen("Continue editing this post?")
     assert result["dialog"] == "tiktok_continue_editing"
-    assert result["watcher_action"] == "swipe_up"
-    assert result["swipe_sx"] == 65
-    assert result["swipe_sy"] == 151
-    assert result["swipe_ey"] == 0
+    assert result["watcher_action"] == "skip"
 
 
 def test_is_tiktok_live_feed_dialog() -> None:

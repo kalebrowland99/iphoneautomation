@@ -297,6 +297,55 @@ class ActionEngine:
                     if tap_idx < tap_count - 1:
                         await asyncio.sleep(interval)
                 return True
+            case ActionType.TAP_AA_VISION:
+                from imouse_farm.workflows.tiktok_aa_vision import tap_aa_via_vision
+
+                async def _aa_log(
+                    level: str,
+                    category: str,
+                    message: str,
+                    *args: Any,
+                    **details: Any,
+                ) -> None:
+                    did = str(args[0]).strip() if args else device_id
+                    await self._db.log_activity(
+                        level,
+                        category,
+                        message,
+                        did,
+                        details or None,
+                    )
+
+                return await tap_aa_via_vision(
+                    ctrl,
+                    device_id,
+                    app_config=self._config,
+                    log_activity=_aa_log,
+                )
+            case ActionType.TAP_SAVED_EDITOR:
+                from imouse_farm.workflows.tiktok_aa_vision import tap_saved_editor
+
+                async def _editor_log(
+                    level: str,
+                    category: str,
+                    message: str,
+                    *args: Any,
+                    **details: Any,
+                ) -> None:
+                    did = str(args[0]).strip() if args else device_id
+                    await self._db.log_activity(
+                        level,
+                        category,
+                        message,
+                        did,
+                        details or None,
+                    )
+
+                return await tap_saved_editor(
+                    ctrl,
+                    device_id,
+                    log_activity=_editor_log,
+                )
             case ActionType.TAP_OCR:
                 texts_param = params.get("texts")
                 if texts_param:
@@ -308,6 +357,7 @@ class ActionEngine:
                     raise RuntimeError("tap_ocr requires text or texts")
                 optional = bool(params.get("optional", True))
                 prefer_top = bool(params.get("prefer_top", False))
+                prefer_bottom = bool(params.get("prefer_bottom", False))
                 threshold = float(params.get("threshold", 0.75))
                 contain = bool(params.get("contain", True))
                 wait_timeout = float(params.get("wait_timeout_seconds", 0))
@@ -316,10 +366,15 @@ class ActionEngine:
                 ocr_ex = bool(params.get("ocr_ex", False))
 
                 def _pick_best_match(matches: list[dict[str, Any]]) -> dict[str, Any]:
-                    if prefer_top:
+                    if prefer_top and not prefer_bottom:
                         return min(
                             matches,
                             key=lambda m: (int(m["y"]), -float(m.get("confidence", 0))),
+                        )
+                    if prefer_bottom:
+                        return max(
+                            matches,
+                            key=lambda m: (int(m["y"]), float(m.get("confidence", 0))),
                         )
                     return max(
                         matches,
@@ -742,6 +797,58 @@ class ActionEngine:
                 if key:
                     return await ctrl.send_key(device_id, key)
                 raise RuntimeError("key action requires fn_key or key")
+            case ActionType.SCROLL_FEED:
+                from imouse_farm.workflows.feed_scroll import scroll_tiktok_feed
+
+                device = self._device_manager.get_device(device_id)
+                if not device:
+                    raise RuntimeError(f"Device {device_id} not found for scroll_feed")
+                duration = float(params.get("duration_seconds", 600))
+                warmup = self._config.batch.warmup
+                nav = self._config.tiktok_navigation
+                tap_home_first = bool(params.get("tap_home_first", True))
+                enable_double_tap = bool(params.get("enable_double_tap", True))
+                log_label = str(params.get("log_label") or "Upload wait").strip() or "Upload wait"
+
+                async def _log(
+                    level: str,
+                    category: str,
+                    message: str,
+                    _device_id: str = device_id,
+                    **_extra: Any,
+                ) -> None:
+                    await self._db.log_activity(
+                        level,
+                        category,
+                        message,
+                        device_id,
+                    )
+
+                async def _heartbeat() -> None:
+                    await self._device_manager.record_activity(device_id)
+
+                await scroll_tiktok_feed(
+                    ctrl,
+                    device,
+                    duration_seconds=duration,
+                    home_tab_x=int(nav.home_tab_x),
+                    home_tab_y=int(nav.home_tab_y),
+                    swipe_delay_min_seconds=float(warmup.swipe_delay_min_seconds),
+                    swipe_delay_max_seconds=float(warmup.swipe_delay_max_seconds),
+                    swipe_delay_mean_seconds=float(warmup.swipe_delay_mean_seconds),
+                    swipe_delay_long_watch_probability=float(
+                        warmup.swipe_delay_long_watch_probability
+                    ),
+                    double_tap_interval_seconds=float(
+                        warmup.double_tap_interval_seconds
+                    ),
+                    tap_home_first=tap_home_first,
+                    enable_double_tap=enable_double_tap,
+                    log_activity=_log,
+                    log_label=log_label,
+                    on_activity=_heartbeat,
+                )
+                return True
             case ActionType.HOME:
                 return await ctrl.press_home(device_id)
             case ActionType.MOUSE_RESET:

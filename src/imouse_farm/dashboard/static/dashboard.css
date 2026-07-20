@@ -192,6 +192,17 @@ body.brand-labely .phones-td-warmup {
   opacity: 0.55;
 }
 
+.phones-table-row.excluded {
+  opacity: 0.5;
+  background: hsl(var(--muted) / 0.35);
+  cursor: default;
+}
+
+.phones-table-row.excluded .phones-td-slot,
+.phones-table-row.excluded .phones-td-handle {
+  color: hsl(var(--muted-foreground));
+}
+
 .ui-label-badge {
   display: inline-block;
   margin-top: 0.2rem;
@@ -232,6 +243,83 @@ body.brand-labely .phones-td-warmup {
   white-space: nowrap;
 }
 
+.phones-th-cast,
+.phones-td-cast {
+  width: 5.5rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.phones-cast-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  user-select: none;
+  vertical-align: middle;
+}
+
+.phones-cast-switch.is-busy {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.phones-cast-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.phones-cast-track {
+  position: relative;
+  display: inline-block;
+  width: 2.1rem;
+  height: 1.15rem;
+  border-radius: 9999px;
+  background: #94a3b8;
+  border: 1px solid #64748b;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.phones-cast-switch.is-on .phones-cast-track {
+  background: #2563eb;
+  border-color: #1d4ed8;
+}
+
+.phones-cast-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 9999px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  transition: transform 0.15s ease;
+}
+
+.phones-cast-switch.is-on .phones-cast-knob {
+  transform: translateX(0.9rem);
+}
+
+.phones-cast-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  min-width: 1.4rem;
+  color: #64748b;
+}
+
+.phones-cast-switch.is-on .phones-cast-label {
+  color: #1d4ed8;
+}
+
+.phones-cast-switch.is-off .phones-cast-label {
+  color: #64748b;
+}
+
 .phones-last-run {
   font-size: 0.75rem;
   color: hsl(var(--muted-foreground));
@@ -240,6 +328,93 @@ body.brand-labely .phones-td-warmup {
 .phones-last-run.success { color: #059669; }
 .phones-last-run.failed { color: #dc2626; }
 .phones-last-run.running { color: #2563eb; font-weight: 500; }
+
+.phones-account-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.2rem;
+}
+
+.phones-account-row .phones-account-note {
+  margin-top: 0;
+  flex: 1 1 auto;
+}
+
+.phones-disable-btn {
+  flex: 0 0 auto;
+  font-size: 0.65rem;
+  line-height: 1;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.35rem;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.phones-disable-btn:hover {
+  border-color: hsl(0 72% 51% / 0.6);
+  color: hsl(0 72% 51%);
+}
+
+.phones-disable-btn.is-disabled {
+  border-color: hsl(142 71% 45% / 0.6);
+  color: hsl(142 71% 40%);
+  background: hsl(142 71% 45% / 0.08);
+}
+
+.phones-disable-btn.is-disabled:hover {
+  border-color: hsl(142 71% 45%);
+  color: hsl(142 71% 35%);
+}
+
+.phones-table-row.disabled-slot {
+  opacity: 0.5;
+  background: hsl(var(--muted) / 0.35);
+}
+
+.phones-table-row.disabled-slot .phones-td-slot,
+.phones-table-row.disabled-slot .phones-td-handle {
+  color: hsl(var(--muted-foreground));
+}
+
+.phones-account-note {
+  margin-top: 0.2rem;
+  width: 100%;
+  max-width: 22rem;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  padding: 0.15rem 0.4rem;
+  color: hsl(var(--muted-foreground));
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.35rem;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+
+.phones-account-note::placeholder {
+  color: hsl(var(--muted-foreground) / 0.55);
+  font-style: italic;
+}
+
+.phones-account-note:hover {
+  border-color: hsl(var(--border));
+}
+
+.phones-account-note:focus {
+  outline: none;
+  border-color: hsl(var(--ring, var(--border)));
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.phones-account-note.has-note {
+  color: hsl(var(--foreground));
+  background: hsl(var(--muted) / 0.18);
+  border-color: hsl(var(--border));
+}
 
 .supplied-videos-check {
   width: 1.05rem;

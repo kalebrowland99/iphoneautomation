@@ -71,6 +71,7 @@ class DeviceManager:
         self._devices: dict[str, ManagedDevice] = {}
         self._poll_task: asyncio.Task[None] | None = None
         self._startup_task: asyncio.Task[None] | None = None
+        self._mdns_task: asyncio.Task[None] | None = None
         self._running = False
         self._event_callbacks: list[EventCallback] = []
         self._reconnect_queue: set[str] = set()
@@ -115,11 +116,17 @@ class DeviceManager:
         self._poll_task = asyncio.create_task(self._poll_loop())
         if self._config.imouse.airplay_reconnect_on_startup:
             self._startup_task = asyncio.create_task(self._startup_airplay_reconnect())
-        logger.info("device_manager_started")
+        if self._config.imouse.mdns_refresh_enabled:
+            self._mdns_task = asyncio.create_task(self._mdns_refresh_loop())
+        logger.info(
+            "device_manager_started",
+            mdns_refresh=self._config.imouse.mdns_refresh_enabled,
+            mdns_interval=self._config.imouse.mdns_refresh_interval_seconds,
+        )
 
     async def stop(self) -> None:
         self._running = False
-        for task in (self._poll_task, self._startup_task):
+        for task in (self._poll_task, self._startup_task, self._mdns_task):
             if task:
                 task.cancel()
                 try:
@@ -164,7 +171,7 @@ class DeviceManager:
                     pass
 
     async def reconnect_airplay(self, device_id: str) -> bool:
-        """Manually reconnect AirPlay for one device (dashboard Connect button)."""
+        """Cast via Control Bar UI (no /device/airplay/connect API)."""
         return await self._try_reconnect_airplay(device_id, force=True, manual=True)
 
     async def disconnect_airplay(self, device_id: str) -> bool:
@@ -197,7 +204,7 @@ class DeviceManager:
         for device_id in list(self._reconnect_queue):
             if not self._running:
                 return
-            await self._try_reconnect_airplay(device_id, force=True)
+            await self._try_reconnect_airplay(device_id, force=True, manual=True)
             await asyncio.sleep(1)
         await self.refresh_devices()
 
@@ -216,17 +223,25 @@ class DeviceManager:
             return False
         self._last_airplay_attempt[device_id] = now
 
-        logger.info("airplay_reconnect_attempt", device_id=device_id)
-        success = await self._controller.connect_device(device_id)
+        logger.info("airplay_reconnect_attempt", device_id=device_id, mode="control_bar_ui")
+        from imouse_farm.actions.cast_ui import ensure_cast_via_control_bar
+
+        def _online(did: str) -> bool:
+            d = self._devices.get(did)
+            return bool(d and d.is_online)
+
+        success = await ensure_cast_via_control_bar(
+            self._controller,
+            device_id,
+            self._config.batch.cast_ui,
+            refresh_devices=self.refresh_devices,
+            is_online=_online,
+        )
         if success:
-            await asyncio.sleep(2)
-            await self.refresh_devices()
-            device = self._devices.get(device_id)
-            if device and device.is_online:
-                self._reconnect_queue.discard(device_id)
-                await self._emit("device_connected", {"device_id": device_id})
-                logger.info("airplay_reconnect_success", device_id=device_id)
-                return True
+            self._reconnect_queue.discard(device_id)
+            await self._emit("device_connected", {"device_id": device_id})
+            logger.info("airplay_reconnect_success", device_id=device_id)
+            return True
         logger.warning("airplay_reconnect_failed", device_id=device_id)
         return False
 
@@ -424,6 +439,35 @@ class DeviceManager:
                 await self._maybe_reconnect_offline_devices()
             except Exception as exc:
                 logger.error("device_poll_error", error=str(exc))
+            await asyncio.sleep(interval)
+
+    def _any_device_casting(self) -> bool:
+        """True when at least one phone is currently AirPlay-mirrored."""
+        return any(device.is_online for device in self._devices.values())
+
+    async def _mdns_refresh_loop(self) -> None:
+        """Periodically re-broadcast AirPlay discovery when nothing is casting.
+
+        Skip while any device is mirrored — regmdns can disrupt active streams.
+        """
+        interval = max(5.0, float(self._config.imouse.mdns_refresh_interval_seconds))
+        # Refresh once soon after start so phones see the target quickly.
+        first_delay = min(2.0, interval)
+        await asyncio.sleep(first_delay)
+        while self._running:
+            try:
+                if not self._controller.is_connected:
+                    pass
+                elif self._any_device_casting():
+                    logger.debug("mdns_refresh_skipped_casting_active")
+                else:
+                    ok = await self._controller.refresh_mdns()
+                    if ok:
+                        logger.debug("mdns_refresh_ok")
+                    else:
+                        logger.warning("mdns_refresh_failed")
+            except Exception as exc:
+                logger.warning("mdns_refresh_error", error=str(exc))
             await asyncio.sleep(interval)
 
     def devices_in_group(self, group_name: str) -> list[ManagedDevice]:

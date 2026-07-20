@@ -51,12 +51,14 @@ from imouse_farm.post.account_profile_store import (
     get_profile,
     get_profile_for_device,
     is_cant_cast_imouse,
+    is_disabled,
     is_phone_dead,
     list_profiles,
     mark_run_failed,
     mark_run_started,
     mark_run_success,
     set_cant_cast_imouse,
+    set_disabled,
     set_profile,
 )
 from imouse_farm.integrations.slideshow_ingest import SlideshowVideoRejected
@@ -167,6 +169,8 @@ class DeviceSettingsBody(BaseModel):
 
 class RunSettingsBody(BaseModel):
     use_supplied_videos: bool | None = None
+    brand: str | None = None
+    batch_size: int | None = None
 
 
 class WindowLayoutBody(BaseModel):
@@ -177,6 +181,12 @@ class AccountProfileBody(BaseModel):
     tiktok_handle: str | None = None
     brand: str = "labely"
     warmup_enabled: bool | None = None
+    notes: str | None = None
+
+
+class DisabledBody(BaseModel):
+    disabled: bool = True
+    brand: str = "labely"
 
 
 class ApplicationState:
@@ -321,6 +331,10 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             )
             data = dm.to_dict(device)
             data["debug_skip_post"] = get_debug_skip_post(device.device_id)
+            data["excluded"] = str(device.user_name).strip() in {
+                str(s).strip() for s in app_instance.config.batch.excluded_slots
+            }
+            data["disabled"] = is_disabled(base_key, brand=brand_filter or "labely")
             data["pipeline"] = app_instance.workflow_pipeline.get_status(device.device_id)
             data["account_profile"] = profile
             from imouse_farm.workflows.tiktok_device_ui import slot_ui_label
@@ -432,9 +446,23 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
-        success = await app_instance.device_manager.reconnect_airplay(device_id)
+        # Manual UI: Control Bar → Screen Mirroring taps → online. Flip Cast to retry.
+        success = await app_instance.farm_batch._ensure_cast(device_id, max_attempts=1)
         updated = app_instance.device_manager.get_device(device_id)
         return {"success": success, "connected": bool(updated and updated.is_online)}
+
+    @app.post("/api/devices/{device_id:path}/cast")
+    async def cast_device_airplay(device_id: str) -> dict[str, Any]:
+        """Cast via Control Bar UI once; success = iMouse online (no airplay/connect)."""
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        success = await app_instance.farm_batch._ensure_cast(device_id, max_attempts=1)
+        updated = app_instance.device_manager.get_device(device_id)
+        return {
+            "success": success,
+            "connected": bool(updated and updated.is_online),
+        }
 
     @app.post("/api/devices/{device_id:path}/disconnect")
     async def disconnect_device_airplay(device_id: str) -> dict[str, Any]:
@@ -513,9 +541,35 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         clear_cant_cast_imouse(base_key)
         return {"success": True, "slot": slot}
 
+    @app.post("/api/devices/{device_id:path}/disabled")
+    async def set_device_disabled(device_id: str, body: DisabledBody) -> dict[str, Any]:
+        """Lock/unlock a single account (brand) so its runs skip this slot."""
+        device = app_instance.device_manager.get_device(device_id)
+        if not device:
+            raise HTTPException(404, "Device not found")
+        brand = _normalize_brand(body.brand)
+        base_key = device_storage_key(device.device_id, device.user_name)
+        set_disabled(base_key, disabled=body.disabled, brand=brand)
+        return {
+            "success": True,
+            "brand": brand,
+            "disabled": is_disabled(base_key, brand=brand),
+        }
+
     @app.get("/api/debug/tests")
-    async def get_debug_tests(group: str | None = None) -> list[dict[str, Any]]:
-        return list_debug_tests(group)
+    async def get_debug_tests(
+        group: str | None = None,
+        slot: str | None = None,
+        brand: str | None = None,
+    ) -> list[dict[str, Any]]:
+        gallery = app_instance.config.gallery
+        return list_debug_tests(
+            group,
+            slot=slot,
+            brand=str(brand or "labely"),
+            base_directory=gallery.base_directory,
+            media_extensions=list(gallery.media_extensions),
+        )
 
     @app.get("/api/devices/{device_id:path}/settings")
     async def get_device_settings_route(device_id: str) -> dict[str, Any]:
@@ -539,12 +593,49 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
+        excluded_slots = {str(s).strip() for s in app_instance.config.batch.excluded_slots}
+        if str(device.user_name).strip() in excluded_slots:
+            raise HTTPException(
+                400,
+                f"Slot {device.user_name} is excluded from automation (personal phone)",
+            )
         from_post = body.from_post if body else None
         brand = str((body.brand if body else None) or "labely").strip().lower()
         brand = _normalize_brand(body.brand if body else None)
+        if is_disabled(device_storage_key(device.device_id, device.user_name), brand=brand):
+            raise HTTPException(
+                400,
+                f"Slot {device.user_name} {brand} account is disabled (locked from automation)",
+            )
         text_key = _post_text_key(device, brand)
         check_from = from_post if from_post is not None else 1
-        missing = validate_post_texts(text_key, from_post=check_from, brand=brand)
+        from imouse_farm.settings.run_settings import get_use_supplied_videos
+        from imouse_farm.utils.supplied_videos import list_supplied_videos
+
+        use_supplied = get_use_supplied_videos(brand)
+        to_post = POST_COUNT
+        if use_supplied:
+            gallery = app_instance.config.gallery
+            to_post = max(
+                1,
+                min(
+                    POST_COUNT,
+                    len(
+                        list_supplied_videos(
+                            gallery.base_directory,
+                            brand=brand,
+                            extensions=list(gallery.media_extensions),
+                        )
+                    ),
+                ),
+            )
+        missing = validate_post_texts(
+            text_key,
+            from_post=check_from,
+            to_post=to_post,
+            brand=brand,
+            require_onscreen=not use_supplied,
+        )
         if missing:
             raise HTTPException(400, "; ".join(missing))
         success = await app_instance.workflow_pipeline.start(
@@ -1019,7 +1110,11 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
 
     @app.put("/api/run-settings")
     async def write_run_settings(body: RunSettingsBody) -> dict[str, Any]:
-        return set_run_settings(use_supplied_videos=body.use_supplied_videos)
+        return set_run_settings(
+            use_supplied_videos=body.use_supplied_videos,
+            brand=body.brand,
+            batch_size=body.batch_size,
+        )
 
     @app.get("/api/supplied-videos")
     async def get_supplied_videos(brand: str = "labely") -> dict[str, Any]:

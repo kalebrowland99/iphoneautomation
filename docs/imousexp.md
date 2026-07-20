@@ -46,7 +46,7 @@ New iMouse features should be added to `DeviceController` first, then exposed vi
 - **`key_sendkey`** (`/key/sendkey`): `key=` for text; `fn_key=` for hotkeys. iMouseXP console buttons map to `fn_key` strings — **App** = `AppSwitch`, **Home** = `WIN+h` (this project also accepts `home`).
 - **Responses**: check `response.status == 200` and `response.data.code == 0` via `is_success()`.
 - **`kill_app`**: `fn_key=AppSwitch`, then swipe up **5 times** from center card `(301, 703)` → `(301, 100)` (~406×720).
-- **AirPlay**: drops on server restart; reconnect manually or via `device_airplay_connect`.
+- **AirPlay / cast**: start mirroring via Control Bar UI (`batch.cast_ui` / `ensure_cast_via_control_bar`). Do **not** use `device_airplay_connect` for casting. Disconnect still uses `device_airplay_disconnect`.
 
 ## Change checklist
 

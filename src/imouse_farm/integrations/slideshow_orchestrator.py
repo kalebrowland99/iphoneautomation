@@ -721,10 +721,20 @@ class SlideshowOrchestrator:
             return
 
         if self._farm_batch.is_running():
+            # Queue behind the in-flight batch instead of failing outright. A new
+            # run started before the previous one finished should wait its turn.
             await self._jobs.update(
-                job_id, status="failed", error="Farm batch already running"
+                job_id,
+                message="Waiting for the current farm batch to finish before starting…",
             )
-            return
+            logger.info("slideshow_waiting_for_batch", job_id=job_id)
+            await self._farm_batch.wait_done(timeout=self._config.automation_timeout_seconds)
+            await self._farm_batch.wait_until_idle()
+            if self._farm_batch.is_running():
+                await self._jobs.update(
+                    job_id, status="failed", error="Farm batch already running"
+                )
+                return
 
         chain_valcoin = (
             job.brand == "labely"
@@ -821,6 +831,9 @@ class SlideshowOrchestrator:
                     except RuntimeError as exc:
                         logger.warning("valcoin_slideshow_failed", slot=slot, error=str(exc))
                         continue
+                    # ValCoin embed generation finished — clear the URL so the
+                    # dashboard tears the iframe down before captions/posting.
+                    await self._jobs.update(job_id, automation_url="")
                     if not await self._generate_captions_for_slot(
                         job_id,
                         device,

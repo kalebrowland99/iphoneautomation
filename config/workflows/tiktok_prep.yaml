@@ -1,7 +1,7 @@
 name: tiktok_prep
 description: >
   Sequential prep (Labely account 1): unlock → force-quit apps → VPN off once → clear/upload gallery.
-  Then turn VPN on via Shadowrocket URL shortcut, open TikTok.
+  Then turn VPN on via Shadowrocket + GPT vision, open TikTok.
 
 loop: false
 
@@ -70,7 +70,8 @@ steps:
     name: settle_home
     duration_seconds: 0.5
 
-  # ── 3. Clear photo library (VPN disconnect once, then iMouse album API) ─
+  # ── 3. Clear photo library (VPN OFF once, then iMouse album API) ─
+  # Always runs — including when Use my videos is on (not gated by unless_use_supplied_videos).
   - type: execute_action
     name: clear_album
     on_failure: pause
@@ -115,7 +116,7 @@ steps:
 
   # ── 5. VPN on → TikTok ──────────────────────────────────────────────
   - type: execute_action
-    name: vpn_on_shortcut
+    name: vpn_on
     on_failure: pause
     action:
       type: vpn_on

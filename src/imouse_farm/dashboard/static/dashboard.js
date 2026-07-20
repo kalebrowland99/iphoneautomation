@@ -1,4 +1,4 @@
-﻿const FARM_SLOTS = window.__FARM__.slots;
+const FARM_SLOTS = window.__FARM__.slots;
 const BRAND_ID = window.__FARM__.brand;
         let slotProfiles = {};
         let deviceId = null;
@@ -17,6 +17,7 @@ const BRAND_ID = window.__FARM__.brand;
         let postTextSaveTimers = {};
         let cachedPostTexts = [];
         let batchSelectedSlots = new Set();
+        let castBusySlots = new Set();
         let accountHandleEditing = false;
 let slideshowJobId = null;
 let slideshowPollTimer = null;
@@ -33,6 +34,7 @@ let slideshowJobPollInFlight = false;
 let slideshowJobPollPending = false;
 let embedLoadToken = 0;
 let useSuppliedVideos = false;
+let batchSize = 2;
 let suppliedVideosStatus = null;
 
 window.addEventListener('message', (ev) => {
@@ -192,10 +194,19 @@ async function refreshSlideshowConfig() {
 async function refreshRunSettings() {
     try {
         const settings = await api('/run-settings');
-        useSuppliedVideos = Boolean(settings?.use_supplied_videos);
+        useSuppliedVideos = Boolean(
+            settings?.use_supplied_videos_by_brand?.[BRAND_ID]
+            ?? (BRAND_ID === 'labely' ? settings?.use_supplied_videos : false)
+        );
         const cb = document.getElementById('use-supplied-videos');
         if (cb) cb.checked = useSuppliedVideos;
         applySuppliedVideosMode();
+        const size = Number(settings?.batch_size);
+        if (Number.isFinite(size) && size >= 1) {
+            batchSize = Math.max(1, Math.min(20, Math.round(size)));
+        }
+        const batchInput = document.getElementById('batch-size');
+        if (batchInput) batchInput.value = String(batchSize);
         if (useSuppliedVideos) {
             await refreshSuppliedVideos();
         }
@@ -203,13 +214,13 @@ async function refreshRunSettings() {
 }
 
 function applySuppliedVideosMode() {
-    const expected = Number(slideshowConfig.slideshows_per_slot) || 3;
+    const maxVideos = Number(slideshowConfig.slideshows_per_slot) || 3;
     const panel = document.getElementById('supplied-videos-panel');
     const hint = document.getElementById('supplied-videos-hint');
     const brandName = BRAND_ID === 'valcoin' ? 'ValCoin' : 'Labely';
     if (panel) panel.classList.toggle('hidden', !useSuppliedVideos);
     if (hint) {
-        hint.textContent = `Upload ${expected} MP4s for ${brandName} only (switch brand tabs for the other set)`;
+        hint.textContent = `Upload 1–${maxVideos} MP4s for ${brandName} (posts that many videos)`;
     }
     document.querySelectorAll('.post-group [data-field="onscreen"]').forEach((el) => {
         const field = el.closest('.field');
@@ -229,11 +240,18 @@ async function onUseSuppliedVideosChange(enabled) {
         await api('/run-settings', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ use_supplied_videos: useSuppliedVideos }),
+            body: JSON.stringify({
+                use_supplied_videos: useSuppliedVideos,
+                brand: BRAND_ID,
+            }),
         });
         if (useSuppliedVideos) {
             await refreshSuppliedVideos();
-            appendRunLog('Use my videos enabled — slideshow generation will be skipped on Run.', 'info', 'run');
+            appendRunLog(
+                'Use my videos enabled — skip slideshow + onscreen text/editor; prep still runs; music still runs.',
+                'info',
+                'run',
+            );
         } else {
             appendRunLog('Use my videos disabled — Full run will generate slideshows again.', 'info', 'run');
         }
@@ -241,6 +259,49 @@ async function onUseSuppliedVideosChange(enabled) {
         appendRunLog(`Could not persist Use my videos setting: ${err.message}`, 'warn', 'run');
         alert(`Setting is on for this page, but failed to save: ${err.message}`);
     }
+}
+
+function clampBatchSize(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return batchSize;
+    return Math.max(1, Math.min(20, Math.round(n)));
+}
+
+async function onBatchSizeChange(rawValue) {
+    const next = clampBatchSize(rawValue);
+    batchSize = next;
+    const batchInput = document.getElementById('batch-size');
+    if (batchInput) batchInput.value = String(next);
+    try {
+        const settings = await api('/run-settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ batch_size: next }),
+        });
+        if (settings?.batch_size != null) {
+            batchSize = clampBatchSize(settings.batch_size);
+            if (batchInput) batchInput.value = String(batchSize);
+        }
+        appendRunLog(`Phones at a time set to ${batchSize}`, 'info', 'run');
+    } catch (err) {
+        appendRunLog(`Could not save phones-at-a-time: ${err.message}`, 'warn', 'run');
+        alert(`Could not save batch size: ${err.message}`);
+    }
+}
+
+function bindBatchSizeControl() {
+    const input = document.getElementById('batch-size');
+    if (!input || input.dataset.bound === '1') return;
+    input.dataset.bound = '1';
+    input.addEventListener('change', () => {
+        onBatchSizeChange(input.value);
+    });
+    input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+            ev.preventDefault();
+            input.blur();
+        }
+    });
 }
 
 function bindSuppliedVideosControls() {
@@ -282,9 +343,9 @@ function renderSuppliedVideosList(status) {
     const list = document.getElementById('supplied-videos-list');
     if (!list) return;
     const files = status?.files || [];
-    const expected = Number(status?.expected_count) || Number(slideshowConfig.slideshows_per_slot) || 3;
+    const maxVideos = Number(status?.expected_count) || Number(slideshowConfig.slideshows_per_slot) || 3;
     if (!files.length) {
-        list.innerHTML = `<li class="text-muted-foreground">No videos yet — upload ${expected} for this brand.</li>`;
+        list.innerHTML = `<li class="text-muted-foreground">No videos yet — upload 1–${maxVideos} for this brand.</li>`;
         return;
     }
     list.innerHTML = files.map((f) => {
@@ -295,9 +356,7 @@ function renderSuppliedVideosList(status) {
             <button type="button" class="btn-ghost btn-sm shrink-0" onclick="deleteSuppliedVideo('${name}')">Remove</button>
         </li>`;
     }).join('');
-    if (files.length < expected) {
-        list.innerHTML += `<li class="text-muted-foreground text-xs pt-1">${files.length}/${expected} ready</li>`;
-    }
+    list.innerHTML += `<li class="text-muted-foreground text-xs pt-1">${files.length} video(s) — will post ${files.length}</li>`;
 }
 
 async function refreshSuppliedVideos() {
@@ -445,19 +504,29 @@ function syncSlideshowEmbedFromJob(job) {
     const statusEl = document.getElementById('slideshow-embed-status');
     const panel = document.getElementById('slideshow-embed-panel');
 
-    if (!url) {
-        if (status === 'running' && (phase === 'automation' || phase === 'ingesting')) {
-            if (panel) panel.classList.remove('hidden');
-            if (statusEl) statusEl.textContent = job?.message || 'Preparing next phone…';
-            return;
-        }
+    // Terminal states always tear the embed down.
+    if (status === 'completed' || status === 'failed') {
+        hideSlideshowEmbed();
         return;
     }
-    if (url && (phase === 'automation' || phase === 'ingesting') && status === 'running') {
+    // Follow the automation URL while the job runs. Do NOT gate this on `phase`:
+    // during the per-slot pipeline a concurrent caption step flips the shared
+    // job's phase to "captions" while ValCoin is still generating in the iframe.
+    // Keying the embed off phase there wrongly stops an active generation (the
+    // "screen stays but generation stops" bug). The orchestrator clears
+    // automation_url when a phone's generation is actually done.
+    if (url && status === 'running') {
         showSlideshowEmbed(url, job?.message || 'Generating slideshows…');
         return;
     }
-    if (status === 'completed' || status === 'failed' || phase === 'captions' || phase === 'batch' || phase === 'done') {
+    // No active URL: brief gap between phones — keep the panel, don't reload.
+    if (status === 'running' && (phase === 'automation' || phase === 'ingesting')) {
+        if (panel) panel.classList.remove('hidden');
+        if (statusEl) statusEl.textContent = job?.message || 'Preparing next phone…';
+        return;
+    }
+    // Generation done for this phase (captions/posting) with no URL → hide.
+    if (phase === 'captions' || phase === 'batch' || phase === 'done') {
         hideSlideshowEmbed();
     }
 }
@@ -539,14 +608,13 @@ function stopSlideshowPoll() {
             const fromPost = getSelectedFromPost('batch-from-post');
             if (useSuppliedVideos || fromPost !== null || allSelectedSlotsWarmupOnly()) {
                 if (useSuppliedVideos) {
-                    const expected = Number(slideshowConfig.slideshows_per_slot) || 3;
                     const count = Number(suppliedVideosStatus?.count) || 0;
-                    if (count < expected) {
-                        alert(`Upload ${expected} videos for this brand before running (have ${count}).`);
+                    if (count < 1) {
+                        alert('Upload at least 1 video for this brand before running.');
                         return;
                     }
                     appendRunLog(
-                        `Using supplied videos (${count}) — skipping slideshow, music, and on-screen text`,
+                        `Using supplied videos (${count}) — posting ${count}, skipping slideshow generation`,
                         'info',
                         'run',
                     );
@@ -854,14 +922,18 @@ async function stopDailyRun() {
             return Boolean(slotProfile(slot)?.phone_dead);
         }
 
+        function isSlotDisabled(slot) {
+            return Boolean(slotToDevice[slot]?.disabled || slotProfile(slot)?.disabled);
+        }
+
         function selectableBatchSlots() {
-            return registeredSlots().filter(s => !isPhoneDead(s));
+            return registeredSlots().filter(s => !isPhoneDead(s) && !isSlotDisabled(s));
         }
 
         function ensureBatchSelectionDefaults() {
             const reg = registeredSlots();
             batchSelectedSlots.forEach(s => {
-                if (!slotToDevice[s] || isPhoneDead(s)) batchSelectedSlots.delete(s);
+                if (!slotToDevice[s] || isPhoneDead(s) || isSlotDisabled(s)) batchSelectedSlots.delete(s);
             });
             // Only auto-select all on first visit for this brand (no saved preference yet).
             if (localStorage.getItem(batchSelectionStorageKey()) !== null) return;
@@ -879,7 +951,7 @@ async function stopDailyRun() {
         }
 
         function toggleBatchSlot(slot, checked) {
-            if (!slotToDevice[slot] || isPhoneDead(slot)) return;
+            if (!slotToDevice[slot] || isPhoneDead(slot) || isSlotDisabled(slot)) return;
             if (checked) batchSelectedSlots.add(slot);
             else batchSelectedSlots.delete(slot);
             saveBatchSelection();
@@ -972,16 +1044,22 @@ async function stopDailyRun() {
         }
 
         function lastRunCell(profile) {
+            // Brand-scoped: each tab shows only its own brand's run status.
             if (!profile) return '<span class="phones-muted">—</span>';
             if (profile.last_run_status === 'running') {
                 return '<span class="phones-last-run running">Running now</span>';
             }
-            const rel = formatRelativeTime(profile.last_run_at);
-            if (!rel) return '<span class="phones-muted">Never</span>';
             const status = profile.last_run_status || 'idle';
+            const rel = formatRelativeTime(profile.last_run_at);
+            if (!rel && status === 'idle') return '<span class="phones-muted">Never</span>';
             const cls = status === 'failed' ? 'failed' : status === 'success' ? 'success' : '';
-            const title = profile.last_run_at ? escapeHtml(String(profile.last_run_at)) : '';
-            return `<span class="phones-last-run ${cls}"${title ? ` title="${title}"` : ''}>${escapeHtml(rel)}</span>`;
+            // Fall back to the status word when a run has no timestamp (e.g. marked
+            // failed on restart before it ever recorded a completion time).
+            const text = rel || (status === 'failed' ? 'Failed' : status === 'success' ? 'Done' : status);
+            const title = profile.last_error
+                ? escapeHtml(String(profile.last_error))
+                : (profile.last_run_at ? escapeHtml(String(profile.last_run_at)) : '');
+            return `<span class="phones-last-run ${cls}"${title ? ` title="${title}"` : ''}>${escapeHtml(text)}</span>`;
         }
 
         function tiktokHandleCell(handle) {
@@ -994,6 +1072,7 @@ async function stopDailyRun() {
         function renderFarmGrid() {
             const grid = document.getElementById('farm-grid');
             if (!grid) return;
+            const noteFocus = captureFarmNoteFocus();
             ensureBatchSelectionDefaults();
             const rows = [];
             for (let i = 1; i <= FARM_SLOTS; i++) {
@@ -1011,13 +1090,17 @@ async function stopDailyRun() {
                 const warmupDays = parseInt(profile?.warmup_days_completed || 0, 10);
                 const cantCast = Boolean(profile?.cant_cast_imouse);
                 const phoneDead = isPhoneDead(key);
+                const excluded = Boolean(d && d.excluded);
+                const disabled = Boolean(d && d.disabled);
                 const uiLabel = d?.ui_label || '';
                 const runCell = lastRunCell(profile);
-                const canSelect = hasDevice && !phoneDead;
+                const canSelect = hasDevice && !phoneDead && !excluded && !disabled;
                 const classes = [
                     'phones-table-row',
                     hasDevice ? '' : 'empty',
                     phoneDead ? 'dead' : '',
+                    excluded ? 'excluded' : '',
+                    disabled ? 'disabled-slot' : '',
                     selected ? 'selected' : '',
                     pipe && pipe.status === 'running' ? 'running' : '',
                 ].filter(Boolean).join(' ');
@@ -1036,8 +1119,16 @@ async function stopDailyRun() {
                         ${tiktokHandleCell(handle)}
                         ${BRAND_ID === 'valcoin' ? `<span class="warmup-day-badge">${warmupDays > 0 ? `Day ${warmupDays} Warmup ✓` : 'Day 0 Warmup'}</span>` : ''}
                         ${phoneDead ? `<span class="phone-dead-badge">phone dead</span>` : ''}
+                        ${excluded ? `<span class="phone-dead-badge" title="Excluded from automation (personal phone)">personal — not automated</span>` : ''}
                         ${cantCast ? `<span class="cant-cast-badge" title="Click to clear tag" onclick="event.stopPropagation(); clearCantCast('${key}')">⚠ cant cast iMouse</span>` : ''}
                         ${uiLabel ? `<span class="ui-label-badge" title="This phone uses alternate TikTok UI coordinates">${escapeHtml(uiLabel)}</span>` : ''}
+                        ${disabled ? `<span class="phone-dead-badge" title="This account is locked — won't be used by automation">account disabled</span>` : ''}
+                        ${hasDevice ? `<div class="phones-account-row">
+                            ${accountNoteHtml(key, profile)}
+                            <button type="button" class="phones-disable-btn${disabled ? ' is-disabled' : ''}"
+                                title="${disabled ? 'Enable this account' : 'Disable this account (lock from automation)'}"
+                                onclick="event.stopPropagation(); toggleDisabled('${key}', ${disabled ? 'false' : 'true'})">${disabled ? 'Enable' : 'Disable'}</button>
+                        </div>` : ''}
                     </td>
                     <td class="phones-td">
                         <div class="phones-status-cell">
@@ -1053,12 +1144,34 @@ async function stopDailyRun() {
                                aria-label="Warmup only (no posting) for phone ${key}">
                     </td>
                     <td class="phones-td phones-td-run">${runCell}</td>
+                    <td class="phones-td phones-td-cast" onclick="event.stopPropagation()">
+                        ${hasDevice && !excluded
+                            ? (() => {
+                                const busy = castBusySlots.has(key);
+                                const on = online && !busy;
+                                return `<label class="phones-cast-switch ${busy ? 'is-busy' : ''} ${on ? 'is-on' : 'is-off'}"
+                                    title="${busy ? 'Cast in progress…' : (on ? 'Casting — click to disconnect' : 'Off — Control Bar → Screen Mirroring (flip On again to retry)')}">
+                                    <input type="checkbox" class="phones-cast-input"
+                                        id="cast-toggle-${key}"
+                                        ${on ? 'checked' : ''}
+                                        ${busy ? 'disabled' : ''}
+                                        aria-label="Cast phone ${key}"
+                                        onchange="toggleCastSlot('${key}', this.checked)">
+                                    <span class="phones-cast-track" aria-hidden="true">
+                                        <span class="phones-cast-knob"></span>
+                                    </span>
+                                    <span class="phones-cast-label">${busy ? '…' : (on ? 'On' : 'Off')}</span>
+                                </label>`;
+                            })()
+                            : '<span class="phones-muted">—</span>'}
+                    </td>
                 </tr>`);
             }
             grid.innerHTML = rows.join('');
             updateBatchSlotCount();
             updateBatchSelectAllCheckbox();
             updateWarmupSelectAllCheckbox();
+            restoreFarmNoteFocus(noteFocus);
         }
 
         function connectWS() {
@@ -1182,6 +1295,9 @@ async function stopDailyRun() {
             await loadPostTexts();
             await updateDeviceMeta();
             await refreshActivity();
+            if (currentDebugFlow === 'post_draft') {
+                await loadDebugTests('post_draft');
+            }
         }
 
         function formatTime(iso) {
@@ -1280,8 +1396,9 @@ async function stopDailyRun() {
         function validatePostTexts(fromPost = 1) {
             const start = fromPost == null ? 1 : fromPost;
             const missing = [];
+            const needOnscreen = !useSuppliedVideos;
             for (let post = start; post <= 3; post++) {
-                if (!document.getElementById(`onscreen-${post}`)?.value.trim()) {
+                if (needOnscreen && !document.getElementById(`onscreen-${post}`)?.value.trim()) {
                     missing.push(`Post ${post}: onscreen text is empty`);
                 }
                 if (!document.getElementById(`final-${post}`)?.value.trim()) {
@@ -1369,6 +1486,47 @@ async function stopDailyRun() {
             }
         }
 
+        async function toggleCastSlot(slot, wantOn) {
+            const key = String(slot);
+            const d = slotToDevice[key];
+            if (!d || !d.device_id) {
+                alert(`Phone ${key} has no iMouse device.`);
+                renderFarmGrid();
+                return;
+            }
+            // Allow Off while a cast attempt is in progress (stop / disconnect).
+            if (castBusySlots.has(key) && wantOn) {
+                renderFarmGrid();
+                return;
+            }
+            castBusySlots.add(key);
+            renderFarmGrid();
+            try {
+                if (wantOn) {
+                    appendRunLog(`Phone ${key}: cast started (Control Bar → Screen Mirroring)`, 'info', 'cast');
+                    const res = await api(`/devices/${enc(d.device_id)}/cast`, { method: 'POST' });
+                    await refreshFarmDevices({ quiet: true });
+                    if (res.connected) {
+                        appendRunLog(`Phone ${key}: cast connected`, 'success', 'cast');
+                    } else {
+                        appendRunLog(`Phone ${key}: cast failed — still offline`, 'error', 'cast');
+                        alert(`Phone ${key}: cast failed — still offline. Flip On again to retry.`);
+                    }
+                } else {
+                    appendRunLog(`Phone ${key}: disconnecting AirPlay`, 'info', 'cast');
+                    await api(`/devices/${enc(d.device_id)}/disconnect`, { method: 'POST' });
+                    await refreshFarmDevices({ quiet: true });
+                    appendRunLog(`Phone ${key}: cast off`, 'success', 'cast');
+                }
+            } catch (err) {
+                appendRunLog(`Phone ${key}: cast error — ${err.message}`, 'error', 'cast');
+                alert(`Cast failed: ${err.message}`);
+            } finally {
+                castBusySlots.delete(key);
+                await refreshFarmDevices({ quiet: true });
+            }
+        }
+
         async function disconnectDevice() {
             if (!deviceId) return;
             const btn = document.getElementById('btn-disconnect');
@@ -1401,6 +1559,7 @@ async function stopDailyRun() {
         function resetDebugRunButtons() {
             const runBtn = document.getElementById('btn-debug-run');
             const skipBtn = document.getElementById('btn-debug-run-skip-media');
+            const draftBtn = document.getElementById('btn-debug-draft-post');
             const uploadBtn = document.getElementById('btn-debug-upload');
             const clearBtn = document.getElementById('btn-debug-clear');
             const uploadAllBtn = document.getElementById('btn-debug-upload-all');
@@ -1412,6 +1571,10 @@ async function stopDailyRun() {
             if (skipBtn) {
                 skipBtn.disabled = false;
                 skipBtn.textContent = 'Run A→Z (skip media)';
+            }
+            if (draftBtn) {
+                draftBtn.disabled = false;
+                draftBtn.textContent = 'Draft video (no Post)';
             }
             if (uploadBtn) {
                 uploadBtn.disabled = false;
@@ -1503,10 +1666,15 @@ async function stopDailyRun() {
         }
 
         function setGalleryTestButtonsRunning(running, activeBtn) {
+            const draftBtn = document.getElementById('btn-debug-draft-post');
             const uploadBtn = document.getElementById('btn-debug-upload');
             const clearBtn = document.getElementById('btn-debug-clear');
             const uploadAllBtn = document.getElementById('btn-debug-upload-all');
             const killBtn = document.getElementById('btn-debug-kill');
+            if (draftBtn) {
+                draftBtn.disabled = running;
+                if (!running) draftBtn.textContent = 'Draft video (no Post)';
+            }
             if (uploadBtn) {
                 uploadBtn.disabled = running;
                 if (!running) uploadBtn.textContent = 'Test upload';
@@ -1724,6 +1892,126 @@ async function stopDailyRun() {
             }
         }
 
+        async function runDraftVideoDebug() {
+            if (debugTestRunning) return;
+            if (!deviceId) {
+                const hint = selectedSlot
+                    ? `Phone ${selectedSlot} is not connected — use Connect AirPlay, then draft a video.`
+                    : 'Select a device slot first.';
+                showBanner(hint);
+                return;
+            }
+
+            const draftBtn = document.getElementById('btn-debug-draft-post');
+            const runBtn = document.getElementById('btn-debug-run');
+            const skipBtn = document.getElementById('btn-debug-run-skip-media');
+            const uploadBtn = document.getElementById('btn-debug-upload');
+            const clearBtn = document.getElementById('btn-debug-clear');
+            const uploadAllBtn = document.getElementById('btn-debug-upload-all');
+            const killBtn = document.getElementById('btn-debug-kill');
+            const controller = new AbortController();
+            debugTestAbort = controller;
+            debugTestRunning = true;
+            if (draftBtn) {
+                draftBtn.disabled = true;
+                draftBtn.textContent = 'Drafting…';
+            }
+            if (runBtn) runBtn.disabled = true;
+            if (skipBtn) skipBtn.disabled = true;
+            if (uploadBtn) uploadBtn.disabled = true;
+            if (clearBtn) clearBtn.disabled = true;
+            if (uploadAllBtn) uploadAllBtn.disabled = true;
+            if (killBtn) killBtn.disabled = false;
+
+            const stepTimeoutMs = 10 * 60 * 1000;
+            let completedAll = false;
+
+            try {
+                const qs = new URLSearchParams({ group: 'post_draft', brand: BRAND_ID });
+                if (selectedSlot) qs.set('slot', String(selectedSlot));
+                const tests = await api(`/debug/tests?${qs}`);
+                const stepIds = (tests || []).map(t => t.id);
+                if (!stepIds.length) {
+                    showBanner('Draft video steps not available.');
+                    return;
+                }
+                const videoCount = Number(tests[0]?.video_count) || 1;
+                const mode = useSuppliedVideos
+                    ? 'supplied (music only — skip text/editor)'
+                    : 'full editor';
+                appendRunLog(
+                    `Draft video (no Post on last) — ${videoCount} video(s), ${stepIds.length} steps (${mode})…`,
+                    'info',
+                    'test',
+                );
+
+                for (let i = 0; i < stepIds.length; i++) {
+                    if (controller.signal.aborted) break;
+                    const stepId = stepIds[i];
+                    if (draftBtn) {
+                        draftBtn.textContent = `Drafting ${i + 1}/${stepIds.length}…`;
+                    }
+
+                    const stepController = new AbortController();
+                    const onAbort = () => stepController.abort();
+                    controller.signal.addEventListener('abort', onAbort, { once: true });
+                    const stepWatchdog = setTimeout(() => stepController.abort(), stepTimeoutMs);
+
+                    let res;
+                    try {
+                        res = await executeDebugStep(stepId, false, stepController.signal);
+                    } finally {
+                        clearTimeout(stepWatchdog);
+                        controller.signal.removeEventListener('abort', onAbort);
+                    }
+
+                    refreshActivity();
+                    if (!res.success) {
+                        alert(res.message || `Draft step failed: ${stepId}`);
+                        break;
+                    }
+
+                    if (i === stepIds.length - 1) {
+                        completedAll = true;
+                        showBanner(`Draft ready — ${videoCount} video(s), stopped before final Post`);
+                        appendRunLog(
+                            `Draft complete — ${videoCount} video(s) (did not tap Post on last)`,
+                            'info',
+                            'test',
+                        );
+                    } else if (useSuppliedVideos && String(stepId).endsWith('post-tap-next-only')) {
+                        // Match production editor continue settle after trim.
+                        await new Promise(resolve => setTimeout(resolve, 6000));
+                    } else {
+                        await new Promise(resolve => setTimeout(resolve, 1500));
+                    }
+                }
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    let msg = err.message || 'Draft video failed';
+                    try {
+                        const parsed = JSON.parse(msg);
+                        if (parsed.detail) msg = String(parsed.detail);
+                    } catch (_) {}
+                    alert(msg);
+                } else if (!completedAll) {
+                    showBanner('Draft video stopped');
+                }
+            } finally {
+                debugTestRunning = false;
+                debugTestAbort = null;
+                resetDebugRunButtons();
+            }
+        }
+
+        function runDebugAz() {
+            // Draft flow needs real Post taps between videos; other flows stay UI-only A→Z.
+            if (currentDebugFlow === 'post_draft') {
+                return runDebugTest(false, true);
+            }
+            return runDebugTest(true, true);
+        }
+
         async function runDebugTest(skipMedia = false, runAll = false) {
             if (debugTestRunning) return;
             if (!deviceId) {
@@ -1739,7 +2027,7 @@ async function stopDailyRun() {
                 showBanner('Choose a debug test from the dropdown.');
                 return;
             }
-            if (runAll && !skipMedia) {
+            if (runAll && !skipMedia && currentDebugFlow !== 'post_draft') {
                 showBanner('Full A→Z is only available with skip media.');
                 return;
             }
@@ -1750,6 +2038,7 @@ async function stopDailyRun() {
 
             const btn = document.getElementById('btn-debug-run');
             const skipBtn = document.getElementById('btn-debug-run-skip-media');
+            const draftBtn = document.getElementById('btn-debug-draft-post');
             const uploadBtn = document.getElementById('btn-debug-upload');
             const clearBtn = document.getElementById('btn-debug-clear');
             const uploadAllBtn = document.getElementById('btn-debug-upload-all');
@@ -1759,6 +2048,7 @@ async function stopDailyRun() {
             debugTestRunning = true;
             btn.disabled = true;
             if (skipBtn) skipBtn.disabled = true;
+            if (draftBtn) draftBtn.disabled = true;
             if (uploadBtn) uploadBtn.disabled = true;
             if (clearBtn) clearBtn.disabled = true;
             if (uploadAllBtn) uploadAllBtn.disabled = true;
@@ -1917,7 +2207,12 @@ async function stopDailyRun() {
         async function loadDebugTests(group) {
             const flowGroup = group || currentDebugFlow || 'flow';
             try {
-                const tests = await api(`/debug/tests?group=${enc(flowGroup)}`);
+                const qs = new URLSearchParams({ group: flowGroup });
+                if (flowGroup === 'post_draft') {
+                    qs.set('brand', BRAND_ID);
+                    if (selectedSlot) qs.set('slot', String(selectedSlot));
+                }
+                const tests = await api(`/debug/tests?${qs}`);
                 const select = document.getElementById('debug-test-select');
                 if (!tests.length) {
                     debugFlowStepIds = [];
@@ -2118,6 +2413,97 @@ async function stopDailyRun() {
                 appendRunLog(`Cleared cant cast tag for slot ${slot}`, 'info', 'batch');
                 refreshFarmDevices({ quiet: true });
             } catch (err) { alert(`Clear failed: ${err.message}`); }
+        }
+
+        async function toggleDisabled(slot, disabled) {
+            const key = String(slot);
+            const d = slotToDevice[key];
+            if (!d || !d.device_id) return;
+            const brandName = BRAND_ID === 'valcoin' ? 'ValCoin' : 'Labely';
+            try {
+                await api(`/devices/${enc(d.device_id)}/disabled`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ disabled: !!disabled, brand: BRAND_ID }),
+                });
+                appendRunLog(`${disabled ? 'Disabled' : 'Enabled'} ${brandName} account on slot ${key}`, 'info', 'batch');
+                refreshFarmDevices({ quiet: true });
+            } catch (err) { alert(`${disabled ? 'Disable' : 'Enable'} failed: ${err.message}`); }
+        }
+
+        // Per-account note editing (farm rows). Drafts survive the frequent
+        // device-poll re-renders of the table so an in-progress note isn't wiped.
+        const farmNoteDrafts = {};
+        const farmNoteTimers = {};
+
+        function accountNoteHtml(key, profile) {
+            const val = Object.prototype.hasOwnProperty.call(farmNoteDrafts, key)
+                ? farmNoteDrafts[key]
+                : (profile?.notes || '');
+            const hasNote = !!(val && val.trim());
+            return `<input type="text" class="phones-account-note${hasNote ? ' has-note' : ''}"
+                data-slot="${key}" value="${escapeHtml(val)}"
+                placeholder="Add note…" autocomplete="off" spellcheck="false"
+                onclick="event.stopPropagation()"
+                oninput="onFarmNoteInput('${key}', this)"
+                onblur="saveFarmNote('${key}', this)"
+                onkeydown="if(event.key==='Enter'){event.preventDefault(); this.blur();}"
+                aria-label="Note for slot ${key}">`;
+        }
+
+        function onFarmNoteInput(key, input) {
+            farmNoteDrafts[key] = input.value;
+            input.classList.toggle('has-note', !!input.value.trim());
+            if (farmNoteTimers[key]) clearTimeout(farmNoteTimers[key]);
+            // Debounced autosave so notes persist even without leaving the field.
+            farmNoteTimers[key] = setTimeout(() => saveFarmNote(key, input), 1200);
+        }
+
+        async function saveFarmNote(key, input) {
+            if (farmNoteTimers[key]) { clearTimeout(farmNoteTimers[key]); delete farmNoteTimers[key]; }
+            const raw = input ? input.value : farmNoteDrafts[key];
+            if (raw == null) return;
+            const note = raw.trim();
+            const d = slotToDevice[key];
+            const profile = d?.account_profile || slotProfiles[`slot:${key}`] || {};
+            if (note === (profile.notes || '')) { delete farmNoteDrafts[key]; return; }
+            try {
+                const path = (d && d.device_id)
+                    ? `/devices/${enc(d.device_id)}/account-profile`
+                    : `/slots/${enc(key)}/account-profile`;
+                const res = await api(path, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ notes: note, brand: BRAND_ID }),
+                });
+                const saved = res?.profile?.notes || '';
+                if (d && d.account_profile) d.account_profile.notes = saved;
+                if (slotProfiles[`slot:${key}`]) slotProfiles[`slot:${key}`].notes = saved;
+                delete farmNoteDrafts[key];
+            } catch (err) {
+                appendRunLog(`Could not save note: ${err.message}`, 'error', 'batch');
+            }
+        }
+
+        // Preserve which note input is focused (and caret) across a full table
+        // re-render so device polling doesn't interrupt note editing.
+        function captureFarmNoteFocus() {
+            const el = document.activeElement;
+            if (el && el.classList && el.classList.contains('phones-account-note')) {
+                return { slot: el.dataset.slot, start: el.selectionStart, end: el.selectionEnd };
+            }
+            return null;
+        }
+
+        function restoreFarmNoteFocus(info) {
+            if (!info || !info.slot) return;
+            let el;
+            try {
+                el = document.querySelector(`.phones-account-note[data-slot="${CSS.escape(info.slot)}"]`);
+            } catch (e) { el = null; }
+            if (!el) return;
+            el.focus();
+            try { el.setSelectionRange(info.start, info.end); } catch (e) { /* noop */ }
         }
 
         let captionPreviewPosts = null;
@@ -2386,6 +2772,7 @@ async function stopDailyRun() {
                 await refreshSlideshowConfig();
                 await refreshRunSettings();
                 bindSuppliedVideosControls();
+                bindBatchSizeControl();
                 applySuppliedVideosMode();
                 await refreshSuppliedVideos();
                 await refreshFarmDevices();

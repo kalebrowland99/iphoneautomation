@@ -57,7 +57,10 @@ from imouse_farm.actions.vpn_shadowrocket import (
 )
 from imouse_farm.dashboard.flow_debug import (
     FLOW_DEBUG_STEPS,
+    FLOW_DEBUG_VPN_STEPS,
     FLOW_DEBUG_WARMUP_STEPS,
+    build_post_draft_debug_steps,
+    draft_gallery_test_id,
     flow_step_letter,
     resolve_flow_debug_test_id,
 )
@@ -77,11 +80,14 @@ DebugKind = Literal[
     "detect",
     "detect_ocr",
     "upload_gallery",
+    "draft_download_videos",
     "album_clear",
     "album_list",
     "tap_ocr",
     "open_photos_spotlight",
     "tap_xy",
+    "tap_aa_vision",
+    "tap_saved_editor",
     "swipe",
     "drag",
     "type_caption",
@@ -98,6 +104,7 @@ DebugKind = Literal[
     "vpn_shortcut",
     "vpn_off_before_album",
     "vpn_vision_status",
+    "vpn_vision_step",
     "account_switch_step",
     "slideshow_generate",
     "vision_navigate",
@@ -238,8 +245,9 @@ class DebugTest(TypedDict, total=False):
     expect_missing: bool
     apply_watcher: bool
     skip_vpn_off: bool
-    want: str  # vpn_vision_status: on | off | empty = report only
+    want: str  # vpn vision: on | off
     mode: str
+    step: str  # vpn_vision_step: open | analyze | ensure | confirm
 
 
 # Manual tests override auto-generated template entries with the same id.
@@ -248,6 +256,16 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "label": "Upload gallery files",
         "kind": "upload_gallery",
         "group": "prep",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "draft-download-videos": {
+        "label": "Draft: Download localhost videos to phone",
+        "kind": "draft_download_videos",
+        "group": "post",
+        "hint": (
+            "VPN OFF → copy Use-my-videos (if enabled) into gallery/<slot>/ → "
+            "album-upload those files to the phone. Start of Draft (TikTok home) flow."
+        ),
         "offline_hint": OFFLINE_HINT,
     },
     "clear-album": {
@@ -325,7 +343,7 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "texts": ["Not Connected", "NOT CONNECTED"],
         "open_shadowrocket": True,
         "expect_missing": True,
-        "hint": "Opens Shadowrocket via URL shortcut; VPN is on when Not Connected is absent.",
+        "hint": "Home → tap Shadowrocket icon; VPN is on when Not Connected is absent.",
         "offline_hint": OFFLINE_HINT,
     },
     "detect-vpn-off": {
@@ -334,73 +352,101 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "group": "prep",
         "texts": ["Not Connected", "NOT CONNECTED"],
         "open_shadowrocket": True,
-        "hint": "Opens Shadowrocket via URL shortcut; VPN is off when Not Connected is visible.",
+        "hint": "Home → tap Shadowrocket icon; VPN is off when Not Connected is visible.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-vision-analyze": {
+        "label": "Prep: VPN vision status (STATUS only)",
+        "kind": "vpn_vision_step",
+        "group": "prep",
+        "step": "analyze",
+        "want": "on",
+        "hint": (
+            "Home → tap icon (373,1003) → GPT STATUS: ON/OFF. Does not tap the toggle."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-vision-ensure-on": {
+        "label": "Prep: VPN ON (icon + vision + toggle)",
+        "kind": "vpn_vision_step",
+        "group": "prep",
+        "step": "ensure",
+        "want": "on",
+        "hint": (
+            "Production: home → tap (373,1003) → vision → tap (515,171) if needed → confirm ON."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-vpn-vision-ensure-off": {
+        "label": "Prep: VPN OFF (icon + vision + toggle)",
+        "kind": "vpn_vision_step",
+        "group": "prep",
+        "step": "ensure",
+        "want": "off",
+        "hint": (
+            "Production: home → tap (373,1003) → vision → tap (515,171) if needed → confirm OFF."
+        ),
+        "offline_hint": OFFLINE_HINT,
+    },
+    "prep-open-shadowrocket": {
+        "label": "Prep: Open Shadowrocket (home icon)",
+        "kind": "vpn_vision_step",
+        "group": "prep",
+        "step": "open",
+        "hint": "Home → tap Shadowrocket icon at (373, 1003).",
         "offline_hint": OFFLINE_HINT,
     },
     "prep-vpn-shortcut-on": {
-        "label": "Prep: VPN ON via URL shortcut",
-        "kind": "vpn_shortcut",
+        "label": "Prep: VPN ON (icon + vision + toggle)",
+        "kind": "vpn_vision_step",
         "group": "prep",
-        "mode": "on",
-        "hint": (
-            "Runs production ensure_vpn_on: shadowrocket://connect via shortcut_exec_url "
-            "(waits up to shortcut_url_timeout_ms, then shortcut_settle_seconds). No vision."
-        ),
+        "step": "ensure",
+        "want": "on",
+        "hint": "Alias for prep-vpn-vision-ensure-on.",
         "offline_hint": OFFLINE_HINT,
     },
     "prep-open-shadowrocket-shortcut": {
-        "label": "Prep: Open Shadowrocket via URL shortcut (browser)",
-        "kind": "vpn_shortcut",
+        "label": "Prep: Open Shadowrocket (home icon)",
+        "kind": "vpn_vision_step",
         "group": "prep",
-        "mode": "open",
-        "press_home_after": False,
-        "hint": (
-            "Opens vpn.shortcut_url_open via iMouse shortcut_exec_url. "
-            "Default: shadowrocket:// — stays on Shadowrocket (no home press)."
-        ),
+        "step": "open",
+        "hint": "Alias for prep-open-shadowrocket.",
         "offline_hint": OFFLINE_HINT,
     },
     "prep-vpn-shortcut-off": {
-        "label": "Prep: VPN OFF via URL shortcut",
-        "kind": "vpn_shortcut",
+        "label": "Prep: VPN OFF (icon + vision + toggle)",
+        "kind": "vpn_vision_step",
         "group": "prep",
-        "mode": "off",
-        "hint": (
-            "Runs production ensure_vpn_off: shadowrocket://disconnect via shortcut_exec_url "
-            "(waits up to shortcut_url_timeout_ms, then shortcut_settle_seconds). No vision."
-        ),
+        "step": "ensure",
+        "want": "off",
+        "hint": "Alias for prep-vpn-vision-ensure-off.",
         "offline_hint": OFFLINE_HINT,
     },
     "prep-vpn-vision-status": {
-        "label": "Prep: VPN vision status (status-bar VPN label)",
-        "kind": "vpn_vision_status",
+        "label": "Prep: VPN vision status (STATUS only)",
+        "kind": "vpn_vision_step",
         "group": "prep",
-        "hint": (
-            "Goes home, screenshots, and asks GPT-4o if the small top-left 'VPN' "
-            "status-bar label is visible. Does not open Shadowrocket."
-        ),
+        "step": "analyze",
+        "want": "on",
+        "hint": "Alias for prep-vpn-vision-analyze.",
         "offline_hint": OFFLINE_HINT,
     },
     "prep-vpn-vision-confirm-on": {
-        "label": "Prep: VPN vision confirm ON (status-bar)",
-        "kind": "vpn_vision_status",
+        "label": "Prep: VPN vision confirm ON",
+        "kind": "vpn_vision_step",
         "group": "prep",
+        "step": "confirm",
         "want": "on",
-        "hint": (
-            "Goes home and requires GPT-4o STATUS: ON (top-left 'VPN' label visible). "
-            "Does not open Shadowrocket."
-        ),
+        "hint": "Open Shadowrocket and require vision STATUS: ON (no toggle).",
         "offline_hint": OFFLINE_HINT,
     },
     "prep-vpn-vision-confirm-off": {
-        "label": "Prep: VPN vision confirm OFF (status-bar)",
-        "kind": "vpn_vision_status",
+        "label": "Prep: VPN vision confirm OFF",
+        "kind": "vpn_vision_step",
         "group": "prep",
+        "step": "confirm",
         "want": "off",
-        "hint": (
-            "Goes home and requires GPT-4o STATUS: OFF (no top-left 'VPN' label). "
-            "Does not open Shadowrocket."
-        ),
+        "hint": "Open Shadowrocket and require vision STATUS: OFF (no toggle).",
         "offline_hint": OFFLINE_HINT,
     },
     "prep-vpn-off-before-album": {
@@ -408,29 +454,27 @@ MANUAL_DEBUG_TESTS: dict[str, DebugTest] = {
         "kind": "vpn_off_before_album",
         "group": "prep",
         "hint": (
-            "Exact production path: tiktok_prep clear_album → ensure_vpn_off_before_album → "
-            "shortcut_exec_url(vpn.shortcut_url_off). Default shadowrocket://disconnect. "
-            "Run after kill-apps + home, before clear gallery. Logs each SDK step."
+            "Production clear_album preamble: ensure_vpn_off_before_album "
+            "(home icon + vision + fixed toggle)."
         ),
         "offline_hint": OFFLINE_HINT,
     },
     "prep-vpn-shortcut-toggle": {
-        "label": "Prep: VPN toggle via URL shortcut (browser)",
-        "kind": "vpn_shortcut",
+        "label": "Prep: VPN ON (icon + vision + toggle)",
+        "kind": "vpn_vision_step",
         "group": "prep",
-        "mode": "toggle",
-        "hint": (
-            "Opens vpn.shortcut_url_toggle via iMouse shortcut_exec_url. "
-            "Default: shadowrocket://toggle."
-        ),
+        "step": "ensure",
+        "want": "on",
+        "hint": "Legacy alias — runs ensure VPN ON.",
         "offline_hint": OFFLINE_HINT,
     },
     "tap-vpntoggle": {
-        "label": "VPN toggle via URL shortcut (browser)",
-        "kind": "vpn_shortcut",
+        "label": "VPN ON (icon + vision + toggle)",
+        "kind": "vpn_vision_step",
         "group": "prep",
-        "mode": "toggle",
-        "hint": "Alias for prep-vpn-shortcut-toggle (backward-compatible API).",
+        "step": "ensure",
+        "want": "on",
+        "hint": "Alias for prep-vpn-vision-ensure-on.",
         "offline_hint": OFFLINE_HINT,
     },
 }
@@ -623,6 +667,15 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "y": 62,
         "offline_hint": OFFLINE_HINT,
     },
+    "post-deselect-recommended-song": {
+        "label": "Post: Deselect recommended song (291, 696) — Use my videos",
+        "kind": "tap_xy",
+        "group": "post",
+        "x": 291,
+        "y": 696,
+        "hint": "After music gallery: tap to clear TikTok's recommended song when Use my videos is on.",
+        "offline_hint": OFFLINE_HINT,
+    },
     "post-tap-favorites": {
         "label": "Post: Wait + tap Favorites ×2 — after tapping music",
         "kind": "tap_ocr",
@@ -656,14 +709,20 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "y": 334,
         "offline_hint": OFFLINE_HINT,
     },
-    "tap-aa": {
-        "label": "Post: Tap Aa (566, 422) — single tap, after dismissing music",
+    "post-tap-next-after-music-supplied": {
+        "label": "Post: Tap Next (466, 1028) — Use my videos after music",
         "kind": "tap_xy",
         "group": "post",
-        "x": 566,
-        "y": 422,
-        "tap_count": 1,
-        "hint": "TikTok editor with text overlay controls visible.",
+        "x": 466,
+        "y": 1028,
+        "hint": "After dismissing music with Use my videos: Next into the caption screen (no continue arrow).",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "tap-aa": {
+        "label": "Post: Tap Aa (vision gpt-5.5) — right-side toolbar after dismissing music",
+        "kind": "tap_aa_vision",
+        "group": "post",
+        "hint": "TikTok editor with right-side Aa / text tool visible.",
         "offline_hint": OFFLINE_HINT,
     },
     "post-type-caption": {
@@ -715,12 +774,13 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "tap-editor": {
-        "label": "Post: Tap editor (566, 247) — after Done",
-        "kind": "tap_xy",
+        "label": "Post: Tap editor (saved from Aa vision) — after Done",
+        "kind": "tap_saved_editor",
         "group": "post",
-        "x": 566,
-        "y": 247,
-        "hint": "Show the post editor screen after tapping Done.",
+        "hint": (
+            "Uses editor coords saved during Tap Aa vision. "
+            "Run tap-aa first on this device; falls back to (566, 247) if missing."
+        ),
         "offline_hint": OFFLINE_HINT,
     },
     "post-swipe-left": {
@@ -824,12 +884,12 @@ TIKTOK_POST_DEBUG_TESTS: dict[str, DebugTest] = {
         "offline_hint": OFFLINE_HINT,
     },
     "tap-post": {
-        "label": "Post: Tap post (544, 68) — after typing final caption",
+        "label": "Post: Tap Post (531, 67) — after typing final caption",
         "kind": "tap_xy",
         "group": "post",
-        "x": 544,
-        "y": 68,
-        "hint": "Caption field filled; keyboard may still be visible.",
+        "x": 531,
+        "y": 67,
+        "hint": "Fixed Post button on the caption screen after final caption.",
         "offline_hint": OFFLINE_HINT,
     },
 }
@@ -975,28 +1035,38 @@ TIKTOK_ACCOUNT_SWITCH_DEBUG_TESTS: dict[str, DebugTest] = {
 }
 
 _VALCOIN_PREP_DEBUG_LIST_PRIORITY = (
-    "valcoin-prep-vpn-shortcut-off",
+    "valcoin-prep-vpn-vision-ensure-off",
     "valcoin-prep-clear-album",
     "valcoin-prep-upload-gallery",
     "valcoin-prep-tap-allow",
-    "valcoin-prep-vpn-shortcut-on",
+    "valcoin-prep-vpn-vision-ensure-on",
     "valcoin-prep-tap-tiktok",
 )
 
 TIKTOK_VALCOIN_PREP_DEBUG_TESTS: dict[str, DebugTest] = {
-    "valcoin-prep-vpn-shortcut-off": {
-        "label": "ValCoin prep: VPN OFF via URL shortcut",
-        "kind": "vpn_shortcut",
+    "valcoin-prep-vpn-vision-ensure-off": {
+        "label": "ValCoin prep: VPN OFF (Shadowrocket vision)",
+        "kind": "vpn_vision_step",
         "group": "valcoin_prep",
-        "mode": "off",
-        "hint": "After Labely posts. Opens vpn.shortcut_url_off on the phone.",
+        "step": "ensure",
+        "want": "off",
+        "hint": "After Labely posts — turn VPN off via Shadowrocket vision before album swap.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "valcoin-prep-vpn-shortcut-off": {
+        "label": "ValCoin prep: VPN OFF (Shadowrocket vision)",
+        "kind": "vpn_vision_step",
+        "group": "valcoin_prep",
+        "step": "ensure",
+        "want": "off",
+        "hint": "Alias for valcoin-prep-vpn-vision-ensure-off.",
         "offline_hint": OFFLINE_HINT,
     },
     "valcoin-prep-clear-album": {
         "label": "ValCoin prep: Clear photo library (VPN off first)",
         "kind": "album_clear",
         "group": "valcoin_prep",
-        "hint": "Clears Labely videos before ValCoin upload. Sends VPN disconnect shortcut first.",
+        "hint": "Clears Labely videos before ValCoin upload. VPN off runs inside album_clear.",
         "offline_hint": OFFLINE_HINT,
     },
     "valcoin-prep-upload-gallery": {
@@ -1015,12 +1085,22 @@ TIKTOK_VALCOIN_PREP_DEBUG_TESTS: dict[str, DebugTest] = {
         "hint": "After ValCoin gallery upload if iOS asks for photo access.",
         "offline_hint": OFFLINE_HINT,
     },
-    "valcoin-prep-vpn-shortcut-on": {
-        "label": "ValCoin prep: VPN ON via URL shortcut",
-        "kind": "vpn_shortcut",
+    "valcoin-prep-vpn-vision-ensure-on": {
+        "label": "ValCoin prep: VPN ON (Shadowrocket vision)",
+        "kind": "vpn_vision_step",
         "group": "valcoin_prep",
-        "mode": "on",
-        "hint": "After ValCoin upload. Opens vpn.shortcut_url_on before TikTok.",
+        "step": "ensure",
+        "want": "on",
+        "hint": "After ValCoin upload — turn VPN on via Shadowrocket vision before TikTok.",
+        "offline_hint": OFFLINE_HINT,
+    },
+    "valcoin-prep-vpn-shortcut-on": {
+        "label": "ValCoin prep: VPN ON (Shadowrocket vision)",
+        "kind": "vpn_vision_step",
+        "group": "valcoin_prep",
+        "step": "ensure",
+        "want": "on",
+        "hint": "Alias for valcoin-prep-vpn-vision-ensure-on.",
         "offline_hint": OFFLINE_HINT,
     },
     "valcoin-prep-tap-tiktok": {
@@ -1210,14 +1290,13 @@ _DEBUG_LIST_PRIORITY = (
     "prep-kill-apps",
     "clear-album",
     "list-album",
-    "prep-open-shadowrocket-shortcut",
-    "prep-vpn-shortcut-on",
-    "prep-vpn-vision-status",
+    "prep-open-shadowrocket",
+    "prep-vpn-vision-analyze",
+    "prep-vpn-vision-ensure-on",
+    "prep-vpn-vision-ensure-off",
     "prep-vpn-vision-confirm-on",
     "prep-vpn-vision-confirm-off",
     "prep-vpn-off-before-album",
-    "prep-vpn-shortcut-off",
-    "prep-vpn-shortcut-toggle",
     "detect-vpn-on",
     "detect-vpn-off",
     "open-photos-spotlight",
@@ -1232,7 +1311,50 @@ _SLIDESHOW_DEBUG_LIST_PRIORITY = (
 )
 
 
-def list_debug_tests(group: str | None = None) -> list[dict[str, str]]:
+def _ensure_draft_gallery_specs(video_count: int) -> None:
+    """Register tap targets for Recents tiles when drafting 1–3 videos."""
+    from imouse_farm.post.post_caption_store import POST_COUNT, gallery_coords_for_post
+
+    n = max(1, min(POST_COUNT, int(video_count or 1)))
+    for post in range(1, n + 1):
+        tid = draft_gallery_test_id(post, n)
+        x, y = gallery_coords_for_post(post, n)
+        MANUAL_DEBUG_TESTS[tid] = {
+            "label": f"Draft: Tap gallery item {post}/{n} ({x}, {y})",
+            "kind": "tap_xy",
+            "group": "post",
+            "x": x,
+            "y": y,
+            "offline_hint": OFFLINE_HINT,
+        }
+
+
+def count_draft_videos_for_slot(
+    *,
+    base_directory: str,
+    extensions: list[str],
+    slot: str,
+    brand: str = "labely",
+) -> int:
+    """How many videos to draft (1–3) from phone gallery, else supplied staging."""
+    from imouse_farm.post.post_caption_store import POST_COUNT
+    from imouse_farm.utils.supplied_videos import list_supplied_videos
+
+    folder = phone_gallery_folder(base_directory, slot, brand=brand)
+    files = list_media_files(folder, extensions)
+    if not files:
+        files = [str(p) for p in list_supplied_videos(base_directory, brand=brand)]
+    return max(0, min(POST_COUNT, len(files)))
+
+
+def list_debug_tests(
+    group: str | None = None,
+    *,
+    slot: str | None = None,
+    brand: str = "labely",
+    base_directory: str | None = None,
+    media_extensions: list[str] | None = None,
+) -> list[dict[str, str]]:
     registry = get_debug_registry()
     key = (group or "flow").strip().lower()
     if key in ("flow", "full_flow"):
@@ -1266,6 +1388,64 @@ def list_debug_tests(group: str | None = None) -> list[dict[str, str]]:
                     "label": f"{flow_step_letter(idx)}. {short}",
                     "group": "warmup_flow",
                     "step": str(idx + 1),
+                }
+            )
+        return items
+    if key in ("vpn", "vpn_flow"):
+        items = []
+        for idx, (short, test_id) in enumerate(FLOW_DEBUG_VPN_STEPS):
+            spec = registry.get(test_id)
+            if not spec:
+                continue
+            flow_id = f"vpn:{idx + 1:03d}:{test_id}"
+            items.append(
+                {
+                    "id": flow_id,
+                    "test_id": test_id,
+                    "label": f"{flow_step_letter(idx)}. {short}",
+                    "group": "vpn",
+                    "step": str(idx + 1),
+                }
+            )
+        return items
+    if key in ("post_draft", "draft_post"):
+        from imouse_farm.post.brand_keys import normalize_brand
+        from imouse_farm.post.post_caption_store import POST_COUNT
+        from imouse_farm.settings.run_settings import get_use_supplied_videos
+
+        brand_key = normalize_brand(brand)
+        use_supplied = get_use_supplied_videos(brand_key)
+        video_count = 1
+        if slot and base_directory and media_extensions is not None:
+            video_count = count_draft_videos_for_slot(
+                base_directory=base_directory,
+                extensions=media_extensions,
+                slot=str(slot).strip(),
+                brand=brand_key,
+            )
+        if video_count < 1:
+            video_count = 1
+        video_count = min(POST_COUNT, video_count)
+        _ensure_draft_gallery_specs(video_count)
+        registry = get_debug_registry()
+        draft_steps = build_post_draft_debug_steps(
+            video_count=video_count,
+            use_supplied_videos=use_supplied,
+        )
+        items = []
+        for idx, (short, test_id) in enumerate(draft_steps):
+            spec = registry.get(test_id)
+            if not spec:
+                continue
+            flow_id = f"draft:{idx + 1:03d}:{test_id}"
+            items.append(
+                {
+                    "id": flow_id,
+                    "test_id": test_id,
+                    "label": f"{flow_step_letter(idx)}. {short}",
+                    "group": "post_draft",
+                    "step": str(idx + 1),
+                    "video_count": str(video_count),
                 }
             )
         return items
@@ -1393,6 +1573,10 @@ async def run_debug_test(
     kind = spec.get("kind", "tap")
     if kind == "upload_gallery":
         return await upload_gallery_debug(app, device_id, test_id, spec)
+    if kind == "draft_download_videos":
+        return await draft_download_videos_debug(
+            app, device_id, test_id, spec, brand=brand
+        )
     if kind == "slideshow_generate":
         return await slideshow_generate_debug(app, device_id, test_id, spec)
     if kind == "album_clear":
@@ -1405,6 +1589,10 @@ async def run_debug_test(
         return await open_photos_spotlight_debug(app, device_id, test_id, spec)
     if kind == "tap_xy":
         return await tap_xy_debug(app, device_id, test_id, spec)
+    if kind == "tap_aa_vision":
+        return await tap_aa_vision_debug(app, device_id, test_id, spec)
+    if kind == "tap_saved_editor":
+        return await tap_saved_editor_debug(app, device_id, test_id, spec)
     if kind == "swipe":
         return await swipe_debug(app, device_id, test_id, spec)
     if kind == "drag":
@@ -1431,6 +1619,8 @@ async def run_debug_test(
         return await vpn_shortcut_debug(app, device_id, test_id, spec)
     if kind == "vpn_vision_status":
         return await vpn_vision_status_debug(app, device_id, test_id, spec)
+    if kind == "vpn_vision_step":
+        return await vpn_vision_step_debug(app, device_id, test_id, spec)
     if kind == "vpn_off_before_album":
         return await vpn_off_before_album_debug(app, device_id, test_id, spec)
     if kind == "detect_ocr":
@@ -1448,7 +1638,7 @@ async def run_debug_test(
         return await account_switch_step_debug(app, device_id, test_id, spec, brand=brand)
     if kind == "detect":
         if spec.get("open_shadowrocket"):
-            open_err = await _open_shadowrocket_via_shortcut_debug(app, device_id, spec, test_id)
+            open_err = await _open_shadowrocket_debug(app, device_id, spec, test_id)
             if open_err:
                 return {**open_err, "detection": spec["detection"]}
         return await tap_detection(
@@ -1696,17 +1886,17 @@ async def tiktok_popup_scan_debug(
     return payload
 
 
-async def _open_shadowrocket_via_shortcut_debug(
+async def _open_shadowrocket_debug(
     app: Any,
     device_id: str,
     spec: DebugTest,
     test_id: str,
 ) -> dict[str, Any] | None:
-    """Open Shadowrocket via URL shortcut; return error dict on failure."""
-    from imouse_farm.actions.vpn_shadowrocket import open_shadowrocket_via_shortcut
+    """Open Shadowrocket via home icon; return error dict on failure."""
+    from imouse_farm.actions.vpn_shadowrocket import open_shadowrocket
 
     try:
-        await open_shadowrocket_via_shortcut(
+        await open_shadowrocket(
             app.device_manager.controller,
             app.config,
             device_id,
@@ -1736,7 +1926,7 @@ async def detect_ocr_debug(
         raise HTTPException(500, f"Debug test {test_id} has no texts configured")
 
     if spec.get("open_shadowrocket"):
-        open_err = await _open_shadowrocket_via_shortcut_debug(app, device_id, spec, test_id)
+        open_err = await _open_shadowrocket_debug(app, device_id, spec, test_id)
         if open_err:
             return open_err
 
@@ -2174,7 +2364,7 @@ async def clear_album_debug(
     test_id: str,
     spec: DebugTest,
 ) -> dict[str, Any]:
-    """Clear photo library — VPN disconnect shortcut first, then album clear."""
+    """Clear photo library — VPN OFF (home icon + vision) first, then album clear."""
     dm = app.device_manager
     device = dm.get_device(device_id)
     if not device:
@@ -2321,6 +2511,92 @@ def _upload_file_details(files: list[str]) -> list[dict[str, Any]]:
             }
         )
     return details
+
+
+async def draft_download_videos_debug(
+    app: Any,
+    device_id: str,
+    test_id: str,
+    spec: DebugTest,
+    *,
+    brand: str = "labely",
+) -> dict[str, Any]:
+    """VPN off → copy localhost/supplied videos into slot folder → album-upload to phone."""
+    from imouse_farm.actions.vpn_shadowrocket import ensure_vpn_off_before_album
+    from imouse_farm.post.brand_keys import normalize_brand
+    from imouse_farm.post.post_caption_store import POST_COUNT
+    from imouse_farm.settings.run_settings import get_use_supplied_videos
+    from imouse_farm.utils.supplied_videos import (
+        distribute_supplied_videos,
+        list_supplied_videos,
+    )
+
+    await _require_online_device(app, device_id, spec)
+    dm = app.device_manager
+    device = dm.get_device(device_id)
+    if not device:
+        raise HTTPException(404, "Device not found")
+    slot = str(device.user_name or "").strip()
+    if not slot:
+        raise HTTPException(400, "Device has no farm slot (user_name)")
+
+    brand_key = normalize_brand(str(spec.get("brand") or brand or "labely"))
+    gallery = app.config.gallery
+
+    await ensure_vpn_off_before_album(
+        dm.controller,
+        app.config,
+        dm,
+        device_id,
+        log_activity=app.db.log_activity,
+    )
+
+    distributed: dict[str, Any] | None = None
+    if get_use_supplied_videos(brand_key):
+        sources = list_supplied_videos(gallery.base_directory, brand=brand_key)
+        if not sources:
+            message = (
+                f"No videos in gallery/_supplied/{brand_key}/ — "
+                "upload them under Use my videos first."
+            )
+            await app.db.log_activity(
+                "error",
+                "test",
+                message,
+                device_id,
+                {"test_id": test_id, "brand": brand_key},
+            )
+            return {"success": False, "message": message, "brand": brand_key}
+        n = min(POST_COUNT, len(sources))
+        distributed = distribute_supplied_videos(
+            gallery.base_directory,
+            [slot],
+            brand=brand_key,
+            extensions=list(gallery.media_extensions),
+            expected_count=n,
+        )
+        await app.db.log_activity(
+            "info",
+            "test",
+            f"Draft download: copied {n} supplied video(s) → gallery/{slot}/{brand_key}/",
+            device_id,
+            {"test_id": test_id, "brand": brand_key, "count": n, "distributed": distributed},
+        )
+
+    upload_spec: DebugTest = {
+        **spec,
+        "brand": brand_key,
+        "hint": spec.get("hint") or "Draft album upload from localhost gallery folder",
+    }
+    result = await upload_gallery_debug(app, device_id, test_id, upload_spec)
+    if distributed is not None:
+        result = {**result, "distributed": distributed}
+    if result.get("success"):
+        result["message"] = (
+            f"Downloaded {result.get('file_count', 0)} video(s) from localhost to phone"
+            + (f" ({brand_key})" if brand_key else "")
+        )
+    return result
 
 
 async def upload_gallery_debug(
@@ -2567,6 +2843,108 @@ async def tap_xy_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) 
     if spec.get("wait_for_tiktok_ready"):
         msg += " — TikTok + visible (home feed ready)"
     return {"success": True, "message": msg, "x": x, "y": y}
+
+
+async def tap_aa_vision_debug(
+    app: Any, device_id: str, test_id: str, spec: DebugTest
+) -> dict[str, Any]:
+    await _require_online_device(app, device_id, spec)
+    from imouse_farm.workflows.tiktok_aa_vision import (
+        aa_vision_model,
+        get_saved_editor_coords,
+        tap_aa_via_vision,
+    )
+
+    async def _log(
+        level: str,
+        category: str,
+        message: str,
+        *args: Any,
+        **details: Any,
+    ) -> None:
+        did = str(args[0]).strip() if args else device_id
+        await app.db.log_activity(
+            level,
+            category,
+            message,
+            did,
+            {"test_id": test_id, **details},
+        )
+
+    try:
+        ok = await tap_aa_via_vision(
+            app.device_manager.controller,
+            device_id,
+            app_config=app.config,
+            log_activity=_log,
+        )
+    except Exception as exc:  # noqa: BLE001
+        await app.screenshot_service.capture(device_id)
+        return {"success": False, "message": f"Aa vision locate/tap failed: {exc}"}
+
+    await app.screenshot_service.capture(device_id)
+    model = aa_vision_model(app.config)
+    saved = get_saved_editor_coords(device_id)
+    editor_note = (
+        f"; saved editor=({saved[0]}, {saved[1]})" if saved else "; editor coords not saved"
+    )
+    if not ok:
+        return {
+            "success": False,
+            "message": f"Aa vision tap failed ({model}){editor_note}",
+            "editor": {"x": saved[0], "y": saved[1]} if saved else None,
+        }
+    return {
+        "success": True,
+        "message": f"Tapped Aa via vision ({model}){editor_note}",
+        "editor": {"x": saved[0], "y": saved[1]} if saved else None,
+    }
+
+
+async def tap_saved_editor_debug(
+    app: Any, device_id: str, test_id: str, spec: DebugTest
+) -> dict[str, Any]:
+    await _require_online_device(app, device_id, spec)
+    from imouse_farm.workflows.tiktok_aa_vision import editor_tap_coords, tap_saved_editor
+
+    async def _log(
+        level: str,
+        category: str,
+        message: str,
+        *args: Any,
+        **details: Any,
+    ) -> None:
+        did = str(args[0]).strip() if args else device_id
+        await app.db.log_activity(
+            level,
+            category,
+            message,
+            did,
+            {"test_id": test_id, **details},
+        )
+
+    x, y, source = editor_tap_coords(device_id)
+    ok = await tap_saved_editor(
+        app.device_manager.controller,
+        device_id,
+        log_activity=_log,
+    )
+    await app.screenshot_service.capture(device_id)
+    if not ok:
+        return {
+            "success": False,
+            "message": f"Editor tap failed at ({x}, {y}) source={source}",
+            "x": x,
+            "y": y,
+            "source": source,
+        }
+    return {
+        "success": True,
+        "message": f"Tapped editor at ({x}, {y}) source={source}",
+        "x": x,
+        "y": y,
+        "source": source,
+    }
 
 
 async def _wait_for_tiktok_ready_debug(
@@ -3257,7 +3635,7 @@ async def final_caption_production_debug(
         "message": (
             f"Post {post_num} production flow OK — tapped (107,130), typed {len(flat)} chars "
             f"(caption + hashtags, single line), waited {_AFTER_CAPTION_TYPE_SECONDS:.0f}s. "
-            f"Use Tap post (544, 68) to finish."
+            f"Use Tap Post (531, 67) to finish."
         ),
         "post_num": post_num,
         "char_count": len(flat),
@@ -3278,14 +3656,9 @@ async def vpn_off_before_album_debug(
     app: Any, device_id: str, test_id: str, spec: DebugTest
 ) -> dict[str, Any]:
     """Run ensure_vpn_off_before_album — the exact VPN-off preamble before album clear."""
-    from imouse_farm.actions.vpn_shadowrocket import (
-        ensure_vpn_off_before_album,
-        vpn_shortcut_url,
-    )
+    from imouse_farm.actions.vpn_shadowrocket import ensure_vpn_off_before_album
 
     await _require_online_device(app, device_id, spec)
-    url = vpn_shortcut_url(app.config, "off")
-    settle = float(app.config.vpn.shortcut_settle_seconds)
 
     async def _log(
         level: str,
@@ -3305,12 +3678,7 @@ async def vpn_off_before_album_debug(
     await _log(
         "info",
         "test",
-        (
-            f"Production clear_album VPN preamble — URL {url!r}, "
-            f"settle {settle:g}s, SDK shortcut_exec_url"
-        ),
-        url=url,
-        settle_seconds=settle,
+        "Production clear_album VPN preamble — Shadowrocket vision OFF",
         production_step="clear_album",
     )
 
@@ -3326,40 +3694,40 @@ async def vpn_off_before_album_debug(
     except Exception as exc:
         duration_ms = int((time.monotonic() - start) * 1000)
         message = f"VPN off before album failed after {duration_ms // 1000}s — {exc}"
-        await _log("error", "test", message, url=url, error=str(exc))
+        await _log("error", "test", message, error=str(exc))
         await app.screenshot_service.capture(device_id)
         return {
             "success": False,
             "message": message,
-            "url": url,
             "error": str(exc),
             "duration_ms": duration_ms,
         }
 
     duration_ms = int((time.monotonic() - start) * 1000)
     await app.screenshot_service.capture(device_id)
-    message = f"VPN off before album OK ({url}) — same path as production clear_album"
-    await _log("info", "test", message, url=url, duration_ms=duration_ms)
+    message = "VPN off before album OK — same path as production clear_album"
+    await _log("info", "test", message, duration_ms=duration_ms)
     return {
         "success": True,
         "message": message,
-        "url": url,
         "duration_ms": duration_ms,
     }
 
 
-async def vpn_vision_status_debug(
+async def vpn_vision_step_debug(
     app: Any, device_id: str, test_id: str, spec: DebugTest
 ) -> dict[str, Any]:
-    """Go home and ask GPT-4o if the top-left status-bar 'VPN' label is visible."""
+    """Debug: open / analyze STATUS / ensure / confirm (fixed icon + toggle coords)."""
     from imouse_farm.actions.vpn_shadowrocket import (
-        _vision_read_vpn_status,
-        confirm_vpn_status_via_vision,
+        ensure_vpn,
+        open_shadowrocket,
+        vision_read_vpn_status,
     )
 
     await _require_online_device(app, device_id, spec)
-    want_raw = str(spec.get("want") or "").strip().lower()
-    want = want_raw if want_raw in ("on", "off") else ""
+    step = str(spec.get("step") or "ensure").strip().lower()
+    want_raw = str(spec.get("want") or "on").strip().lower()
+    want = want_raw if want_raw in ("on", "off") else "on"
     ctrl = app.device_manager.controller
 
     async def _log(level: str, category: str, message: str, device: str = device_id) -> None:
@@ -3368,155 +3736,90 @@ async def vpn_vision_status_debug(
             category,
             message,
             device,
-            {"test_id": test_id, "want": want or None},
+            {"test_id": test_id, "step": step, "want": want},
         )
 
     try:
-        if want:
-            status = await confirm_vpn_status_via_vision(
+        if step == "open":
+            await open_shadowrocket(ctrl, app.config, device_id, log_activity=_log)
+            message = "Opened Shadowrocket via home icon"
+            payload: dict[str, Any] = {"success": True, "message": message, "step": step}
+        elif step in ("analyze", "confirm"):
+            await open_shadowrocket(ctrl, app.config, device_id, log_activity=_log)
+            status = await vision_read_vpn_status(
+                ctrl, device_id, app_config=app.config, log_activity=_log
+            )
+            if step == "confirm" and status != want:
+                raise RuntimeError(
+                    f"VPN vision confirmed {status.upper()}, expected {want.upper()}"
+                )
+            message = f"VPN vision STATUS: {status.upper()}"
+            payload = {
+                "success": True,
+                "message": message,
+                "step": step,
+                "status": status,
+                "want": want,
+            }
+        else:
+            await ensure_vpn(
                 ctrl,
                 app.config,
                 device_id,
                 want=want,  # type: ignore[arg-type]
                 log_activity=_log,
             )
-            message = f"VPN vision confirmed STATUS: {status.upper()} (status-bar)"
-        else:
-            await ctrl.press_home(device_id)
-            await asyncio.sleep(max(0.5, float(app.config.vpn.confirm_settle_seconds)))
-            status = await _vision_read_vpn_status(
-                ctrl,
-                device_id,
-                app_config=app.config,
-            )
-            message = f"VPN vision status: STATUS: {status.upper()} (status-bar)"
-            await _log("info", "device", message)
+            message = f"VPN {want.upper()} confirmed (icon + vision + fixed toggle)"
+            payload = {"success": True, "message": message, "step": "ensure", "want": want}
     except Exception as exc:
         await app.db.log_activity(
             "error",
             "test",
-            f"VPN vision status failed: {exc}",
+            f"VPN vision {step} failed: {exc}",
             device_id,
-            {"test_id": test_id, "want": want or None},
+            {"test_id": test_id, "step": step, "want": want},
         )
         await app.screenshot_service.capture(device_id)
-        return {"success": False, "message": str(exc), "want": want or None}
+        return {
+            "success": False,
+            "message": str(exc),
+            "step": step,
+            "want": want,
+        }
 
     await app.screenshot_service.capture(device_id)
     await app.db.log_activity(
         "info",
         "test",
-        message,
+        payload["message"],
         device_id,
-        {"test_id": test_id, "status": status, "want": want or None},
+        {"test_id": test_id, **{k: v for k, v in payload.items() if k != "message"}},
     )
-    return {
-        "success": True,
-        "message": message,
-        "status": status,
-        "want": want or None,
-    }
+    return payload
+
+
+async def vpn_vision_status_debug(
+    app: Any, device_id: str, test_id: str, spec: DebugTest
+) -> dict[str, Any]:
+    """Backward-compatible wrapper → analyze / confirm via Shadowrocket vision."""
+    want_raw = str(spec.get("want") or "").strip().lower()
+    step = "confirm" if want_raw in ("on", "off") else "analyze"
+    merged: DebugTest = {**spec, "step": step, "want": want_raw or "on"}
+    return await vpn_vision_step_debug(app, device_id, test_id, merged)
 
 
 async def vpn_shortcut_debug(
     app: Any, device_id: str, test_id: str, spec: DebugTest
 ) -> dict[str, Any]:
-    from imouse_farm.actions.vpn_shadowrocket import (
-        ensure_vpn_off,
-        ensure_vpn_on,
-        exec_vpn_shortcut_url,
-        vpn_shortcut_url,
-    )
-
-    await _require_online_device(app, device_id, spec)
-    mode = str(spec.get("mode") or "toggle").strip().lower()
-    if mode not in ("on", "off", "toggle", "open"):
-        raise HTTPException(400, f"Invalid VPN shortcut mode: {mode}")
-
-    async def _log(level: str, category: str, message: str, device: str = device_id) -> None:
-        await app.db.log_activity(
-            level, category, message, device, {"test_id": test_id, "mode": mode}
-        )
-
-    # Production on/off path includes GPT-4o STATUS: ON/OFF confirmation.
-    if mode in ("on", "off"):
-        try:
-            if mode == "on":
-                await ensure_vpn_on(
-                    app.device_manager.controller,
-                    app.config,
-                    device_id,
-                    log_activity=_log,
-                )
-            else:
-                await ensure_vpn_off(
-                    app.device_manager.controller,
-                    app.config,
-                    device_id,
-                    log_activity=_log,
-                )
-        except Exception as exc:
-            await app.db.log_activity(
-                "error",
-                "test",
-                f"VPN {mode.upper()} failed: {exc}",
-                device_id,
-                {"test_id": test_id, "mode": mode},
-            )
-            return {"success": False, "message": str(exc), "mode": mode}
-        await app.screenshot_service.capture(device_id)
-        message = f"VPN {mode.upper()} confirmed (shortcut + vision)"
-        await app.db.log_activity(
-            "info",
-            "test",
-            message,
-            device_id,
-            {"test_id": test_id, "mode": mode},
-        )
-        return {"success": True, "message": message, "mode": mode}
-
-    url = str(spec.get("url") or "").strip() or vpn_shortcut_url(
-        app.config, mode  # type: ignore[arg-type]
-    )
-    if not url:
-        config_key = "open" if mode == "open" else mode
-        raise HTTPException(
-            400,
-            f"VPN shortcut URL for mode={mode!r} is empty — set vpn.shortcut_url_{config_key} in config.yaml",
-        )
-    settle = float(spec.get("settle_seconds") or app.config.vpn.shortcut_settle_seconds)
-    outtime_ms = int(app.config.vpn.shortcut_url_timeout_ms)
-    press_home_after = bool(spec.get("press_home_after", mode != "open"))
-    try:
-        await exec_vpn_shortcut_url(
-            app.device_manager.controller,
-            device_id,
-            url,
-            settle_seconds=settle,
-            outtime_ms=outtime_ms,
-            press_home_after=press_home_after,
-            log_activity=_log,
-        )
-    except Exception as exc:
-        await app.db.log_activity(
-            "error",
-            "test",
-            f"VPN shortcut failed: {exc}",
-            device_id,
-            {"test_id": test_id, "url": url, "mode": mode},
-        )
-        return {"success": False, "message": str(exc), "url": url, "mode": mode}
-    await app.screenshot_service.capture(device_id)
-    label = {"toggle": "toggle", "open": "open"}[mode]
-    message = f"VPN shortcut {label}: opened {url}"
-    await app.db.log_activity(
-        "info",
-        "test",
-        message,
-        device_id,
-        {"test_id": test_id, "url": url, "mode": mode},
-    )
-    return {"success": True, "message": message, "url": url, "mode": mode}
+    """Backward-compatible: on/off/open map to vision ensure / open."""
+    mode = str(spec.get("mode") or "on").strip().lower()
+    if mode == "open":
+        merged: DebugTest = {**spec, "step": "open"}
+    elif mode == "off":
+        merged = {**spec, "step": "ensure", "want": "off"}
+    else:
+        merged = {**spec, "step": "ensure", "want": "on"}
+    return await vpn_vision_step_debug(app, device_id, test_id, merged)
 
 
 async def kill_app_debug(app: Any, device_id: str, test_id: str, spec: DebugTest) -> dict[str, Any]:

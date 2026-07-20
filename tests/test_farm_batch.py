@@ -50,6 +50,49 @@ async def test_disconnect_unselected_casts_drops_extra_online_phones() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_skips_excluded_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+    from imouse_farm.workflows import farm_batch as farm_batch_mod
+
+    monkeypatch.setattr(farm_batch_mod, "get_batch_size", lambda: 1)
+    devices = [
+        SimpleNamespace(device_id="phone-11", user_name="11"),
+        SimpleNamespace(device_id="phone-12", user_name="12"),
+        SimpleNamespace(device_id="phone-13", user_name="13"),
+    ]
+    runner = FarmBatchRunner(
+        BatchConfig(batch_size=1, excluded_slots=[12]),
+        _APP,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        auto_generate_captions=False,
+    )
+    runner._distribute_supplied_if_needed = MagicMock()  # type: ignore[method-assign]
+    runner._run_batches = AsyncMock()  # type: ignore[method-assign]
+
+    assert await runner.start(devices) is True
+    # 12 is excluded; only 11 and 13 remain (2 batches at size 1).
+    assert runner.get_status()["batch_total"] == 2
+    batched = runner._distribute_supplied_if_needed.call_args.args[0]
+    assert [d.user_name for d in batched] == ["11", "13"]
+
+
+@pytest.mark.asyncio
+async def test_start_returns_false_when_all_slots_excluded() -> None:
+    devices = [SimpleNamespace(device_id="phone-12", user_name="12")]
+    runner = FarmBatchRunner(
+        BatchConfig(excluded_slots=[12]),
+        _APP,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        auto_generate_captions=False,
+    )
+    assert await runner.start(devices) is False
+    assert "excluded" in runner.get_status()["message"].lower()
+
+
+@pytest.mark.asyncio
 async def test_stop_does_not_disconnect_airplay() -> None:
     dm = MagicMock()
     dm.disconnect_airplay = AsyncMock(return_value=True)
@@ -222,7 +265,10 @@ async def test_wait_until_idle_blocks_until_task_finishes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_queues_one_phone_per_step() -> None:
+async def test_start_queues_one_phone_per_step(monkeypatch: pytest.MonkeyPatch) -> None:
+    from imouse_farm.workflows import farm_batch as farm_batch_mod
+
+    monkeypatch.setattr(farm_batch_mod, "get_batch_size", lambda: 1)
     devices = [
         SimpleNamespace(device_id=f"phone-{i}", user_name=str(i))
         for i in (3, 7, 12)
@@ -238,4 +284,59 @@ async def test_start_queues_one_phone_per_step() -> None:
     runner._run_batches = AsyncMock()  # type: ignore[method-assign]
     assert await runner.start(devices) is True
     assert runner.get_status()["batch_total"] == 3
+    assert runner.get_status()["batch_size"] == 1
     assert runner.is_running()
+
+
+@pytest.mark.asyncio
+async def test_flawed_timeout_slot_restarts_before_cast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    device = SimpleNamespace(device_id="phone-7", user_name="7")
+    dm = MagicMock()
+    dm.disconnect_airplay = AsyncMock(return_value=True)
+    dm.controller.restart_device = AsyncMock(return_value=True)
+    db = MagicMock()
+    db.log_activity = AsyncMock()
+    runner = FarmBatchRunner(
+        BatchConfig(flawed_timeout_slots=[2, 7, 9, 16, 18, 20]),
+        AppConfig(),
+        dm,
+        MagicMock(),
+        db,
+        auto_generate_captions=False,
+    )
+    runner._ensure_cast = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    result = await runner._connect_batch_device(device, batch_index=1)
+
+    assert result is device
+    dm.disconnect_airplay.assert_not_awaited()
+    dm.controller.restart_device.assert_awaited_once_with("phone-7")
+    runner._ensure_cast.assert_awaited_once_with("phone-7")
+    messages = [c.args[2] for c in db.log_activity.await_args_list]
+    assert any("flawed-timeout preflight" in m for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_non_flawed_slot_skips_restart_preflight() -> None:
+    device = SimpleNamespace(device_id="phone-3", user_name="3")
+    dm = MagicMock()
+    dm.disconnect_airplay = AsyncMock(return_value=True)
+    dm.controller.restart_device = AsyncMock(return_value=True)
+    runner = FarmBatchRunner(
+        BatchConfig(flawed_timeout_slots=[2, 7, 9, 16, 18, 20]),
+        AppConfig(),
+        dm,
+        MagicMock(),
+        MagicMock(log_activity=AsyncMock()),
+        auto_generate_captions=False,
+    )
+    runner._ensure_cast = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    result = await runner._connect_batch_device(device, batch_index=1)
+
+    assert result is device
+    dm.controller.restart_device.assert_not_awaited()
+    runner._ensure_cast.assert_awaited_once_with("phone-3")

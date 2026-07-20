@@ -2,8 +2,16 @@
 
 import { appendAutomationLog } from "@/lib/automationLog";
 
-const FARM_UPLOAD_RETRIES = 3;
+// Retries are sized to survive a full farm-dashboard restart mid-upload
+// (restart.ps1 can take ~90s). With capped backoff the total retry window is
+// ~2 min, so a bounced dashboard no longer fails the phone's upload.
+const FARM_UPLOAD_RETRIES = 15;
 const FARM_UPLOAD_RETRY_MS = 1500;
+const FARM_UPLOAD_RETRY_MAX_MS = 8000;
+
+function farmRetryDelayMs(attempt) {
+  return Math.min(FARM_UPLOAD_RETRY_MS * attempt, FARM_UPLOAD_RETRY_MAX_MS);
+}
 
 let _farmNotifyContext = { farmUrl: "", secret: "" };
 
@@ -60,14 +68,14 @@ async function farmFetch(url, options, { retries = 0, retryOn = null } = {}) {
     try {
       const res = await fetch(url, options);
       if (retryOn?.(res.status) && attempt < attempts) {
-        await new Promise((r) => setTimeout(r, FARM_UPLOAD_RETRY_MS * attempt));
+        await new Promise((r) => setTimeout(r, farmRetryDelayMs(attempt)));
         continue;
       }
       return res;
     } catch (err) {
       lastErr = err;
       if (!isNetworkFetchError(err) || attempt >= attempts) break;
-      await new Promise((r) => setTimeout(r, FARM_UPLOAD_RETRY_MS * attempt));
+      await new Promise((r) => setTimeout(r, farmRetryDelayMs(attempt)));
     }
   }
   const hint =

@@ -33,7 +33,7 @@ If NO — respond:
 {"popup": false}
 
 Respond with valid JSON only — no markdown, no extra text.
-Screen dimensions are 1170×2532 pixels (iPhone)."""
+Coordinates MUST use the screenshot pixel size given in the user message (not points)."""
 
 # System prompt for the goal-driven tap loop.
 _TAP_SYSTEM = """You are an iOS automation assistant controlling a real iPhone.
@@ -47,9 +47,19 @@ Otherwise respond with the coordinate to tap next:
 
 Rules:
 - Respond with valid JSON only — no markdown, no extra text.
-- Screen dimensions are 1170×2532 pixels (iPhone).
+- Coordinates MUST use the screenshot pixel size given in the user message (not points).
 - Always pick the most obvious tap target. Never return null x/y unless done.
 - After each tap you will receive a new screenshot. Keep tapping until the goal is reached."""
+
+
+def _image_size(data: bytes) -> tuple[int, int]:
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(data))
+        return int(img.width), int(img.height)
+    except Exception:
+        return 608, 1080
 
 
 def _to_jpeg(data: bytes) -> bytes | None:
@@ -68,15 +78,24 @@ def _to_jpeg(data: bytes) -> bytes | None:
         return None
 
 
-async def _screenshot_to_b64(controller: Any, device_id: str) -> str:
-    """Capture screenshot, convert to JPEG, return base64 string. Raises on failure."""
+async def _screenshot_jpeg_and_size(
+    controller: Any, device_id: str
+) -> tuple[str, int, int]:
+    """Capture screenshot, convert to JPEG b64, return (b64, width, height)."""
     screenshot_bytes = await controller.capture_screenshot(device_id)
     if not screenshot_bytes:
         raise RuntimeError("Screenshot returned no data")
+    width, height = _image_size(screenshot_bytes)
     jpeg_bytes = _to_jpeg(screenshot_bytes)
     if not jpeg_bytes:
         raise RuntimeError("Could not convert screenshot to JPEG")
-    return base64.b64encode(jpeg_bytes).decode("ascii")
+    return base64.b64encode(jpeg_bytes).decode("ascii"), width, height
+
+
+async def _screenshot_to_b64(controller: Any, device_id: str) -> str:
+    """Capture screenshot, convert to JPEG, return base64 string. Raises on failure."""
+    b64, _, _ = await _screenshot_jpeg_and_size(controller, device_id)
+    return b64
 
 
 def _make_openai_client(app_config: AppConfig) -> Any:
@@ -120,7 +139,7 @@ async def ask_vision_for_recovery(
       {"popup": False}                                       → no popup, kill+reopen TikTok
     Raises on any failure.
     """
-    b64 = await _screenshot_to_b64(controller, device_id)
+    b64, width, height = await _screenshot_jpeg_and_size(controller, device_id)
     client = _make_openai_client(app_config)
     model = _model(app_config)
 
@@ -130,6 +149,10 @@ async def ask_vision_for_recovery(
         error_msg=error_msg,
         recent_errors=recent_errors,
         extra_context=extra_context,
+    )
+    user_text = (
+        f"{user_text}\n\nScreenshot pixel size: {width}×{height}. "
+        f"Return tap coordinates in that same {width}×{height} space."
     )
     response = await client.chat.completions.create(
         model=model,
@@ -222,6 +245,7 @@ async def ask_vision_for_tap(
     if not screenshot_bytes:
         raise RuntimeError("Screenshot returned no data")
 
+    width, height = _image_size(screenshot_bytes)
     jpeg_bytes = _to_jpeg(screenshot_bytes)
     if not jpeg_bytes:
         raise RuntimeError("Could not convert screenshot to JPEG")
@@ -241,7 +265,13 @@ async def ask_vision_for_tap(
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": f"Goal: {goal}"},
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Goal: {goal}\n\nScreenshot pixel size: {width}×{height}. "
+                            f"Return tap coordinates in that same {width}×{height} space."
+                        ),
+                    },
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"},

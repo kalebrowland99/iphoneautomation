@@ -49,6 +49,8 @@ async def test_valcoin_warmup_retries_after_account_switch_failure(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_warmup_scroll_taps_home_every_few_swipes(monkeypatch) -> None:
+    from imouse_farm.workflows import feed_scroll
+
     cfg = load_config("config/config.yaml")
     cfg.batch.warmup.duration_seconds = 30
     cfg.batch.warmup.swipe_delay_min_seconds = 0
@@ -68,12 +70,13 @@ async def test_warmup_scroll_taps_home_every_few_swipes(monkeypatch) -> None:
         swipe_n["n"] += 1
         return {"sx": 200, "sy": 500, "ex": 200, "ey": 200}
 
-    monkeypatch.setattr(warmup_mod, "swipe_feed_up", fake_swipe)
+    monkeypatch.setattr(feed_scroll, "swipe_feed_up", fake_swipe)
     monkeypatch.setattr(warmup_mod, "increment_warmup_days", lambda *_a, **_k: 1)
-    monkeypatch.setattr(warmup_mod.random, "randint", lambda a, b: 3)
-    monkeypatch.setattr(warmup_mod.random, "uniform", lambda a, b: 9999)
-    monkeypatch.setattr(warmup_mod.random, "random", lambda: 1.0)
-    monkeypatch.setattr(warmup_mod.random, "expovariate", lambda _x: 0.01)
+    monkeypatch.setattr(feed_scroll.random, "randint", lambda a, b: 3)
+    monkeypatch.setattr(feed_scroll.random, "uniform", lambda a, b: 9999)
+    monkeypatch.setattr(feed_scroll.random, "random", lambda: 1.0)
+    monkeypatch.setattr(feed_scroll.random, "expovariate", lambda _x: 0.01)
+    monkeypatch.setattr(feed_scroll.asyncio, "sleep", AsyncMock())
 
     await warmup_mod._run_warmup_scroll(
         controller,
@@ -103,12 +106,12 @@ async def test_warmup_vpn_on_does_not_reset_phone_on_failure(monkeypatch) -> Non
 
     async def fail_ensure(*_a, **_k):
         raise RuntimeError(
-            "shortcut_exec_url failed for 'shadowrocket://connect' — 调用超时"
+            "VPN vision confirmed OFF, expected ON"
         )
 
     monkeypatch.setattr(warmup_mod, "ensure_vpn_on", fail_ensure)
 
-    with pytest.raises(RuntimeError, match="调用超时"):
+    with pytest.raises(RuntimeError, match="expected ON"):
         await warmup_mod._ensure_vpn_on(
             controller,
             "dev-1",
@@ -127,7 +130,7 @@ async def test_warmup_teardown_vpn_off_failure_does_not_raise(monkeypatch) -> No
 
     async def fail_off(*_a, **_k):
         raise RuntimeError(
-            "shortcut_exec_url failed for 'shadowrocket://disconnect' — 调用超时"
+            "VPN vision confirmed ON, expected OFF"
         )
 
     monkeypatch.setattr(warmup_mod, "ensure_vpn_off", fail_off)

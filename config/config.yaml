@@ -10,6 +10,9 @@ imouse:
   airplay_reconnect_on_startup: false
   airplay_connect_delay_seconds: 4
   airplay_reconnect_interval_seconds: 30
+  # Re-broadcast mDNS when no phones are casting (skipped while mirrored)
+  mdns_refresh_enabled: true
+  mdns_refresh_interval_seconds: 30
 
 database:
   path: "data/imouse_farm.db"
@@ -27,6 +30,8 @@ openai:
   temperature: 0.85
   # Account-switcher opener (dropdown arrow tap) — gpt-5.5 vision
   account_switcher_vision_model: "gpt-5.5"
+  # TikTok editor Aa (text) button on right toolbar — same model as account switcher
+  aa_vision_model: "gpt-5.5"
 
 gallery:
   base_directory: "gallery"
@@ -113,19 +118,16 @@ slideshow:
   blank_video_max_retries: 2
   debug_slideshows_per_slot: 1  # debug Slideshow tab → 1 MP4 per test run
 
-# Shadowrocket VPN — opened on the phone via iMouse shortcut_exec_url (Safari / URL handler).
-# Override with your own Shortcuts URL if you use a custom iPhone shortcut instead.
+# Shadowrocket VPN — home → tap icon → vision STATUS → maybe tap fixed toggle → confirm.
 vpn:
-  shortcut_url_on: "shadowrocket://connect"
-  shortcut_url_off: "shadowrocket://disconnect"
-  shortcut_url_toggle: "shadowrocket://toggle"
-  shortcut_url_open: "shadowrocket://"
-  # Wait for shortcut_exec_url up to 120s; then settle another 120s (can be slow).
-  shortcut_settle_seconds: 120
-  shortcut_url_timeout_ms: 120000
-  confirm_via_vision: false
-  confirm_max_attempts: 2
+  icon_x: 373
+  icon_y: 1003
+  toggle_x: 515
+  toggle_y: 171
+  app_settle_seconds: 4
+  after_toggle_settle_seconds: 4
   confirm_settle_seconds: 2
+  vision_model: "gpt-4o"
 
 # Per-phone TikTok UI overrides (farm slot number = iMouse user_name).
 tiktok_device_ui:
@@ -138,14 +140,37 @@ tiktok_device_ui:
         y: 147
 
 batch:
-  batch_size: 1
-  cast_connect_max_attempts: 8
+  batch_size: 2
+  # One cast attempt per phone (no auto-retry loop). Flip Cast toggle / re-run to retry.
+  cast_connect_max_attempts: 1
   cast_connect_retry_seconds: 15
+  # Cast via Control Bar UI (no /device/airplay/connect). Success = iMouse state online.
+  cast_ui:
+    enabled: true
+    wake_screen: true
+    wake_settle_seconds: 3.5
+    post_home_settle_seconds: 1.25
+    control_bar_fn_key: ControlBar
+    after_control_bar_seconds: 1.5
+    screen_mirroring_x: 159
+    screen_mirroring_y: 384
+    after_mirroring_seconds: 10
+    target_x: 178
+    target_y: 316
+    after_target_seconds: 2
+    confirm_timeout_seconds: 20
+    confirm_poll_seconds: 1
+    home_after_connect_count: 3
+    home_after_connect_interval_seconds: 1
   batch_device_timeout_seconds: 7200
   disconnect_on_complete: true
   between_phones_pause_seconds: 0
   chain_valcoin_after_labely: true
   skip_prep_when_valid: true
+  # Phones that often hit album/SDK 调用超时 — reboot then cast before prep/post.
+  flawed_timeout_slots: [2, 7, 9, 16, 18, 20]
+  # Personal phones — never automated (like slot 11). No prep/post/warmup/videos.
+  excluded_slots: [12]
   session_recording:
     enabled: true
     fps: 2  # screenshots per second into gallery/<slot>/<YYYY-MM-DD>/session_HHMMSS.mp4

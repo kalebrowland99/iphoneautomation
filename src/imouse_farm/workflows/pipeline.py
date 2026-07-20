@@ -10,6 +10,7 @@ from imouse_farm.permissions.watcher import PermissionWatcherManager
 from imouse_farm.post.account_profile_store import is_prep_valid, mark_prep_completed
 from imouse_farm.post.brand_keys import device_storage_key
 from imouse_farm.post.post_caption_store import POST_COUNT
+from imouse_farm.settings.run_settings import get_use_supplied_videos
 from imouse_farm.utils.logging import get_logger
 from imouse_farm.workflows.engine import WorkflowEngine
 
@@ -184,7 +185,13 @@ class WorkflowPipeline:
 
         run_brand = str(brand or "labely").strip().lower()
         skip_prep_brands: frozenset[str] = frozenset()
-        if from_post is None and skip_prep_when_valid:
+        # Use my videos still needs clear+upload (+ VPN off inside clear_album).
+        # Never skip prep when that toggle is on, even if prep looked valid.
+        if (
+            from_post is None
+            and skip_prep_when_valid
+            and not get_use_supplied_videos(run_brand)
+        ):
             device = self._dm.get_device(device_id)
             if device:
                 storage_key = device_storage_key(device_id, device.user_name)

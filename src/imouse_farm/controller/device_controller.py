@@ -223,6 +223,18 @@ class DeviceController:
         logger.info("imouse_kernel_restart_requested")
         return await self._run_sync(_restart_kernel)
 
+    async def refresh_mdns(self) -> bool:
+        """Re-broadcast AirPlay/mDNS so phones can discover iMouseXP."""
+
+        def _regmdns() -> bool:
+            try:
+                return self._ok(self._api.imserver_regmdns())
+            except Exception as exc:
+                logger.warning("imouse_regmdns_failed", error=str(exc))
+                return False
+
+        return await self._run_sync(_regmdns)
+
     async def connect_all_airplay(self) -> bool:
         def _connect_all() -> bool:
             try:
@@ -253,26 +265,8 @@ class DeviceController:
         except Exception:
             return None
 
-    def _ensure_airplay_sync(self, device_id: str) -> None:
-        try:
-            response = self._api.device_get()
-            if not response or not self._ok(response):
-                return
-            for device in response.data.list:
-                if device.deviceid != device_id:
-                    continue
-                if int(getattr(device, "state", 0) or 0) != 1 or not getattr(device, "air_handle", 0):
-                    logger.info("airplay_connect_before_screenshot", device_id=device_id)
-                    self._api.device_airplay_connect(self._ids(device_id))
-                    time.sleep(2)
-                return
-        except Exception as exc:
-            logger.warning("airplay_precheck_failed", device_id=device_id, error=str(exc))
-
     async def capture_screenshot(self, device_id: str) -> bytes | None:
         def _capture() -> bytes | None:
-            self._ensure_airplay_sync(device_id)
-
             result = self._api.pic_screenshot(device_id, binary=True)
             if isinstance(result, bytes) and len(result) > 0:
                 logger.info("screenshot_captured", device_id=device_id, bytes=len(result))

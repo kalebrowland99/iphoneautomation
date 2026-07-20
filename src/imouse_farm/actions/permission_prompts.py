@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -1202,6 +1203,80 @@ def tiktok_continue_editing_swipe_coords() -> tuple[int, int, int, int]:
     return x, y, x, ey
 
 
+# Tap below the top draft sheet to dismiss without Save/Edit.
+TIKTOK_CONTINUE_EDITING_OUTSIDE_TAP_X = 304
+TIKTOK_CONTINUE_EDITING_OUTSIDE_TAP_Y = 420
+
+
+def tiktok_continue_editing_outside_tap_coords() -> tuple[int, int]:
+    return TIKTOK_CONTINUE_EDITING_OUTSIDE_TAP_X, TIKTOK_CONTINUE_EDITING_OUTSIDE_TAP_Y
+
+
+async def dismiss_tiktok_continue_editing_sheet(
+    controller: Any,
+    device_id: str,
+    *,
+    device_manager: Any | None = None,
+) -> bool:
+    """Swipe up the draft sheet, then tap below it if the sheet may still be up."""
+    from imouse_farm.actions.pre_touch_reset import (
+        is_tiktok_workflow,
+        pre_touch_mouse_reset,
+    )
+
+    if device_manager:
+        device = device_manager.get_device(device_id)
+        if device and is_tiktok_workflow(device.workflow_name):
+            await pre_touch_mouse_reset(
+                controller,
+                device_id,
+                step_name="continue_editing_dismiss",
+            )
+
+    sx, sy, ex, ey = tiktok_continue_editing_swipe_coords()
+    swiped = await controller.swipe(
+        device_id,
+        direction="up",
+        sx=sx,
+        sy=sy,
+        ex=ex,
+        ey=ey,
+    )
+    await asyncio.sleep(0.6)
+    ox, oy = tiktok_continue_editing_outside_tap_coords()
+    tapped = await controller.tap(device_id, ox, oy)
+    await asyncio.sleep(0.5)
+    return bool(swiped or tapped)
+
+
+async def dismiss_tiktok_continue_editing_if_visible(
+    controller: Any,
+    device_id: str,
+    *,
+    device_manager: Any | None = None,
+) -> bool:
+    """Swipe/tap away the Continue editing draft sheet when OCR sees it."""
+    screen = await controller.ocr_on_device(device_id)
+    visible = is_tiktok_continue_editing_dialog(screen or "")
+    if not visible:
+        matches = await controller.find_text_on_device(
+            device_id,
+            ["Continue editing", "Save draft", "Continue editing this post"],
+            threshold=0.55,
+            contain=True,
+        )
+        if matches:
+            probe = " ".join(str(m.get("text", "")) for m in matches)
+            visible = is_tiktok_continue_editing_dialog(probe)
+    if not visible:
+        return False
+    return await dismiss_tiktok_continue_editing_sheet(
+        controller,
+        device_id,
+        device_manager=device_manager,
+    )
+
+
 def is_tiktok_live_feed_dialog(ocr_text: str) -> bool:
     """True when the feed shows a LIVE stream overlay to skip."""
     text = str(ocr_text or "").lower()
@@ -1276,17 +1351,13 @@ def analyze_popup_screen(ocr_text: str) -> dict[str, Any]:
             "ocr_snippet": snippet,
         }
 
+    # Continue-editing auto-dismiss caused false swipes; ignored by watcher.
     if is_tiktok_continue_editing_dialog(text):
-        sx, sy, ex, ey = tiktok_continue_editing_swipe_coords()
         return {
             "dialog": "tiktok_continue_editing",
-            "watcher_action": "swipe_up",
-            "watcher_detail": f"Swipe up from ({sx}, {sy}) to dismiss draft sheet.",
+            "watcher_action": "skip",
+            "watcher_detail": "Continue editing sheet ignored (auto-dismiss disabled).",
             "button_labels": [],
-            "swipe_sx": sx,
-            "swipe_sy": sy,
-            "swipe_ex": ex,
-            "swipe_ey": ey,
             "ocr_snippet": snippet,
         }
 

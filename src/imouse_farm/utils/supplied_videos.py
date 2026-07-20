@@ -9,12 +9,11 @@ from typing import Any
 from imouse_farm.integrations.slideshow_ingest import (
     SlideshowVideoRejected,
     _safe_filename,
-    clear_slot_media,
     validate_slideshow_video,
 )
 from imouse_farm.post.brand_keys import normalize_brand
 from imouse_farm.post.post_caption_store import POST_COUNT
-from imouse_farm.utils.gallery import list_media_files, natural_sort_key, phone_gallery_folder
+from imouse_farm.utils.gallery import list_media_files, natural_sort_key
 from imouse_farm.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -44,15 +43,20 @@ def supplied_videos_status(
     *,
     brand: str = "labely",
     expected_count: int = POST_COUNT,
+    min_count: int = 1,
     extensions: list[str] | None = None,
 ) -> dict[str, Any]:
     paths = list_supplied_videos(base_directory, brand=brand, extensions=extensions)
+    maximum = max(1, min(POST_COUNT, int(expected_count)))
+    minimum = max(1, min(maximum, int(min_count)))
+    count = len(paths)
     return {
         "brand": normalize_brand(brand),
         "folder": str(supplied_brand_dir(base_directory, brand)),
-        "expected_count": int(expected_count),
-        "count": len(paths),
-        "ready": len(paths) >= int(expected_count),
+        "expected_count": maximum,
+        "min_count": minimum,
+        "count": count,
+        "ready": count >= minimum,
         "files": [
             {
                 "name": p.name,
@@ -161,6 +165,39 @@ def _renumber_supplied_videos(folder: Path) -> None:
         path.rename(dest)
 
 
+def _purge_slot_brand_media(
+    base_directory: str,
+    slot_label: str,
+    extensions: list[str],
+    *,
+    brand: str,
+) -> int:
+    """Delete stale media for ``brand`` from every folder the uploader may read.
+
+    ``phone_gallery_folder`` can resolve a labely slot to either
+    ``gallery/<slot>/labely`` or the legacy ``gallery/<slot>`` root. Clearing
+    only one leaves an old file behind that then uploads after the fresh set
+    (an unprefixed name like ``slideshow.mp4`` sorts after ``01_..03_``). Only
+    files are removed, so sibling brand folders and date recordings are kept.
+    """
+    brand_key = normalize_brand(brand)
+    ext_set = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in extensions}
+    slot_root = (Path(base_directory).resolve() / str(slot_label).strip().lower())
+    folders = [slot_root / brand_key]
+    if brand_key == "labely":
+        # Legacy location: labely videos used to live directly in the slot root.
+        folders.append(slot_root)
+    removed = 0
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        for path in folder.iterdir():
+            if path.is_file() and path.suffix.lower() in ext_set:
+                path.unlink(missing_ok=True)
+                removed += 1
+    return removed
+
+
 def distribute_supplied_videos(
     base_directory: str,
     slots: list[str | int],
@@ -168,25 +205,38 @@ def distribute_supplied_videos(
     brand: str = "labely",
     extensions: list[str] | None = None,
     expected_count: int = POST_COUNT,
+    min_count: int = 1,
 ) -> dict[str, Any]:
-    """Copy staged brand videos into each selected phone gallery folder."""
+    """Copy staged brand videos into each selected phone gallery folder.
+
+    Accepts 1..expected_count videos (Use my videos can post fewer than 3).
+    """
     brand_key = normalize_brand(brand)
+    maximum = max(1, min(POST_COUNT, int(expected_count)))
+    minimum = max(1, min(maximum, int(min_count)))
     sources = list_supplied_videos(base_directory, brand=brand_key, extensions=extensions)
-    if len(sources) < int(expected_count):
+    if len(sources) < minimum:
         raise ValueError(
-            f"Need {expected_count} supplied video(s) for {brand_key}, "
+            f"Need at least {minimum} supplied video(s) for {brand_key}, "
             f"found {len(sources)}. Upload them in Captions & settings."
         )
-    sources = sources[: int(expected_count)]
+    sources = sources[:maximum]
     exts = extensions or list(_VIDEO_EXTENSIONS)
     distributed: list[dict[str, Any]] = []
     for slot in slots:
         label = str(slot).strip()
         if not label:
             continue
-        clear_slot_media(base_directory, label, exts, brand=brand_key)
-        dest_folder = phone_gallery_folder(base_directory, label, brand=brand_key)
+        # Canonical destination is always the branded subfolder. Creating it up
+        # front makes phone_gallery_folder() resolve here deterministically, so
+        # the later album upload reads exactly this folder.
+        slot_root = (Path(base_directory).resolve() / label.lower())
+        dest_folder = slot_root / brand_key
         dest_folder.mkdir(parents=True, exist_ok=True)
+        # Purge stale media from every location the uploader could read for this
+        # brand (branded subfolder + legacy labely root). Clearing only one lets
+        # an old file ride along after the fresh set (it sorts after 01_..03_).
+        _purge_slot_brand_media(base_directory, label, exts, brand=brand_key)
         copied: list[str] = []
         for src in sources:
             dest = dest_folder / src.name
@@ -208,5 +258,6 @@ def distribute_supplied_videos(
     return {
         "brand": brand_key,
         "source_count": len(sources),
+        "video_count": len(sources),
         "slots": distributed,
     }

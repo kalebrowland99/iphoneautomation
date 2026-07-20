@@ -17,7 +17,6 @@ from imouse_farm.actions.permission_prompts import (
     is_ok_button_label,
     is_permission_dialog_text,
     is_photo_delete_sheet_text,
-    is_tiktok_continue_editing_dialog,
     is_tiktok_email_confirm_dialog,
     is_tiktok_save_login_dialog,
     is_tiktok_live_feed_dialog,
@@ -34,7 +33,6 @@ from imouse_farm.actions.permission_prompts import (
     is_save_button_label,
     local_network_ok_button_texts,
     should_allow_permission,
-    tiktok_continue_editing_swipe_coords,
     tiktok_dont_allow_button_texts,
     tiktok_got_it_button_texts,
     tiktok_not_now_button_texts,
@@ -331,22 +329,6 @@ class PermissionWatcher:
                         text=tapped.get("text", ""),
                         x=tapped.get("x"),
                         y=tapped.get("y"),
-                    )
-                    await self._touch_activity()
-                    await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
-                    return True
-
-            if is_tiktok_continue_editing_dialog(screen):
-                swiped = await self._dismiss_continue_editing()
-                if swiped:
-                    logger.info(
-                        "tiktok_popup_dismiss",
-                        device_id=self._device_id,
-                        dialog="continue_editing",
-                        sx=swiped.get("sx"),
-                        sy=swiped.get("sy"),
-                        ex=swiped.get("ex"),
-                        ey=swiped.get("ey"),
                     )
                     await self._touch_activity()
                     await asyncio.sleep(POST_DISMISS_SETTLE_SECONDS)
@@ -772,20 +754,6 @@ class PermissionWatcher:
         if not await self._controller.tap(self._device_id, int(best["x"]), int(best["y"])):
             return None
         return best
-
-    async def _dismiss_continue_editing(self) -> dict[str, Any] | None:
-        sx, sy, ex, ey = tiktok_continue_editing_swipe_coords()
-        await self._pre_touch_if_tiktok()
-        if not await self._controller.swipe(
-            self._device_id,
-            direction="up",
-            sx=sx,
-            sy=sy,
-            ex=ex,
-            ey=ey,
-        ):
-            return None
-        return {"sx": sx, "sy": sy, "ex": ex, "ey": ey}
 
     async def _dismiss_live_feed(self) -> dict[str, Any] | None:
         from imouse_farm.workflows.feed_scroll import screen_dimensions, swipe_feed_up

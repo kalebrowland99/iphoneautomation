@@ -40,9 +40,9 @@ steps:
     name: settle_home
     duration_seconds: 3
 
-  # ── 2. Turn VPN off via URL shortcut ────────────────────────────────
+  # ── 2. Turn VPN off via Shadowrocket + GPT vision ───────────────────
   - type: execute_action
-    name: vpn_off_shortcut
+    name: vpn_off
     on_failure: pause
     action:
       type: vpn_off

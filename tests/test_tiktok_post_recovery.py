@@ -132,3 +132,24 @@ def test_white_background_runs_on_post_1() -> None:
         when_post_index=1,
     )
     assert runner._step_skip_reason(step) is None
+
+
+@pytest.mark.asyncio
+async def test_restart_skips_white_background_flag_for_supplied_videos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = _tiktok_post_runner()
+    runner._log_activity = AsyncMock()
+    runner._execute_direct = AsyncMock(return_value=True)
+    runner._open_tiktok_from_home = AsyncMock()
+    monkeypatch.setattr(
+        "imouse_farm.workflows.engine.get_use_supplied_videos",
+        lambda _brand: True,
+    )
+    monkeypatch.setattr("imouse_farm.workflows.engine.asyncio.sleep", AsyncMock())
+
+    await runner._restart_tiktok(parent_step="wait_for_plus")
+
+    assert runner._pending_white_background_after_restart is False
+    messages = [c.args[2] for c in runner._log_activity.await_args_list if len(c.args) >= 3]
+    assert not any("white-background" in msg for msg in messages)

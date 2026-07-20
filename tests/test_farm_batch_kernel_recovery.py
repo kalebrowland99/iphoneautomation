@@ -18,7 +18,7 @@ def test_is_imouse_failure_detects_cast_and_timeout() -> None:
     assert is_imouse_failure("warmup_failed: screenshot capture failed") is True
     assert is_imouse_failure("missing post 1 caption") is False
     assert is_imouse_failure(
-        "warmup_failed: shortcut_exec_url failed for 'shadowrocket://connect' — 调用超时"
+        "warmup_failed: VPN vision confirmed OFF, expected ON"
     ) is False
 
 

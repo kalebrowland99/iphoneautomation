@@ -24,6 +24,33 @@ GALLERY_ITEM_COORDS: dict[int, tuple[int, int]] = {
     3: (513, 267),    # right / oldest (post 1)
 }
 
+_GALLERY_LEFT_XY = GALLERY_ITEM_COORDS[1]
+_GALLERY_RIGHT_XY = GALLERY_ITEM_COORDS[3]
+
+
+def gallery_coords_for_post(post: int, total: int = POST_COUNT) -> tuple[int, int]:
+    """Map workflow post 1..N to Recents tile among ``total`` videos (1–3).
+
+    Recents fills left→right (newest on the left). With 3 videos, post 1 is
+    rightmost and post 3 leftmost. With 1 video, the only tile is leftmost —
+    not the middle (old single-item coords missed the thumb).
+    """
+    n = max(1, min(POST_COUNT, int(total)))
+    p = max(1, min(n, int(post)))
+    if n == 1:
+        return _GALLERY_LEFT_XY
+    if n == POST_COUNT:
+        slot = POST_COUNT + 1 - p
+        return GALLERY_ITEM_COORDS[slot]
+    slot_from_left = n - p + 1
+    t = (slot_from_left - 1) / (n - 1)
+    x0, y0 = _GALLERY_LEFT_XY
+    x1, y1 = _GALLERY_RIGHT_XY
+    return (
+        int(round(x0 + (x1 - x0) * t)),
+        int(round(y0 + (y1 - y0) * t)),
+    )
+
 _store: dict[str, dict[int, dict[str, str]]] = {}
 
 
@@ -175,16 +202,21 @@ def gallery_slot_for_post(post: int) -> int:
     return POST_COUNT + 1 - post
 
 
-def media_index_for_post(post: int) -> int:
-    """0-based gallery file index for workflow post N (post 1 → third file)."""
-    if post < 1 or post > POST_COUNT:
-        raise ValueError(f"post must be 1..{POST_COUNT}, got {post}")
-    return POST_COUNT - post
+def media_index_for_post(post: int, total: int = POST_COUNT) -> int:
+    """0-based gallery file index for workflow post N among ``total`` files.
+
+    With 3 videos: post 1 → third file (rightmost). With 1 video: post 1 → only file.
+    """
+    n = max(1, min(POST_COUNT, int(total)))
+    if post < 1 or post > n:
+        raise ValueError(f"post must be 1..{n}, got {post}")
+    return n - post
 
 
-def post_media_stem(stems: list[str], post: int) -> str:
+def post_media_stem(stems: list[str], post: int, *, total: int | None = None) -> str:
     """Gallery filename stem bound to workflow post N."""
-    idx = media_index_for_post(post)
+    n = int(total) if total is not None else POST_COUNT
+    idx = media_index_for_post(post, n)
     if idx < 0 or idx >= len(stems):
         return ""
     return stems[idx]
@@ -212,10 +244,7 @@ def foods_post_order_to_file_order(
 
 
 def get_gallery_coords(post: int) -> tuple[int, int]:
-    slot = gallery_slot_for_post(post)
-    if slot not in GALLERY_ITEM_COORDS:
-        raise ValueError(f"no gallery coords for slot {slot}")
-    return GALLERY_ITEM_COORDS[slot]
+    return gallery_coords_for_post(post, POST_COUNT)
 
 
 def list_post_texts(device_key: str, *, brand: str | None = None) -> list[dict[str, str | int]]:
@@ -233,14 +262,19 @@ def validate_post_texts(
     device_key: str,
     *,
     from_post: int = 1,
+    to_post: int | None = None,
     brand: str | None = None,
     require_onscreen: bool = True,
 ) -> list[str]:
     """Return errors for empty onscreen/final fields required before a pipeline run."""
+    end = POST_COUNT if to_post is None else int(to_post)
+    end = max(1, min(POST_COUNT, end))
     if from_post < 1 or from_post > POST_COUNT:
         raise ValueError(f"from_post must be 1..{POST_COUNT}, got {from_post}")
+    if from_post > end:
+        raise ValueError(f"from_post {from_post} is after to_post {end}")
     errors: list[str] = []
-    for post in range(from_post, POST_COUNT + 1):
+    for post in range(from_post, end + 1):
         if require_onscreen and not get_onscreen_text(device_key, post, brand=brand).strip():
             errors.append(f"Post {post}: onscreen text is empty")
         if not get_final_caption(device_key, post, brand=brand).strip():

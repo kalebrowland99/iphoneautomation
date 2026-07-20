@@ -74,6 +74,9 @@ def test_debug_tests_have_required_fields() -> None:
                 "slideshow-upload-gallery",
                 "valcoin-prep-upload-gallery",
             }
+        elif kind == "draft_download_videos":
+            assert test_id == "draft-download-videos"
+            assert spec["hint"]
         elif kind == "slideshow_generate":
             assert spec.get("brand") in {"labely", "valcoin"}
             assert spec["hint"]
@@ -111,7 +114,10 @@ def test_debug_tests_have_required_fields() -> None:
         elif kind == "home":
             assert test_id in {"prep-home", "post-go-home"}
         elif kind == "vpn_shortcut":
-            assert spec.get("mode") in {"on", "off", "toggle", "open"}
+            # Legacy kind kept for dispatcher compatibility; maps to vision ensure/open.
+            assert spec["hint"]
+        elif kind == "vpn_vision_step":
+            assert spec.get("step") in {"open", "analyze", "ensure", "confirm"}
             assert spec["hint"]
         elif kind == "vpn_vision_status":
             want = spec.get("want")

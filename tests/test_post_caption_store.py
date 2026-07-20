@@ -19,6 +19,7 @@ from imouse_farm.post.post_caption_store import (
     set_final_caption,
     set_onscreen_text,
     text_key_for_device,
+    validate_post_texts,
 )
 
 
@@ -66,6 +67,19 @@ def test_gallery_coords_map_posts_to_recents_right_to_left() -> None:
     assert get_gallery_coords(3) == (95, 295)
 
 
+def test_gallery_coords_single_video_is_leftmost() -> None:
+    from imouse_farm.post.post_caption_store import gallery_coords_for_post
+
+    assert gallery_coords_for_post(1, 1) == (95, 295)
+
+
+def test_gallery_coords_two_videos_post_one_right_post_two_left() -> None:
+    from imouse_farm.post.post_caption_store import gallery_coords_for_post
+
+    assert gallery_coords_for_post(1, 2) == (513, 267)
+    assert gallery_coords_for_post(2, 2) == (95, 295)
+
+
 def test_post_media_stem_maps_post_one_to_third_file() -> None:
     stems = ["video1", "video2", "video3"]
     assert media_index_for_post(1) == 2
@@ -74,6 +88,26 @@ def test_post_media_stem_maps_post_one_to_third_file() -> None:
     assert post_media_stem(stems, 1) == "video3"
     assert post_media_stem(stems, 2) == "video2"
     assert post_media_stem(stems, 3) == "video1"
+
+
+def test_media_index_scales_with_video_count() -> None:
+    assert media_index_for_post(1, 1) == 0
+    assert post_media_stem(["only"], 1, total=1) == "only"
+    assert media_index_for_post(1, 2) == 1
+    assert media_index_for_post(2, 2) == 0
+
+
+def test_validate_post_texts_respects_to_post() -> None:
+    device_key = "test-to-post-limit"
+    set_final_caption(device_key, 1, "only one", brand="labely")
+    # Posts 2–3 empty — still OK when only posting 1.
+    assert validate_post_texts(
+        device_key, brand="labely", require_onscreen=False, to_post=1
+    ) == []
+    missing = validate_post_texts(
+        device_key, brand="labely", require_onscreen=False, to_post=2
+    )
+    assert any("Post 2" in m for m in missing)
 
 
 def test_device_storage_key_uses_farm_slot() -> None:

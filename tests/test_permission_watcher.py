@@ -327,23 +327,20 @@ def test_detects_tiktok_continue_editing_dialog() -> None:
 
 
 @pytest.mark.asyncio
-async def test_permission_watcher_dismisses_continue_editing() -> None:
+async def test_permission_watcher_ignores_continue_editing() -> None:
     from imouse_farm.permissions.watcher import PermissionWatcher
 
     controller = MagicMock()
     controller.ocr_on_device = AsyncMock(return_value="Continue editing this post?")
+    controller.ocr_items_on_device = AsyncMock(return_value=[])
+    controller.find_text_on_device = AsyncMock(return_value=[])
     controller.swipe = AsyncMock(return_value=True)
+    controller.tap = AsyncMock(return_value=True)
     watcher = PermissionWatcher(controller, "phone-1", poll_interval_seconds=0.25)
 
-    assert await watcher._check_once() is True
-    controller.swipe.assert_awaited_once_with(
-        "phone-1",
-        direction="up",
-        sx=65,
-        sy=151,
-        ex=65,
-        ey=0,
-    )
+    assert await watcher._check_once() is False
+    controller.swipe.assert_not_awaited()
+    controller.tap.assert_not_awaited()
 
 
 @pytest.mark.asyncio

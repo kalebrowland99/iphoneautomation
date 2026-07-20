@@ -577,23 +577,46 @@ async def _openai_account_switcher_coords(
     user_text: str,
     b64_jpeg: str,
     image_detail: str,
+    reference_images: list[tuple[str, str]] | None = None,
+    max_output_tokens: int | None = None,
 ) -> str:
-    """Call OpenAI for X/Y coords; returns raw assistant text (may be empty)."""
+    """Call OpenAI for X/Y coords; returns raw assistant text (may be empty).
+
+    ``reference_images`` is an optional list of ``(caption, b64_jpeg)`` crops shown
+    before the live screenshot (e.g. editor template).
+    """
+    user_content: list[dict[str, Any]] = [
+        {"type": "text", "text": user_text},
+    ]
+    for caption, ref_b64 in reference_images or []:
+        ref = str(ref_b64 or "").strip()
+        if not ref:
+            continue
+        label = str(caption or "").strip() or "Reference image:"
+        user_content.append({"type": "text", "text": label})
+        user_content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{ref}",
+                    "detail": image_detail,
+                },
+            }
+        )
+    if reference_images:
+        user_content.append({"type": "text", "text": "Live phone screenshot:"})
+    user_content.append(
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{b64_jpeg}",
+                "detail": image_detail,
+            },
+        }
+    )
     messages = [
         {"role": "system", "content": system},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": user_text},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{b64_jpeg}",
-                        "detail": image_detail,
-                    },
-                },
-            ],
-        },
+        {"role": "user", "content": user_content},
     ]
     create_kwargs: dict[str, Any] = {
         "model": model,
@@ -601,11 +624,11 @@ async def _openai_account_switcher_coords(
     }
     if _is_reasoning_vision_model(model):
         # Reasoning tokens count against this budget; 128 was too low → empty ''.
-        create_kwargs["max_completion_tokens"] = 4096
+        create_kwargs["max_completion_tokens"] = int(max_output_tokens or 4096)
         # Coordinate tap is simple — keep reasoning light so visible output is produced.
         create_kwargs["reasoning_effort"] = "low"
     else:
-        create_kwargs["max_tokens"] = 40
+        create_kwargs["max_tokens"] = int(max_output_tokens or 40)
         create_kwargs["temperature"] = 0
 
     try:

@@ -130,12 +130,10 @@ steps:
   # ── 4. Music gallery button ─────────────────────────────────────────
   - type: wait
     name: before_music_gallery
-    unless_use_supplied_videos: true
     duration_seconds: 6
 
   - type: execute_action
     name: tap_music_gallery
-    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: tap
@@ -145,10 +143,9 @@ steps:
 
   - type: wait
     name: after_music_gallery
-    unless_use_supplied_videos: true
     duration_seconds: 3
 
-  # ── 5. Wait for Favorites, then tap ─────────────────────────────────
+  # ── 5–6. Pick music (Favorites path) — skipped when Use my videos ───
   - type: execute_action
     name: tap_favorites
     unless_use_supplied_videos: true
@@ -163,7 +160,6 @@ steps:
       tap_interval_seconds: 0.5
     skip_post_action: true
 
-  # ── 6. Wait for Hvitserk or unstable retry while music loads ────────
   - type: execute_action
     name: tap_hvitserk_choice
     unless_use_supplied_videos: true
@@ -196,10 +192,25 @@ steps:
     unless_use_supplied_videos: true
     duration_seconds: 3
 
-  # ── 7. Dismiss music picker (center tap) ────────────────────────────
+  # ── 5b. Use my videos: deselect TikTok-recommended song (291, 696) ──
+  - type: execute_action
+    name: tap_deselect_recommended_song
+    when_use_supplied_videos: true
+    on_failure: pause
+    action:
+      type: tap
+      x: 291
+      y: 696
+    skip_post_action: true
+
+  - type: wait
+    name: after_deselect_recommended_song
+    when_use_supplied_videos: true
+    duration_seconds: 3
+
+  # ── 7. Dismiss music picker (center tap) — both music paths ─────────
   - type: execute_action
     name: dismiss_music_box
-    unless_use_supplied_videos: true
     action:
       type: tap
       x: 187
@@ -208,10 +219,10 @@ steps:
 
   - type: wait
     name: after_dismiss_music
-    unless_use_supplied_videos: true
     duration_seconds: 3
 
-  # ── 8. Tap Aa (fixed coord) ─────────────────────────────────────────
+  # ── 8–15. On-screen text + timeline editor (skipped when Use my videos) ──
+  # Supplied videos: deselect recommended song above, then jump to Next/continue.
   - type: wait
     name: before_tap_aa
     unless_use_supplied_videos: true
@@ -222,10 +233,7 @@ steps:
     unless_use_supplied_videos: true
     on_failure: pause
     action:
-      type: tap
-      x: 566
-      y: 422
-      tap_count: 1
+      type: tap_aa_vision
     skip_post_action: true
 
   - type: wait
@@ -251,8 +259,8 @@ steps:
   # ── 10. White background — fixed coord (303, 63) ×2, post 1 only ───
   - type: execute_action
     name: tap_white_background
-    unless_use_supplied_videos: true
     when_post_index: 1
+    unless_use_supplied_videos: true
     on_failure: pause
     action:
       type: tap
@@ -264,8 +272,8 @@ steps:
 
   - type: wait
     name: after_white_background
-    unless_use_supplied_videos: true
     when_post_index: 1
+    unless_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 11. Done (top-right) ────────────────────────────────────────────
@@ -287,15 +295,13 @@ steps:
     unless_use_supplied_videos: true
     duration_seconds: 3
 
-  # ── 12. Editor icon — fixed coord (566, 247) ────────────────────────
+  # ── 12. Editor icon — coords saved during tap_aa_vision ─────────────
   - type: execute_action
     name: tap_editor
     unless_use_supplied_videos: true
     on_failure: pause
     action:
-      type: tap
-      x: 566
-      y: 247
+      type: tap_saved_editor
     skip_post_action: true
 
   - type: wait
@@ -360,15 +366,12 @@ steps:
     unless_use_supplied_videos: true
     duration_seconds: 3
 
-  # Supplied-video mode: skip music + Aa; settle before continue/post.
-  - type: wait
-    name: after_media_supplied
-    when_use_supplied_videos: true
-    duration_seconds: 6
-
-  # ── 16. Wait for continue arrow (or Post), then tap ─────────────────
+  # ── 16. Continue to caption screen ──────────────────────────────────
+  # Slideshow path: continue arrow (or Post OCR) after text trim.
+  # Use my videos: Next at (466, 1028) after music dismiss (no continue arrow).
   - type: wait_for_detection
     name: wait_for_continuearrow
+    unless_use_supplied_videos: true
     templates: [continuearrow, post]
     when_detection: continuearrow
     duration_seconds: 60
@@ -382,6 +385,7 @@ steps:
 
   - type: execute_action
     name: tap_continuearrow
+    unless_use_supplied_videos: true
     when_detection: continuearrow
     requires_analysis: true
     on_failure: pause
@@ -393,6 +397,7 @@ steps:
 
   - type: execute_action
     name: tap_post_ocr_fallback
+    unless_use_supplied_videos: true
     when_detection: post_ocr
     requires_analysis: true
     on_failure: pause
@@ -403,6 +408,22 @@ steps:
 
   - type: wait
     name: after_continuearrow
+    unless_use_supplied_videos: true
+    duration_seconds: 3
+
+  - type: execute_action
+    name: tap_next_after_music_supplied
+    when_use_supplied_videos: true
+    on_failure: pause
+    action:
+      type: tap
+      x: 466
+      y: 1028
+    skip_post_action: true
+
+  - type: wait
+    name: after_next_after_music_supplied
+    when_use_supplied_videos: true
     duration_seconds: 3
 
   # ── 17. Tap caption field (skip if Post OCR already tapped) ────────
@@ -435,15 +456,15 @@ steps:
     name: after_final_caption
     duration_seconds: 3
 
-  # ── 19. Post button — fixed coord (544, 68), production only ────────
+  # ── 19. Post button — fixed top-right after final caption ───────────
   - type: execute_action
     name: tap_post
     unless_debug_skip_post: true
     on_failure: pause
     action:
       type: tap
-      x: 544
-      y: 68
+      x: 531
+      y: 67
     skip_post_action: true
 
   - type: wait
@@ -451,14 +472,20 @@ steps:
     unless_debug_skip_post: true
     duration_seconds: 3
 
-  # Post 3 only: wait for TikTok upload to finish before leaving the app.
-  - type: wait
-    name: wait_for_upload_after_final_post
+  # Final post only: scroll home feed 10 min so upload can finish, then leave TikTok.
+  - type: execute_action
+    name: scroll_feed_after_final_post
     when_post_index: 3
     unless_debug_skip_post: true
-    duration_seconds: 120
+    on_failure: pause
+    action:
+      type: scroll_feed
+      duration_seconds: 600
+      tap_home_first: true
+      log_label: "Upload wait"
+    skip_post_action: true
 
-  # Leave TikTok UI (keyboard / upload overlay) before tiktok_end — post 3 only.
+  # Leave TikTok UI before tiktok_end — final post only.
   - type: execute_action
     name: leave_tiktok_after_post
     when_post_index: 3
