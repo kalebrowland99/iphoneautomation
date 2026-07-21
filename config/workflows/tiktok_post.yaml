@@ -472,6 +472,16 @@ steps:
     unless_debug_skip_post: true
     duration_seconds: 3
 
+  # Confirm publish succeeded: home feed + must reappear after Post tap.
+  - type: wait_for_detection
+    name: confirm_post_via_plus
+    unless_debug_skip_post: true
+    templates: [plus]
+    when_detection: plus
+    duration_seconds: 45
+    min_seconds: 1
+    on_failure: pause
+
   # Final post only: scroll home feed 10 min so upload can finish, then leave TikTok.
   - type: execute_action
     name: scroll_feed_after_final_post

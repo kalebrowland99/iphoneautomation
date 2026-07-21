@@ -45,12 +45,14 @@ from imouse_farm.captions.service import (
 from imouse_farm.post.account_profile_store import (
     brand_profile_key,
     clear_cant_cast_imouse,
+    clear_chord_issue,
     clear_prep_completed,
     reset_all_session_states,
     get_brand_profile,
     get_profile,
     get_profile_for_device,
     is_cant_cast_imouse,
+    is_chord_issue,
     is_disabled,
     is_phone_dead,
     list_profiles,
@@ -58,6 +60,7 @@ from imouse_farm.post.account_profile_store import (
     mark_run_started,
     mark_run_success,
     set_cant_cast_imouse,
+    set_chord_issue,
     set_disabled,
     set_profile,
 )
@@ -138,6 +141,8 @@ class BatchStartBody(BaseModel):
     from_post: int | None = None
     brand: str | None = None
     valcoin_slots: list[int] | None = None
+    # Run debug: fill empty gallery/<slot>/<brand>/ with sample MP4s so upload won't crash
+    seed_sample_media: bool = False
 
 
 class CaptionAISettingsBody(BaseModel):
@@ -443,25 +448,29 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
 
     @app.post("/api/devices/{device_id:path}/connect")
     async def connect_device_airplay(device_id: str) -> dict[str, Any]:
-        device = app_instance.device_manager.get_device(device_id)
-        if not device:
-            raise HTTPException(404, "Device not found")
-        # Manual UI: Control Bar → Screen Mirroring taps → online. Flip Cast to retry.
-        success = await app_instance.farm_batch._ensure_cast(device_id, max_attempts=1)
-        updated = app_instance.device_manager.get_device(device_id)
-        return {"success": success, "connected": bool(updated and updated.is_online)}
+        """Alias of /cast — Control Bar UI (same as farm batch)."""
+        return await cast_device_airplay(device_id)
 
     @app.post("/api/devices/{device_id:path}/cast")
     async def cast_device_airplay(device_id: str) -> dict[str, Any]:
-        """Cast via Control Bar UI once; success = iMouse online (no airplay/connect)."""
+        """Cast via Control Bar UI once; success = iMouse online (no airplay/connect).
+
+        Identical implementation to farm batch connect (_ensure_cast →
+        ensure_cast_via_control_bar_retries).
+        """
         device = app_instance.device_manager.get_device(device_id)
         if not device:
             raise HTTPException(404, "Device not found")
-        success = await app_instance.farm_batch._ensure_cast(device_id, max_attempts=1)
+        # Explicit max_attempts=1 matches batch.cast_connect_max_attempts default.
+        success = await app_instance.farm_batch._ensure_cast(
+            device_id,
+            max_attempts=int(app_instance.config.batch.cast_connect_max_attempts),
+        )
         updated = app_instance.device_manager.get_device(device_id)
         return {
             "success": success,
             "connected": bool(updated and updated.is_online),
+            "mode": "control_bar_ui",
         }
 
     @app.post("/api/devices/{device_id:path}/disconnect")
@@ -494,6 +503,45 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         ]
         if not devices:
             raise HTTPException(400, "No farm phones found for batch run")
+
+        seed_info: dict[str, Any] | None = None
+        if body and body.seed_sample_media:
+            from imouse_farm.utils.debug_sample_media import seed_debug_gallery_slots
+
+            slots_for_seed = [str(d.user_name) for d in devices]
+            gallery_base = app_instance.config.gallery.base_directory
+            seed_info = seed_debug_gallery_slots(
+                gallery_base, slots_for_seed, brand=brand
+            )
+            # Labely debug runs often chain ValCoin — seed those slots too.
+            if brand == "labely" and body.valcoin_slots:
+                vc_slots = [str(s).strip() for s in body.valcoin_slots if str(s).strip()]
+                if vc_slots:
+                    vc_seed = seed_debug_gallery_slots(
+                        gallery_base, vc_slots, brand="valcoin"
+                    )
+                    seed_info = {
+                        "labely": seed_info,
+                        "valcoin": vc_seed,
+                    }
+            slots_seeded = 0
+            if isinstance(seed_info, dict):
+                if "labely" in seed_info or "valcoin" in seed_info:
+                    slots_seeded = int(
+                        (seed_info.get("labely") or {}).get("slots_seeded") or 0
+                    ) + int((seed_info.get("valcoin") or {}).get("slots_seeded") or 0)
+                else:
+                    slots_seeded = int(seed_info.get("slots_seeded") or 0)
+            await app_instance.db.log_activity(
+                "info",
+                "batch",
+                (
+                    f"Run debug: seeded sample gallery video(s) into {slots_seeded} slot folder(s)"
+                    if slots_seeded
+                    else "Run debug: gallery already had media (no sample seed needed)"
+                ),
+            )
+
         started = await app_instance.farm_batch.start(
             devices, from_post=from_post, brand=brand,
             valcoin_slots=frozenset(
@@ -508,7 +556,12 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
             status = app_instance.farm_batch.get_status()
             detail = str(status.get("message") or "").strip() or "Failed to start batch run"
             raise HTTPException(400, detail)
-        return {"success": True, "device_count": len(devices), "status": app_instance.farm_batch.get_status()}
+        return {
+            "success": True,
+            "device_count": len(devices),
+            "status": app_instance.farm_batch.get_status(),
+            "seed_sample_media": seed_info,
+        }
 
     @app.post("/api/batch/stop")
     async def stop_farm_batch() -> dict[str, Any]:
@@ -540,6 +593,13 @@ def create_app(config: AppConfig, app_instance: Any) -> FastAPI:
         base_key = f"slot:{slot.lower()}"
         clear_cant_cast_imouse(base_key)
         return {"success": True, "slot": slot}
+
+    @app.post("/api/batch/clear-chord-issue/{slot}")
+    async def clear_chord_issue_slot(slot: str) -> dict[str, Any]:
+        """Remove the potential-chord-issue tag from a slot."""
+        base_key = f"slot:{slot.lower()}"
+        clear_chord_issue(base_key)
+        return {"success": True, "slot": slot, "chord_issue": is_chord_issue(base_key)}
 
     @app.post("/api/devices/{device_id:path}/disabled")
     async def set_device_disabled(device_id: str, body: DisabledBody) -> dict[str, Any]:

@@ -605,7 +605,7 @@ class DeviceController:
                         time.sleep(0.75)
                         continue
                     return False
-                time.sleep(1.5)
+                time.sleep(2.5)  # let App Switcher cards settle before swipe-up
                 swipes_ok = 0
                 for i in range(5):
                     swipe_resp = self._api.mouse_swipe(

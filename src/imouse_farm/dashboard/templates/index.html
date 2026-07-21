@@ -48,7 +48,7 @@
             --brand: __ACCENT_COLOR__;
         }
     </style>
-    <link rel="stylesheet" href="/static/dashboard.css?v=embedfix1">
+    <link rel="stylesheet" href="/static/dashboard.css?v=chord1">
 </head>
 <body class="min-h-screen bg-white text-foreground antialiased brand-__BRAND_ID__">
     <div id="page-banner"></div>
@@ -119,6 +119,11 @@
                         title="Clear last-run timestamps and gallery videos for all phones (use before a fresh run)"
                         class="inline-flex items-center justify-center rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
                         Reset
+                    </button>
+                    <button type="button" id="btn-run-debug" onclick="startDebugRun()"
+                        title="Skip slideshow generation — run automation on selected phones using videos already in each gallery slot"
+                        class="inline-flex items-center justify-center rounded-xl border border-border px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors">
+                        Run debug
                     </button>
                 </div>
             </section>
@@ -340,6 +345,15 @@
                 </div>
             </div>
         </main>
+
+        <footer class="mt-8 pt-6 border-t border-border text-left space-y-2 text-xs text-muted-foreground">
+            <p class="font-medium text-foreground/80">For the bot to work correctly</p>
+            <ul class="list-disc pl-4 space-y-1 leading-relaxed">
+                <li>Phones should be <span class="text-foreground">iPhone 7 or iPhone 8</span>.</li>
+                <li>iMouse settings: <span class="text-foreground">Mirroring FPS 30</span>, <span class="text-foreground">Image FPS 30</span>, <span class="text-foreground">Refresh rate 30</span>, <span class="text-foreground">Resolution 1080</span>.</li>
+                <li>Enable <span class="text-foreground">hardware acceleration</span>.</li>
+            </ul>
+        </footer>
     </div>
 
     <input type="checkbox" id="debug-skip-post" class="hidden">
@@ -367,6 +381,6 @@
     <script>
         window.__FARM__ = { slots: __FARM_SLOTS__, brand: '__BRAND_ID__', accent: '__ACCENT_COLOR__' };
     </script>
-    <script src="/static/dashboard.js?v=embedfix1"></script>
+    <script src="/static/dashboard.js?v=chord1"></script>
 </body>
 </html>

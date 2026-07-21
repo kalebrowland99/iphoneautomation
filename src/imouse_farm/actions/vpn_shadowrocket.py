@@ -32,7 +32,7 @@ VpnStatus = Literal["on", "off"]
 
 _VPN_VISION_MODEL_DEFAULT = "gpt-4o"
 
-_VPN_STATUS_SYSTEM = """Screenshot is of the Shadowrocket iPhone app.
+_VPN_STATUS_SYSTEM = """Screenshot should be the Shadowrocket iPhone app.
 Decide whether the VPN / proxy is currently ON (connected) or OFF (not connected).
 Look for Connected / Not Connected / Connecting and the main circular button state.
 
@@ -40,11 +40,18 @@ Reply with EXACTLY one line and nothing else:
 STATUS: ON
 or
 STATUS: OFF
+or
+STATUS: UNKNOWN
 
 Rules:
 - STATUS: ON  → connected / proxy active
 - STATUS: OFF → not connected / disconnected
-- No markdown, no JSON, no extra text."""
+- STATUS: UNKNOWN → home screen / SpringBoard / not Shadowrocket / cannot tell
+- No markdown, no JSON, no apologies, no extra text."""
+
+
+class VpnVisionUnreadable(RuntimeError):
+    """Vision could not read Shadowrocket (often still on the home screen)."""
 
 
 def _vpn_vision_model(app_config: AppConfig) -> str:
@@ -62,6 +69,28 @@ def _is_reasoning_vision_model(model: str) -> bool:
     return model.startswith("gpt-5") or model.startswith("o")
 
 
+def _looks_unreadable_vpn_reply(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return True
+    if re.search(r"(?i)\bSTATUS\s*:\s*UNKNOWN\b", lowered):
+        return True
+    needles = (
+        "can't determine",
+        "cannot determine",
+        "can't tell",
+        "cannot tell",
+        "i'm sorry",
+        "i am sorry",
+        "not sure",
+        "unable to",
+        "home screen",
+        "springboard",
+        "not shadowrocket",
+    )
+    return any(n in lowered for n in needles)
+
+
 def _parse_vpn_status(raw: str) -> VpnStatus:
     text = (raw or "").strip()
     if text.startswith("```"):
@@ -69,6 +98,9 @@ def _parse_vpn_status(raw: str) -> VpnStatus:
         if text.endswith("```"):
             text = text[: text.rfind("```")]
         text = text.strip()
+
+    if _looks_unreadable_vpn_reply(text):
+        raise VpnVisionUnreadable(f"VPN vision unreadable — raw={text[:180]!r}")
 
     match = re.search(r"(?im)^\s*STATUS\s*:\s*(ON|OFF)\s*$", text)
     if match:
@@ -78,7 +110,7 @@ def _parse_vpn_status(raw: str) -> VpnStatus:
     if inline:
         return "on" if inline.group(1).upper() == "ON" else "off"
 
-    raise RuntimeError(
+    raise VpnVisionUnreadable(
         "Vision reply must be 'STATUS: ON' or 'STATUS: OFF'; "
         f"got {text[:240]!r}"
     )
@@ -255,11 +287,15 @@ async def vision_read_vpn_status(
             continue
         try:
             status = _parse_vpn_status(raw)
+        except VpnVisionUnreadable:
+            raise
         except Exception:
             continue
         logger.info("vpn_vision_status", device_id=device_id, status=status, model=attempt_model)
         return status
 
+    if _looks_unreadable_vpn_reply(last_raw):
+        raise VpnVisionUnreadable(f"VPN vision status failed — raw={last_raw[:180]!r}")
     raise RuntimeError(f"VPN vision status failed — raw={last_raw[:180]!r}")
 
 
@@ -269,12 +305,14 @@ async def open_shadowrocket(
     device_id: str,
     *,
     settle_seconds: float | None = None,
+    icon_x_nudge: int = 0,
     log_activity: Any | None = None,
 ) -> None:
     """Go home and tap the fixed Shadowrocket home-screen icon."""
     from imouse_farm.actions.permission_prompts import tap_local_network_ok_if_visible
 
     ix, iy = _icon_coords(config)
+    ix = int(ix) + int(icon_x_nudge)
     settle = float(
         settle_seconds
         if settle_seconds is not None
@@ -297,6 +335,30 @@ async def open_shadowrocket(
     )
 
 
+async def _shadowrocket_ui_visible(
+    controller: DeviceController,
+    device_id: str,
+) -> bool:
+    """Cheap OCR check that Shadowrocket actually opened (not SpringBoard)."""
+    try:
+        matches = await controller.find_text_on_device(
+            device_id,
+            [
+                "Connected",
+                "Not Connected",
+                "Connecting",
+                "Global Routing",
+                "Proxy",
+                "Config",
+            ],
+            threshold=0.55,
+            contain=True,
+        )
+    except Exception:
+        return False
+    return bool(matches)
+
+
 async def ensure_vpn(
     controller: DeviceController,
     config: AppConfig,
@@ -310,52 +372,98 @@ async def ensure_vpn(
     tx, ty = _toggle_coords(config)
     after_toggle = float(config.vpn.after_toggle_settle_seconds)
     confirm_settle = float(config.vpn.confirm_settle_seconds)
+    max_attempts = max(1, int(getattr(config.vpn, "ensure_max_attempts", 3) or 3))
+    nudge = int(getattr(config.vpn, "icon_retry_nudge_x", 28) or 28)
 
-    await open_shadowrocket(controller, config, device_id, log_activity=log_activity)
-
-    status = await vision_read_vpn_status(
-        controller, device_id, app_config=config, log_activity=log_activity
-    )
-    if status == want:
-        if log_activity:
-            await log_activity(
-                "info",
-                "device",
-                f"Shadowrocket already {want.upper()} — skip toggle",
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        icon_nudge = (attempt - 1) * nudge
+        try:
+            await open_shadowrocket(
+                controller,
+                config,
                 device_id,
+                icon_x_nudge=icon_nudge,
+                settle_seconds=float(config.vpn.app_settle_seconds)
+                + (1.5 if attempt > 1 else 0.0),
+                log_activity=log_activity,
             )
-    else:
-        if log_activity:
-            await log_activity(
-                "info",
-                "device",
-                f"VPN is {status.upper()}; tapping toggle ({tx}, {ty}) → {want.upper()}",
-                device_id,
+
+            if not await _shadowrocket_ui_visible(controller, device_id):
+                raise VpnVisionUnreadable(
+                    "Shadowrocket UI not visible after icon tap "
+                    f"(attempt {attempt}/{max_attempts}, nudge_x={icon_nudge})"
+                )
+
+            status = await vision_read_vpn_status(
+                controller, device_id, app_config=config, log_activity=log_activity
             )
-        await controller.tap(device_id, tx, ty)
-        await asyncio.sleep(max(0.5, after_toggle))
+            if status == want:
+                if log_activity:
+                    await log_activity(
+                        "info",
+                        "device",
+                        f"Shadowrocket already {want.upper()} — skip toggle",
+                        device_id,
+                    )
+            else:
+                if log_activity:
+                    await log_activity(
+                        "info",
+                        "device",
+                        f"VPN is {status.upper()}; tapping toggle ({tx}, {ty}) → {want.upper()}",
+                        device_id,
+                    )
+                await controller.tap(device_id, tx, ty)
+                await asyncio.sleep(max(0.5, after_toggle))
 
-    if confirm_settle > 0:
-        await asyncio.sleep(confirm_settle)
+            if confirm_settle > 0:
+                await asyncio.sleep(confirm_settle)
 
-    confirmed = await vision_read_vpn_status(
-        controller, device_id, app_config=config, log_activity=log_activity
+            confirmed = await vision_read_vpn_status(
+                controller, device_id, app_config=config, log_activity=log_activity
+            )
+            if confirmed != want:
+                raise RuntimeError(
+                    f"VPN vision confirmed {confirmed.upper()}, expected {want.upper()}"
+                )
+            if log_activity:
+                await log_activity(
+                    "info",
+                    "device",
+                    f"VPN vision confirmed {want.upper()}",
+                    device_id,
+                )
+
+            if press_home_after:
+                await controller.press_home(device_id)
+                await asyncio.sleep(0.5)
+            return
+        except (VpnVisionUnreadable, RuntimeError) as exc:
+            last_error = exc
+            logger.warning(
+                "vpn_ensure_attempt_failed",
+                device_id=device_id,
+                want=want,
+                attempt=attempt,
+                max_attempts=max_attempts,
+                error=str(exc),
+            )
+            if log_activity:
+                await log_activity(
+                    "warning",
+                    "device",
+                    f"VPN ensure {want.upper()} attempt {attempt}/{max_attempts} failed — {exc}",
+                    device_id,
+                )
+            if attempt >= max_attempts:
+                break
+            await controller.press_home(device_id)
+            await asyncio.sleep(0.8)
+
+    raise RuntimeError(
+        f"VPN ensure {want.upper()} failed after {max_attempts} attempt(s): {last_error}"
     )
-    if confirmed != want:
-        raise RuntimeError(
-            f"VPN vision confirmed {confirmed.upper()}, expected {want.upper()}"
-        )
-    if log_activity:
-        await log_activity(
-            "info",
-            "device",
-            f"VPN vision confirmed {want.upper()}",
-            device_id,
-        )
-
-    if press_home_after:
-        await controller.press_home(device_id)
-        await asyncio.sleep(0.5)
 
 
 async def ensure_vpn_on(

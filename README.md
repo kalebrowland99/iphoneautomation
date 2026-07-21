@@ -4,6 +4,12 @@ Multi-device iPhone orchestration platform built directly on the **iMouseXP Pyth
 
 > **No GUI automation.** This project does not control the Windows iMouseXP desktop UI, use screen coordinates on your monitor, or depend on PyAutoGUI. All device communication goes through the official SDK.
 
+**USB board vs AirPlay:** the hardware board can tap/type/Home/Control Bar **without** Screen Mirroring; screenshots and vision need AirPlay. See [docs/imouse-usb-vs-airplay.md](docs/imouse-usb-vs-airplay.md) (refs: [iosautot.com](https://www.iosautot.com/#视频教程), [Some3C](https://doc.some3c.com/iphone-farm-setup/xp-api-documentation/python-library)).
+
+**Daily 5 AM start:** Windows Task Scheduler — same idea as androidautomationig’s LaunchAgent. See [docs/morning-start.md](docs/morning-start.md).
+
+**Telegram alerts:** android-style `config/telegram.yml` — see [docs/telegram.md](docs/telegram.md).
+
 ## Architecture
 
 ```

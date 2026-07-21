@@ -224,18 +224,21 @@ class DeviceManager:
         self._last_airplay_attempt[device_id] = now
 
         logger.info("airplay_reconnect_attempt", device_id=device_id, mode="control_bar_ui")
-        from imouse_farm.actions.cast_ui import ensure_cast_via_control_bar
+        from imouse_farm.actions.cast_ui import ensure_cast_via_control_bar_retries
 
         def _online(did: str) -> bool:
             d = self._devices.get(did)
             return bool(d and d.is_online)
 
-        success = await ensure_cast_via_control_bar(
+        # Same Control Bar cast as dashboard Cast toggle / farm batch.
+        success = await ensure_cast_via_control_bar_retries(
             self._controller,
             device_id,
             self._config.batch.cast_ui,
             refresh_devices=self.refresh_devices,
             is_online=_online,
+            max_attempts=int(self._config.batch.cast_connect_max_attempts),
+            retry_seconds=float(self._config.batch.cast_connect_retry_seconds),
         )
         if success:
             self._reconnect_queue.discard(device_id)

@@ -6,6 +6,8 @@ Use this doc when editing device control, actions, album/keyboard/mouse APIs, or
 
 | Topic | URL |
 |-------|-----|
+| **USB board vs AirPlay (this farm)** | [imouse-usb-vs-airplay.md](imouse-usb-vs-airplay.md) |
+| iMouse product + video tutorials | https://www.iosautot.com/#视频教程 |
 | Python library overview | https://doc.some3c.com/iphone-farm-setup/xp-api-documentation/python-library |
 | Python library (`.md` for agents) | https://doc.some3c.com/iphone-farm-setup/xp-api-documentation/python-library.md |
 | iMouse XP product / kernel | https://doc.some3c.com/iphone-farm-setup/imouse-xp-new-version |

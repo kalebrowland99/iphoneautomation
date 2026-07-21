@@ -96,6 +96,7 @@ function setRunStepActive(phase) {
 
 function syncRunControlButtons(extra = {}) {
     const btnRun = document.getElementById('btn-run');
+    const btnRunDebug = document.getElementById('btn-run-debug');
     const btnKill = document.getElementById('btn-kill');
     const embedStopBtn = document.getElementById('btn-slideshow-embed-stop');
     const jobRunning = String(extra.slideshowJob?.status || currentSlideshowJob?.status || '').toLowerCase() === 'running';
@@ -107,6 +108,7 @@ function syncRunControlButtons(extra = {}) {
         || batchRunning
         || Boolean(extra.orchestratorBusy);
     if (btnRun) btnRun.disabled = busy;
+    if (btnRunDebug) btnRunDebug.disabled = busy;
     if (btnKill) btnKill.disabled = !busy;
     if (embedStopBtn) embedStopBtn.disabled = !busy;
 }
@@ -625,6 +627,24 @@ function stopSlideshowPoll() {
             }
         }
 
+        /** Skip slideshow generation — jump straight to farm batch on selected phones. */
+        async function startDebugRun() {
+            void tileSplitWindows();
+            appendRunLog(
+                'Run debug — skipping slideshow generation; seeding sample videos if gallery empty',
+                'info',
+                'run',
+            );
+            applyRunProgress({
+                phase: 'batch',
+                phase_label: 'Post',
+                progress: 5,
+                message: 'Debug run: starting automation (no slideshow gen)',
+                active: true,
+            });
+            await startFarmBatch({ skipConfirm: true, seedSampleMedia: true });
+        }
+
         async function generateAndRunSlideshow() {
     const slots = [...batchSelectedSlots].map(s => parseInt(s, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
     if (!slots.length) {
@@ -726,7 +746,7 @@ async function stopDailyRun() {
             const status = profile.last_run_status || 'idle';
             const posts = profile.posts_completed || 0;
             const target = profile.posts_target || 3;
-            return `Run status: ${status} · ${posts}/${target} posts · ${handle}`;
+            return `Run status: ${status} · ${posts}/${target} posts confirmed · ${handle}`;
         }
 
         async function loadSlotProfiles() {
@@ -1025,17 +1045,20 @@ async function stopDailyRun() {
             return `${day} days ago`;
         }
 
-        function phoneStatusCell(d, online, pipe) {
+        function phoneStatusCell(d, online, pipe, profile) {
             if (!d) {
                 return { label: '—', badge: 'empty', pipeHint: '' };
             }
             let pipeHint = '';
+            const posts = Number(profile?.posts_completed || 0);
+            const target = Number(profile?.posts_target || 3) || 3;
             if (pipe && pipe.status === 'running') {
-                pipeHint = `<span class="chip-pipe">${pipe.step}/${pipe.total_steps}</span>`;
+                // Successful final Post taps this run (Post → + detected), not pipeline step index.
+                pipeHint = `<span class="chip-pipe" title="Successful Post button presses this run">${posts}/${target}</span>`;
                 return { label: 'Running', badge: 'ACTIVE', pipeHint };
             }
             if (pipe && pipe.status === 'paused') {
-                pipeHint = '<span class="chip-pipe">||</span>';
+                pipeHint = `<span class="chip-pipe" title="Successful Post button presses this run">${posts}/${target}</span>`;
             }
             if (online) {
                 return { label: 'Connected', badge: 'CONNECTED', pipeHint };
@@ -1083,12 +1106,13 @@ async function stopDailyRun() {
                 const checked = hasDevice && batchSelectedSlots.has(key);
                 const online = Boolean(d && d.connected);
                 const pipe = d && d.pipeline;
-                const statusInfo = phoneStatusCell(d, online, pipe);
                 const profile = d?.account_profile || slotProfiles[`slot:${key}`] || null;
                 const handle = profile?.tiktok_handle || '';
+                const statusInfo = phoneStatusCell(d, online, pipe, profile);
                 const warmupEnabled = BRAND_ID === 'valcoin' && Boolean(profile?.warmup_enabled);
                 const warmupDays = parseInt(profile?.warmup_days_completed || 0, 10);
                 const cantCast = Boolean(profile?.cant_cast_imouse);
+                const chordIssue = Boolean(profile?.chord_issue);
                 const phoneDead = isPhoneDead(key);
                 const excluded = Boolean(d && d.excluded);
                 const disabled = Boolean(d && d.disabled);
@@ -1121,6 +1145,7 @@ async function stopDailyRun() {
                         ${phoneDead ? `<span class="phone-dead-badge">phone dead</span>` : ''}
                         ${excluded ? `<span class="phone-dead-badge" title="Excluded from automation (personal phone)">personal — not automated</span>` : ''}
                         ${cantCast ? `<span class="cant-cast-badge" title="Click to clear tag" onclick="event.stopPropagation(); clearCantCast('${key}')">⚠ cant cast iMouse</span>` : ''}
+                        ${chordIssue ? `<span class="chord-issue-badge" title="Possible Lightning/chord issue — click to clear" onclick="event.stopPropagation(); clearChordIssue('${key}')">⚠ possible chord issue</span>` : ''}
                         ${uiLabel ? `<span class="ui-label-badge" title="This phone uses alternate TikTok UI coordinates">${escapeHtml(uiLabel)}</span>` : ''}
                         ${disabled ? `<span class="phone-dead-badge" title="This account is locked — won't be used by automation">account disabled</span>` : ''}
                         ${hasDevice ? `<div class="phones-account-row">
@@ -2370,6 +2395,9 @@ async function stopDailyRun() {
                 await flushPostTextSaves();
                 await flushCaptionAiSettings();
                 const batchBody = { slots, from_post: fromPost, brand: BRAND_ID };
+                if (opts.seedSampleMedia) {
+                    batchBody.seed_sample_media = true;
+                }
                 if (BRAND_ID === 'labely') {
                     batchBody.valcoin_slots = valcoinPostSlotsForLabelyRun(slots).map((s) => parseInt(s, 10));
                 }
@@ -2378,6 +2406,18 @@ async function stopDailyRun() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(batchBody),
                 });
+                if (opts.seedSampleMedia && res?.seed_sample_media) {
+                    const info = res.seed_sample_media;
+                    const labelyN = info.labely?.slots_seeded ?? info.slots_seeded ?? 0;
+                    const valcoinN = info.valcoin?.slots_seeded ?? 0;
+                    if (labelyN || valcoinN) {
+                        appendRunLog(
+                            `Seeded sample videos — labely slots: ${labelyN}, valcoin slots: ${valcoinN}`,
+                            'info',
+                            'batch',
+                        );
+                    }
+                }
                 updateBatchUI(res.status || {});
                 refreshFarmDevices({ quiet: true });
                 refreshActivity();
@@ -2411,6 +2451,15 @@ async function stopDailyRun() {
             try {
                 await api(`/batch/clear-cant-cast/${encodeURIComponent(slot)}`, { method: 'POST' });
                 appendRunLog(`Cleared cant cast tag for slot ${slot}`, 'info', 'batch');
+                refreshFarmDevices({ quiet: true });
+            } catch (err) { alert(`Clear failed: ${err.message}`); }
+        }
+
+        async function clearChordIssue(slot) {
+            if (!confirm(`Clear "possible chord issue" tag for slot ${slot}?`)) return;
+            try {
+                await api(`/batch/clear-chord-issue/${encodeURIComponent(slot)}`, { method: 'POST' });
+                appendRunLog(`Cleared chord-issue tag for slot ${slot}`, 'info', 'batch');
                 refreshFarmDevices({ quiet: true });
             } catch (err) { alert(`Clear failed: ${err.message}`); }
         }

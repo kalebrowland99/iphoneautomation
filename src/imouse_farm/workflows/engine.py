@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
-from imouse_farm.actions.cast_ui import ensure_cast_via_control_bar
+from imouse_farm.actions.cast_ui import ensure_cast_via_control_bar_retries
 from imouse_farm.actions.engine import ActionEngine
 from imouse_farm.actions.pre_touch_reset import is_tiktok_workflow
 from imouse_farm.config.models import (
@@ -257,11 +257,6 @@ class WorkflowRunner:
                     await self._execute_step(step)
                     if self._iteration_completed_by_recovery:
                         break
-
-                if self._workflow.name == "tiktok_post" and not self._step_failed:
-                    from imouse_farm.post.account_profile_store import mark_post_completed
-
-                    mark_post_completed(self._post_text_key(), iteration, brand=self._brand)
 
                 if not self._workflow.loop:
                     break
@@ -721,6 +716,27 @@ class WorkflowRunner:
             # expected element is present before proceeding to the next step.
             if step.screen_check:
                 await self._verify_screen_check(step)
+            if (
+                self._workflow.name == "tiktok_post"
+                and step.name == "confirm_post_via_plus"
+                and not self._step_failed
+            ):
+                from imouse_farm.post.account_profile_store import mark_post_completed
+
+                completed = mark_post_completed(
+                    self._post_text_key(),
+                    int(self._variables.get("post_index") or 0),
+                    brand=self._brand,
+                )
+                target = int(self._variables.get("post_count") or self._post_count or 3)
+                await self._log_activity(
+                    "info",
+                    "workflow",
+                    f"Post confirmed (+ visible) — {completed}/{target} successful Post taps",
+                    step=step.name,
+                    posts_completed=completed,
+                    posts_target=target,
+                )
         except Exception as exc:
             logger.error("step_failed", step=step.name, device_id=self._device_id, error=str(exc))
             self._record_workflow_error(step, exc)
@@ -1019,19 +1035,21 @@ class WorkflowRunner:
         return True
 
     async def _reconnect_cast_with_fallback(self) -> bool:
-        """Re-cast via Control Bar UI (no airplay/connect API)."""
+        """Re-cast via Control Bar UI — same path as dashboard Cast toggle."""
         cast_cfg = self._config.batch.cast_ui
 
         def _online(did: str) -> bool:
             device = self._device_manager.get_device(did)
             return bool(device and device.is_online)
 
-        return await ensure_cast_via_control_bar(
+        return await ensure_cast_via_control_bar_retries(
             self._device_manager.controller,
             self._device_id,
             cast_cfg,
             refresh_devices=self._device_manager.refresh_devices,
             is_online=_online,
+            max_attempts=int(self._config.batch.cast_connect_max_attempts),
+            retry_seconds=float(self._config.batch.cast_connect_retry_seconds),
         )
 
     async def _open_tiktok_from_home(self, *, parent_step: str) -> None:

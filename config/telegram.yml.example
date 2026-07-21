@@ -1,0 +1,14 @@
+# Copy to telegram.yml and fill in (telegram.yml is gitignored).
+# Same keys as androidautomationig accounts/*/telegram.yml
+#
+# 1. Message @BotFather on Telegram → /newbot → copy token
+# 2. Message your bot, then open:
+#    https://api.telegram.org/bot<TOKEN>/getUpdates
+#    and copy your chat id (or use a group id)
+#
+# telegram-api-token: '123456:ABC-DEF...'
+# telegram-chat-id: '5965301633'
+
+telegram-api-token: 'your-telegram-bot-token'
+telegram-chat-id: 'your-chat-id'
+telegram-alerts: true

@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from imouse_farm.config.models import AppConfig, WorkflowConfig
+from imouse_farm.notifications.telegram_config import resolve_telegram_credentials
 from imouse_farm.utils.env_file import load_env_file
 
 
@@ -21,7 +22,8 @@ def load_config(path: str | Path) -> AppConfig:
     config_path = Path(path)
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
-    load_env_file(config_path.parent.parent / ".env")
+    project_root = config_path.parent.parent
+    load_env_file(project_root / ".env")
     data = _load_yaml(config_path)
     nav_path = config_path.parent / "tiktok_navigation.yaml"
     if nav_path.exists() and "tiktok_navigation" not in data:
@@ -30,6 +32,15 @@ def load_config(path: str | Path) -> AppConfig:
     env_secret = os.environ.get("FARM_SECRET", "").strip()
     if env_secret and not str(slideshow.get("farm_secret") or "").strip():
         slideshow["farm_secret"] = env_secret
+    # androidautomationig-style config/telegram.yml (or %LOCALAPPDATA%\iMouseFarm\telegram.yml)
+    token, chat_id = resolve_telegram_credentials(project_root)
+    if token and chat_id:
+        notifications = data.setdefault("notifications", {})
+        telegram = notifications.setdefault("telegram", {})
+        telegram["enabled"] = True
+        telegram["bot_token"] = token
+        telegram["chat_id"] = chat_id
+        notifications["enabled"] = True
     return AppConfig.model_validate(data)
 
 

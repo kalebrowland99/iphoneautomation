@@ -60,6 +60,7 @@ def _default_profile(brand: str = "labely") -> dict[str, Any]:
         "prep_completed_at": None,
         "cant_cast_imouse": False,
         "phone_dead": False,
+        "chord_issue": False,
         "disabled": False,
         "notes": "",
     }
@@ -126,6 +127,7 @@ def _normalize_profile(data: dict[str, Any], brand: str) -> dict[str, Any]:
         "prep_completed_at": prep_at or None,
         "cant_cast_imouse": bool(data.get("cant_cast_imouse", False)),
         "phone_dead": bool(data.get("phone_dead", False)),
+        "chord_issue": bool(data.get("chord_issue", False)),
         "disabled": bool(data.get("disabled", False)),
         "notes": str(data.get("notes", "") or "").strip()[:500],
     })
@@ -310,13 +312,19 @@ def mark_run_started(device_key: str, *, brand: str = "labely") -> None:
     _save_store()
 
 
-def mark_post_completed(device_key: str, post_index: int, *, brand: str = "labely") -> None:
+def mark_post_completed(device_key: str, post_index: int = 0, *, brand: str = "labely") -> int:
+    """Record a successful Post tap (confirmed when + button is visible afterward).
+
+    Uses the post index so a recovery retry of the same post does not double-count.
+    """
     key = brand_profile_key(device_key, brand)
     profile = get_profile(key, brand=brand)
-    profile["posts_completed"] = max(int(profile.get("posts_completed", 0)), int(post_index))
+    completed = max(int(profile.get("posts_completed", 0) or 0), max(0, int(post_index)))
+    profile["posts_completed"] = completed
     profile["last_run_status"] = "running"
     _store[key] = profile
     _save_store()
+    return completed
 
 
 def mark_run_success(
@@ -416,6 +424,29 @@ def is_phone_dead(base_key: str) -> bool:
     for brand in VALID_BRANDS:
         key = brand_profile_key(base_key, brand)
         if _store.get(key, {}).get("phone_dead"):
+            return True
+    return False
+
+
+def set_chord_issue(base_key: str, *, issue: bool = True) -> None:
+    """Tag a slot as possible Lightning/chord problems — all brand profiles."""
+    for brand in VALID_BRANDS:
+        key = brand_profile_key(base_key, brand)
+        profile = get_profile(key, brand=brand)
+        profile["chord_issue"] = bool(issue)
+        _store[key] = profile
+    _save_store()
+
+
+def clear_chord_issue(base_key: str) -> None:
+    set_chord_issue(base_key, issue=False)
+
+
+def is_chord_issue(base_key: str) -> bool:
+    """Return True if ANY brand profile for this slot has chord_issue=True."""
+    for brand in VALID_BRANDS:
+        key = brand_profile_key(base_key, brand)
+        if _store.get(key, {}).get("chord_issue"):
             return True
     return False
 

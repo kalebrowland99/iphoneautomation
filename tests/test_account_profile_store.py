@@ -48,6 +48,19 @@ def test_phone_dead_persists_on_load(tmp_path: Path) -> None:
     assert labely["cant_cast_imouse"] is False
 
 
+def test_chord_issue_tag(tmp_path: Path) -> None:
+    store.set_chord_issue("slot:2", issue=True)
+    store.set_chord_issue("slot:7", issue=True)
+    store.set_chord_issue("slot:9", issue=True)
+    store._load_store()
+    assert store.is_chord_issue("slot:2") is True
+    assert store.is_chord_issue("slot:7") is True
+    assert store.is_chord_issue("slot:9") is True
+    assert store.get_brand_profile("slot:2", "labely")["chord_issue"] is True
+    store.clear_chord_issue("slot:2")
+    assert store.is_chord_issue("slot:2") is False
+
+
 def test_set_profile_persists_warmup_enabled() -> None:
     store.set_profile("slot:2", tiktok_handle="@acct", brand="labely", warmup_enabled=True)
     profile = store.get_brand_profile("slot:2", "labely")
@@ -76,6 +89,10 @@ def test_mark_run_lifecycle() -> None:
     assert p["posts_completed"] == 0
 
     store.mark_post_completed(key, 2, brand="labely")
+    p = store.get_brand_profile(key, "labely")
+    assert p["posts_completed"] == 2
+
+    store.mark_post_completed(key, 2, brand="labely")  # recovery retry — no double count
     p = store.get_brand_profile(key, "labely")
     assert p["posts_completed"] == 2
 

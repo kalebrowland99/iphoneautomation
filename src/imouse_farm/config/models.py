@@ -297,6 +297,9 @@ class VpnConfig(BaseModel):
     after_toggle_settle_seconds: float = 4.0
     confirm_settle_seconds: float = 2.0
     vision_model: str = "gpt-4o"
+    # Re-open Shadowrocket + re-read vision when icon miss leaves us on SpringBoard.
+    ensure_max_attempts: int = 3
+    icon_retry_nudge_x: int = 28
 
 
 class CastUiConfig(BaseModel):
@@ -306,15 +309,22 @@ class CastUiConfig(BaseModel):
     wake_screen: bool = True
     wake_settle_seconds: float = 3.5
     post_home_settle_seconds: float = 1.25
+    # After wake/home: tap Cancel (just in case a popup is covering the screen)
+    dismiss_cancel_x: int = 162
+    dismiss_cancel_y: int = 653
+    after_dismiss_cancel_seconds: float = 0.5
     # iMouseXP console "Control Bar" button → /key/sendkey fn_key
     control_bar_fn_key: str = "ControlBar"
     after_control_bar_seconds: float = 1.5
-    screen_mirroring_x: int = 159
-    screen_mirroring_y: int = 384
+    screen_mirroring_x: int = 238
+    screen_mirroring_y: int = 536
     after_mirroring_seconds: float = 10.0
-    target_x: int = 178
-    target_y: int = 316
+    target_x: int = 311
+    target_y: int = 475
     after_target_seconds: float = 2.0
+    # Screen Mirroring + AirPlay target taps (1 = single, 2 = double-tap)
+    ui_tap_count: int = 1
+    ui_tap_interval_seconds: float = 0.35
     # Poll iMouse device state==1 after the UI sequence
     confirm_timeout_seconds: float = 20.0
     confirm_poll_seconds: float = 1.0

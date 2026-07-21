@@ -41,6 +41,11 @@ def _cast_cfg(**kwargs: object) -> CastUiConfig:
         confirm_poll_seconds=0.01,
         home_after_connect_count=3,
         home_after_connect_interval_seconds=0,
+        ui_tap_count=2,
+        ui_tap_interval_seconds=0,
+        dismiss_cancel_x=162,
+        dismiss_cancel_y=653,
+        after_dismiss_cancel_seconds=0,
     )
     base.update(kwargs)
     return CastUiConfig(**base)  # type: ignore[arg-type]
@@ -80,6 +85,7 @@ async def test_ensure_cast_control_bar_sequence_then_online() -> None:
     dm.controller.press_home = _home
     dm.controller.send_fn_key = _fn
     dm.controller.tap = _tap
+    dm.controller.reset_cursor = AsyncMock(return_value=True)
     dm.reconnect_airplay = AsyncMock(return_value=True)
     dm.refresh_devices = AsyncMock()
     dm.get_device = MagicMock(side_effect=_get_device)
@@ -93,13 +99,18 @@ async def test_ensure_cast_control_bar_sequence_then_online() -> None:
     assert order == [
         "unlock",
         "home",
+        "tap:162,653",
         "fn:ControlBar",
         "tap:159,384",
+        "tap:159,384",
+        "tap:178,316",
         "tap:178,316",
         "home",
         "home",
         "home",
     ]
+    # Double mouse_reset before each coordinate tap (cancel + 2 mirror + 2 target).
+    assert dm.controller.reset_cursor.await_count == 10
     dm.reconnect_airplay.assert_not_awaited()
 
 
@@ -112,6 +123,7 @@ async def test_ensure_cast_skips_when_already_online() -> None:
     dm.controller.send_fn_key = AsyncMock(return_value=True)
     dm.controller.press_unlock = AsyncMock(return_value=True)
     dm.controller.press_home = AsyncMock(return_value=True)
+    dm.controller.reset_cursor = AsyncMock(return_value=True)
     dm.reconnect_airplay = AsyncMock(return_value=True)
     dm.refresh_devices = AsyncMock()
     dm.get_device = MagicMock(return_value=online)
@@ -125,6 +137,7 @@ async def test_ensure_cast_skips_when_already_online() -> None:
     dm.controller.tap.assert_not_awaited()
     dm.controller.send_fn_key.assert_not_awaited()
     dm.controller.press_home.assert_not_awaited()
+    dm.controller.reset_cursor.assert_not_awaited()
     dm.reconnect_airplay.assert_not_awaited()
 
 
@@ -137,6 +150,7 @@ async def test_ensure_cast_fails_when_never_online() -> None:
     dm.controller.press_home = AsyncMock(return_value=True)
     dm.controller.send_fn_key = AsyncMock(return_value=True)
     dm.controller.tap = AsyncMock(return_value=True)
+    dm.controller.reset_cursor = AsyncMock(return_value=True)
     dm.reconnect_airplay = AsyncMock(return_value=True)
     dm.refresh_devices = AsyncMock()
     dm.get_device = MagicMock(return_value=offline)
@@ -149,6 +163,7 @@ async def test_ensure_cast_fails_when_never_online() -> None:
     assert ok is False
     dm.reconnect_airplay.assert_not_awaited()
     assert dm.controller.send_fn_key.await_count == 1
-    assert dm.controller.tap.await_count == 2
+    # dismiss Cancel + 2× mirroring + 2× target
+    assert dm.controller.tap.await_count == 5
     # Wake home once only — no post-connect homes on failure.
     assert dm.controller.press_home.await_count == 1

@@ -36,12 +36,8 @@ export function pickLabelyOutroText(seed = "") {
   return pool[idx];
 }
 
-export function shouldShowLabelyOutro(config, itemIndex = 0) {
-  if ((config?.appId ?? "thrifty") !== "labely") return false;
-  if (isLabelySingleSlideFormat(config)) return true;
-  if (isLabelyScanTourFormat(config)) {
-    return Number(itemIndex) === scanTourSlotCount(config) - 1;
-  }
+export function shouldShowLabelyOutro(_config, _itemIndex = 0) {
+  // Outro CTA (“i use this app… / labely”) disabled — last slides show product UI only.
   return false;
 }
 

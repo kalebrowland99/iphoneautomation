@@ -173,13 +173,13 @@ class SlideshowOrchestrator:
         )
 
         if run_batch:
-            # Per-slot pipeline: each slot encodes its own video then immediately
-            # runs the batch for that phone. No all-slots URL is opened upfront.
+            # Encode every phone first (one at a time for WebCodecs), then one farm batch.
+            # Matches pre-Jul-2 order: generate videos → captions → run farm.
             await self._jobs.update(
                 job.id,
                 status="running",
                 phase="automation",
-                message=f"Starting per-slot pipeline for {len(slot_list)} phone(s)…",
+                message=f"Encoding videos for {len(slot_list)} phone(s), then farm batch…",
             )
             self._tasks[job.id] = asyncio.create_task(self._run_job(job.id))
             return {"job": (await self._jobs.get(job.id)).to_dict(), "automation_url": ""}
@@ -218,8 +218,8 @@ class SlideshowOrchestrator:
                 f"(need {required} MP4(s) per slot) — remake required"
             )
 
-        # Sub-jobs (run_batch=False) are created by _run_per_slot_pipeline.
-        # Just mark them complete — the pipeline handles the batch itself.
+        # Sub-jobs (run_batch=False) are created by the encode-then-batch pipeline.
+        # Just mark them complete — the parent job handles captions/batch.
         await self._jobs.update(
             job_id,
             status="completed",
@@ -703,8 +703,14 @@ class SlideshowOrchestrator:
 
     async def _run_per_slot_pipeline(self, job_id: str) -> None:
         """
-        Per-slot pipeline: for each phone, encode one video → run batch → next phone.
-        Keeps WebCodecs encoder from being overwhelmed by parallel encoding jobs.
+        Encode all phones first (sequentially), then run one farm batch.
+
+        Order matches the pre-per-slot farm flow:
+        1) Labely (+ ValCoin) slideshows for every slot
+        2) captions
+        3) farm batch for all ready phones
+
+        Encoding stays one-slot-at-a-time so WebCodecs is not overwhelmed.
         """
         job = await self._jobs.get(job_id)
         if not job:
@@ -721,11 +727,9 @@ class SlideshowOrchestrator:
             return
 
         if self._farm_batch.is_running():
-            # Queue behind the in-flight batch instead of failing outright. A new
-            # run started before the previous one finished should wait its turn.
             await self._jobs.update(
                 job_id,
-                message="Waiting for the current farm batch to finish before starting…",
+                message="Waiting for the current farm batch to finish before encoding…",
             )
             logger.info("slideshow_waiting_for_batch", job_id=job_id)
             await self._farm_batch.wait_done(timeout=self._config.automation_timeout_seconds)
@@ -741,22 +745,24 @@ class SlideshowOrchestrator:
             and self._app_config.batch.chain_valcoin_after_labely
         )
         valcoin_post_slots = self._valcoin_post_slots(job)
-        completed = 0
+        ready: list[Any] = []
         total = len(selected)
 
+        # ── Phase 1: encode (+ captions) for every slot — no farm yet ──
         for idx, device in enumerate(selected, 1):
             slot = str(device.user_name)
             is_warmup = self._is_warmup_slot(slot, job.brand)
 
-            # Step 1 — encode video for this slot only (skip warmup or when gallery ready).
             if is_warmup:
                 await self._jobs.update(
                     job_id,
-                    phase="batch",
+                    phase="automation",
                     message=f"Phone {idx}/{total}: warmup for {slot}, skipping video…",
                 )
-                ok = True
-            elif self._slot_has_valid_videos(slot, job.brand, job=job):
+                ready.append(device)
+                continue
+
+            if self._slot_has_valid_videos(slot, job.brand, job=job):
                 await self._jobs.update(
                     job_id,
                     phase="automation",
@@ -767,7 +773,7 @@ class SlideshowOrchestrator:
                 await self._jobs.update(
                     job_id,
                     phase="automation",
-                    message=f"Phone {idx}/{total}: encoding video for {slot}…",
+                    message=f"Phone {idx}/{total}: encoding {job.brand} video for {slot}…",
                 )
                 sub_job = await self._jobs.create(
                     brand=job.brand,
@@ -776,104 +782,114 @@ class SlideshowOrchestrator:
                     videos_per_slot=int(job.videos_per_slot or 0),
                     parent_job_id=job_id,
                 )
-                await self._jobs.update(sub_job.id, status="running", phase="automation", message=f"Encoding {slot}…")
-
+                await self._jobs.update(
+                    sub_job.id, status="running", phase="automation", message=f"Encoding {slot}…"
+                )
                 ok = await self._execute_slideshow_generation(sub_job.id, parent_job_id=job_id)
-
-                # Tear down the embed so WebCodecs / GPU memory is released before the next phone.
                 await self._jobs.update(
                     job_id,
                     automation_url="",
-                    message=f"Phone {idx}/{total}: encode done for {slot}, preparing next phone…",
+                    message=f"Phone {idx}/{total}: encode done for {slot}",
                 )
                 await asyncio.sleep(3.0)
 
             if not ok:
-                logger.warning("per_slot_video_failed", slot=slot)
-                await self._jobs.update(job_id, message=f"Phone {idx}/{total}: video failed for {slot}, skipping…")
+                logger.warning("encode_then_batch_video_failed", slot=slot)
+                await self._jobs.update(
+                    job_id,
+                    message=f"Phone {idx}/{total}: video failed for {slot}, skipping…",
+                )
                 continue
 
-            # Step 2 — captions need gallery MP4s from step 1 (warmup-only slots skip).
-            if not is_warmup:
-                run_valcoin_encode = (
-                    chain_valcoin
-                    and self._slot_chains_valcoin_post(job, slot)
-                    and not self._is_warmup_slot(slot, "valcoin")
+            run_valcoin_encode = (
+                chain_valcoin
+                and self._slot_chains_valcoin_post(job, slot)
+                and not self._is_warmup_slot(slot, "valcoin")
+            )
+            if run_valcoin_encode and not self._slot_has_valid_videos(
+                slot, "valcoin", job=job
+            ):
+                await self._jobs.update(
+                    job_id,
+                    message=f"Phone {idx}/{total}: encoding ValCoin video for {slot}…",
                 )
-                valcoin_encode_task: asyncio.Task[None] | None = None
-                if run_valcoin_encode:
-                    await self._jobs.update(
-                        job_id,
-                        message=f"Phone {idx}/{total}: generating ValCoin video for {slot}…",
+                try:
+                    await self._generate_brand_slideshows(
+                        "valcoin", [slot], parent_job_id=job_id
                     )
-                    valcoin_encode_task = asyncio.create_task(
-                        self._generate_brand_slideshows(
-                            "valcoin", [slot], parent_job_id=job_id
-                        )
-                    )
+                except RuntimeError as exc:
+                    logger.warning("valcoin_slideshow_failed", slot=slot, error=str(exc))
+                    continue
+                await self._jobs.update(job_id, automation_url="")
 
+            if not await self._generate_captions_for_slot(
+                job_id,
+                device,
+                brand=job.brand,
+                slot_index=idx,
+                slot_total=total,
+            ):
+                continue
+
+            if run_valcoin_encode:
                 if not await self._generate_captions_for_slot(
                     job_id,
                     device,
-                    brand=job.brand,
+                    brand="valcoin",
                     slot_index=idx,
                     slot_total=total,
                 ):
-                    if valcoin_encode_task is not None:
-                        valcoin_encode_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await valcoin_encode_task
                     continue
 
-                if valcoin_encode_task is not None:
-                    try:
-                        await valcoin_encode_task
-                    except RuntimeError as exc:
-                        logger.warning("valcoin_slideshow_failed", slot=slot, error=str(exc))
-                        continue
-                    # ValCoin embed generation finished — clear the URL so the
-                    # dashboard tears the iframe down before captions/posting.
-                    await self._jobs.update(job_id, automation_url="")
-                    if not await self._generate_captions_for_slot(
-                        job_id,
-                        device,
-                        brand="valcoin",
-                        slot_index=idx,
-                        slot_total=total,
-                    ):
-                        continue
+            ready.append(device)
 
-            # Step 3 — run batch for this slot.
+        if not ready:
             await self._jobs.update(
                 job_id,
+                status="failed",
+                phase="automation",
+                error="No phones had videos/captions ready for farm batch",
+            )
+            return
+
+        # ── Phase 2: one farm batch for every ready phone ──
+        await self._jobs.update(
+            job_id,
+            phase="batch",
+            message=f"Videos ready — starting farm batch for {len(ready)} phone(s)…",
+            automation_url="",
+        )
+        started = await self._farm_batch.start(
+            ready,
+            brand=job.brand,
+            valcoin_slots=valcoin_post_slots,
+        )
+        if started:
+            if not await self._farm_batch.wait_done():
+                await self._jobs.update(
+                    job_id,
+                    phase="batch",
+                    message=(
+                        f"Farm batch still running ({len(ready)} phone(s); "
+                        "post + warmup can exceed 30 min)…"
+                    ),
+                )
+            await self._farm_batch.wait_until_idle()
+        else:
+            logger.warning("encode_then_batch_not_started", job_id=job_id)
+            await self._jobs.update(
+                job_id,
+                status="failed",
                 phase="batch",
-                message=f"Phone {idx}/{total}: posting for {slot}…",
+                error="Farm batch failed to start after encoding",
             )
-            started = await self._farm_batch.start(
-                [device],
-                brand=job.brand,
-                valcoin_slots=valcoin_post_slots,
-            )
-            if started:
-                if not await self._farm_batch.wait_done():
-                    await self._jobs.update(
-                        job_id,
-                        phase="batch",
-                        message=(
-                            f"Phone {idx}/{total}: still running {slot} "
-                            f"(post + warmup can exceed 30 min)…"
-                        ),
-                    )
-                await self._farm_batch.wait_until_idle()
-            else:
-                logger.warning("per_slot_batch_not_started", slot=slot)
-            completed += 1
+            return
 
         await self._jobs.update(
             job_id,
             status="completed",
             phase="done",
-            message=f"Done — {completed}/{total} phone(s) processed.",
+            message=f"Done — encoded then farmed {len(ready)}/{total} phone(s).",
         )
 
     async def _run_job(self, job_id: str) -> None:
@@ -883,7 +899,7 @@ class SlideshowOrchestrator:
 
         try:
             if job.run_batch:
-                # Per-slot: encode video → batch → next phone.
+                # Encode all phones first, then one farm batch.
                 await self._run_per_slot_pipeline(job_id)
             else:
                 # Video-only: generate all slots at once (no batch to run).

@@ -128,6 +128,8 @@ vpn:
   after_toggle_settle_seconds: 4
   confirm_settle_seconds: 2
   vision_model: "gpt-4o"
+  ensure_max_attempts: 3
+  icon_retry_nudge_x: 28
 
 # Per-phone TikTok UI overrides (farm slot number = iMouse user_name).
 tiktok_device_ui:
@@ -150,14 +152,21 @@ batch:
     wake_screen: true
     wake_settle_seconds: 3.5
     post_home_settle_seconds: 1.25
+    # After wake: Cancel button (dismiss popups before Control Bar)
+    dismiss_cancel_x: 162
+    dismiss_cancel_y: 653
+    after_dismiss_cancel_seconds: 0.5
     control_bar_fn_key: ControlBar
     after_control_bar_seconds: 1.5
-    screen_mirroring_x: 159
-    screen_mirroring_y: 384
+    screen_mirroring_x: 238
+    screen_mirroring_y: 536
     after_mirroring_seconds: 10
-    target_x: 178
-    target_y: 316
+    target_x: 311
+    target_y: 475
     after_target_seconds: 2
+    # Single tap Screen Mirroring + AirPlay target
+    ui_tap_count: 1
+    ui_tap_interval_seconds: 0.35
     confirm_timeout_seconds: 20
     confirm_poll_seconds: 1
     home_after_connect_count: 3
@@ -168,7 +177,7 @@ batch:
   chain_valcoin_after_labely: true
   skip_prep_when_valid: true
   # Phones that often hit album/SDK 调用超时 — reboot then cast before prep/post.
-  flawed_timeout_slots: [2, 7, 9, 16, 18, 20]
+  flawed_timeout_slots: []
   # Personal phones — never automated (like slot 11). No prep/post/warmup/videos.
   excluded_slots: [12]
   session_recording:

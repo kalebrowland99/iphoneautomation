@@ -24,6 +24,9 @@ logs/
 data/screenshots/
 *.log
 
+# Telegram bot secrets (androidautomationig-style; keep example committed)
+config/telegram.yml
+
 # Slideshow UI (Next.js)
 slideshow-ui/node_modules/
 slideshow-ui/.next/

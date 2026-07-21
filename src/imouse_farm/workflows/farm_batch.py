@@ -34,7 +34,7 @@ from imouse_farm.recordings.session_recorder import (
     SessionRecordingManager,
     session_recording_path,
 )
-from imouse_farm.actions.cast_ui import ensure_cast_via_control_bar
+from imouse_farm.actions.cast_ui import ensure_cast_via_control_bar_retries
 from imouse_farm.workflows.pipeline import WorkflowPipeline
 from imouse_farm.workflows.warmup import run_tiktok_warmup
 from imouse_farm.workflows.imouse_recovery import is_imouse_failure
@@ -755,8 +755,26 @@ class FarmBatchRunner:
         await self._preflight_flawed_timeout_restart(device, batch_index)
         if self._stop_requested:
             return None
-        ok = await self._ensure_cast(device.device_id)
+        # Same Control Bar cast as dashboard Cast toggle (/api/devices/.../cast).
+        await self._db.log_activity(
+            "info",
+            "batch",
+            f"Phone {device.user_name}: cast started (Control Bar → Screen Mirroring)",
+            device.device_id,
+            {"batch_index": batch_index, "mode": "control_bar_ui"},
+        )
+        ok = await self._ensure_cast(
+            device.device_id,
+            max_attempts=int(self._config.cast_connect_max_attempts),
+        )
         if ok:
+            await self._db.log_activity(
+                "info",
+                "batch",
+                f"Phone {device.user_name}: cast connected",
+                device.device_id,
+                {"batch_index": batch_index, "mode": "control_bar_ui"},
+            )
             return device
         self._note_imouse_failure(batch_index, "cast_connect_failed")
         logger.info(
@@ -1051,7 +1069,10 @@ class FarmBatchRunner:
         *,
         max_attempts: int | None = None,
     ) -> bool:
-        """Cast via Control Bar UI; success = iMouse online. No airplay/connect API."""
+        """Cast via Control Bar UI — identical path to the dashboard Cast toggle.
+
+        Success = iMouse online. Never calls device_airplay_connect.
+        """
         attempts = max(
             1,
             int(
@@ -1060,33 +1081,20 @@ class FarmBatchRunner:
                 else self._config.cast_connect_max_attempts
             ),
         )
-        interval = float(self._config.cast_connect_retry_seconds)
-        cast_cfg = self._config.cast_ui
 
         def _online(did: str) -> bool:
             device = self._dm.get_device(did)
             return bool(device and device.is_online)
 
-        for attempt in range(1, attempts + 1):
-            logger.info(
-                "batch_cast_attempt",
-                device_id=device_id,
-                attempt=attempt,
-                max_attempts=attempts,
-                mode="control_bar_ui",
-            )
-            ok = await ensure_cast_via_control_bar(
-                self._dm.controller,
-                device_id,
-                cast_cfg,
-                refresh_devices=self._dm.refresh_devices,
-                is_online=_online,
-            )
-            if ok:
-                return True
-            if attempt < attempts:
-                await asyncio.sleep(interval)
-        return False
+        return await ensure_cast_via_control_bar_retries(
+            self._dm.controller,
+            device_id,
+            self._config.cast_ui,
+            refresh_devices=self._dm.refresh_devices,
+            is_online=_online,
+            max_attempts=attempts,
+            retry_seconds=float(self._config.cast_connect_retry_seconds),
+        )
 
     async def _on_pipeline_event(self, event: str, data: dict[str, Any]) -> None:
         device_id = data.get("device_id")
